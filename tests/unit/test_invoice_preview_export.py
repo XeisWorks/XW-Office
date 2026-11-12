@@ -16,8 +16,13 @@ def test_invoice_preview_export_writes_rendered_pdf_without_fulfillment_effects(
         calls.append(f"summary:{invoice_id}")
         return summary
 
-    def load_pdf(invoice_id: str, *, expected_invoice_number: str = "") -> bytes:
-        calls.append(f"pdf:{invoice_id}:{expected_invoice_number}")
+    def load_pdf(
+        invoice_id: str,
+        *,
+        expected_invoice_number: str = "",
+        source_updated_at: str = "",
+    ) -> bytes:
+        calls.append(f"pdf:{invoice_id}:{expected_invoice_number}:{source_updated_at}")
         return b"%PDF-1.4 preview"
 
     monkeypatch.setattr(service, "_load_summary_by_id", load_summary)
@@ -29,4 +34,4 @@ def test_invoice_preview_export_writes_rendered_pdf_without_fulfillment_effects(
     assert exported.name.startswith("RE_42_")
     assert exported.suffix == ".pdf"
     assert exported.read_bytes() == b"%PDF-1.4 preview"
-    assert calls == ["summary:inv-42", "pdf:inv-42:RE 42"]
+    assert calls == ["summary:inv-42", "pdf:inv-42:RE 42:"]

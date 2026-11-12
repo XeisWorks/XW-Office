@@ -1892,6 +1892,112 @@ def test_invoice_header_cache_expires_and_refetches_remote_changes(
     assert client.invoice_fetch_calls == 2
 
 
+def test_invoice_context_refreshes_after_remote_source_revision_changes() -> None:
+    summary_v1 = InvoiceSummary(
+        id="cross-pc-context",
+        invoiceNumber="RE-CROSS-PC",
+        sourceUpdatedAt="2026-11-12T09:00:00+01:00",
+    )
+    client = _InvoiceClientStub([summary_v1])
+    client.invoice_payloads[summary_v1.id] = {
+        "id": summary_v1.id,
+        "update": summary_v1.source_updated_at,
+        "name": "Alter Kunde",
+        "deliveryName": "Alter Kunde",
+        "deliveryStreet": "Altgasse 1",
+        "deliveryZip": "1010",
+        "deliveryCity": "Wien",
+        "deliveryCountry": "AT",
+    }
+    client.invoice_positions[summary_v1.id] = [
+        {
+            "id": "old-position",
+            "positionNumber": 1,
+            "quantity": "1",
+            "part": {"id": "old-part", "partNumber": "XW-OLD", "name": "Altes Produkt"},
+        }
+    ]
+    service = InvoiceProcessingService(AppConfig(), client, _RepoStub({}))  # type: ignore[arg-type]
+
+    first = service.load_invoice_work_context(summary_v1)
+    assert first.customer_name == "Alter Kunde"
+    assert first.shipping_address_lines[1] == "Altgasse 1"
+
+    summary_v2 = summary_v1.model_copy(update={"source_updated_at": "2026-11-12T09:05:00+01:00"})
+    client.invoice_payloads[summary_v1.id] = {
+        "id": summary_v1.id,
+        "update": summary_v2.source_updated_at,
+        "name": "Neuer Kunde",
+        "deliveryName": "Neuer Kunde",
+        "deliveryStreet": "Neugasse 8",
+        "deliveryZip": "1020",
+        "deliveryCity": "Wien",
+        "deliveryCountry": "AT",
+    }
+    client.invoice_positions[summary_v1.id] = [
+        {
+            "id": "new-position",
+            "positionNumber": 1,
+            "quantity": "2",
+            "part": {"id": "new-part", "partNumber": "XW-NEW", "name": "Neues Produkt"},
+        }
+    ]
+
+    refreshed = service.load_invoice_work_context(summary_v2)
+
+    assert refreshed is not first
+    assert refreshed.customer_name == "Neuer Kunde"
+    assert refreshed.shipping_address_lines[1] == "Neugasse 8"
+    assert refreshed.source_updated_at == summary_v2.source_updated_at
+    assert [(position.sku, position.quantity) for position in refreshed.positions] == [("XW-NEW", 2)]
+    assert client.invoice_fetch_calls == 2
+
+
+def test_invoice_context_rejects_detail_from_a_different_source_revision() -> None:
+    summary = InvoiceSummary(
+        id="cross-pc-race",
+        invoiceNumber="RE-CROSS-PC-RACE",
+        sourceUpdatedAt="2026-11-12T09:05:00+01:00",
+    )
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads[summary.id] = {
+        "id": summary.id,
+        "update": "2026-11-12T09:00:00+01:00",
+        "name": "Veraltete Antwort",
+    }
+    service = InvoiceProcessingService(AppConfig(), client, _RepoStub({}))  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="zwischen Listen- und Detailabruf geändert"):
+        service.load_invoice_work_context(summary)
+
+    assert summary.id not in service._invoice_work_context_cache  # noqa: SLF001
+    assert summary.id not in service._invoice_detail_cache  # noqa: SLF001
+
+
+def test_revisionless_context_is_not_reused_after_summary_revision_appears() -> None:
+    summary_v1 = InvoiceSummary(id="cross-pc-revision-arrives", invoiceNumber="RE-REVISION-ARRIVES")
+    client = _InvoiceClientStub([summary_v1])
+    client.invoice_payloads[summary_v1.id] = {"id": summary_v1.id, "name": "Unversioned name"}
+    service = InvoiceProcessingService(AppConfig(), client, _RepoStub({}))  # type: ignore[arg-type]
+
+    first = service.load_invoice_work_context(summary_v1)
+    assert first.source_updated_at == ""
+
+    summary_v2 = summary_v1.model_copy(update={"source_updated_at": "2026-11-12T10:00:00+01:00"})
+    client.invoice_payloads[summary_v1.id] = {
+        "id": summary_v1.id,
+        "update": summary_v2.source_updated_at,
+        "name": "Versioned name",
+    }
+
+    refreshed = service.load_invoice_work_context(summary_v2)
+
+    assert refreshed is not first
+    assert refreshed.customer_name == "Versioned name"
+    assert refreshed.source_updated_at == summary_v2.source_updated_at
+    assert client.invoice_fetch_calls == 2
+
+
 def test_work_context_cache_expires_and_reloads_positions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1980,6 +2086,34 @@ def test_invoice_pdf_cache_checks_expected_number_and_obeys_byte_limit(
     for key in ("one", "two", "three"):
         service._put_invoice_detail_cache(key, {"id": key})  # noqa: SLF001
     assert list(service._invoice_detail_cache) == ["two", "three"]  # noqa: SLF001
+
+
+def test_invoice_pdf_cache_refreshes_after_remote_source_revision_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    summary = InvoiceSummary(
+        id="pdf-cross-pc",
+        invoiceNumber="RE-PDF-CROSS-PC",
+        sourceUpdatedAt="2026-11-12T09:00:00+01:00",
+    )
+    client = _InvoiceClientStub([summary])
+    service = InvoiceProcessingService(AppConfig(), client, _RepoStub({}))  # type: ignore[arg-type]
+    monkeypatch.setattr(service, "_invoice_pdf_sanity_issue", lambda *_args, **_kwargs: "")
+    service._cache_invoice_pdf(  # noqa: SLF001
+        summary.id,
+        b"old revision",
+        source_updated_at=summary.source_updated_at,
+    )
+
+    refreshed = service._get_invoice_pdf_bytes(  # noqa: SLF001
+        summary.id,
+        expected_invoice_number=summary.invoice_number,
+        source_updated_at="2026-11-12T09:05:00+01:00",
+    )
+
+    assert refreshed == b"%PDF-1.4\nstub"
+    assert client.render_calls == [summary.id]
+    assert service._invoice_pdf_cache_revisions[summary.id] == "2026-11-12T09:05:00+01:00"  # noqa: SLF001
 
 
 def test_send_invoice_mail_skips_when_sevdesk_invoice_already_sent() -> None:

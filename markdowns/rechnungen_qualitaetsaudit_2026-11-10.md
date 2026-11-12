@@ -3522,4 +3522,34 @@ Overview-Unit-Suite: **114 Tests bestanden**; gezieltes striktes MyPy fuer
 `view.py`, Ruff und `git diff --check` sind gruen. F17 bleibt offen, bis die
 verbleibenden synchronen I/O-Einstiege aus dem Inventar abgearbeitet sind. Die
 Vollsuite besteht mit **2.341 Tests, 5 optionalen PostgreSQL-Ueberspringungen
-und 1 bestehenden Starlette/httpx-Deprecation-Warnung (159,28 s)**.
+und 1 bestehenden Starlette/httpx-Deprecation-Warnung (159,28 s)**. GitHub-CI
+Run `43232188923` fuer Commit `d338fc8` ist erfolgreich.
+
+## AP07/F19-Fortschreibung - sevDesk-Revisionsbindung fuer Cacheinhalte (12.11.2026)
+
+`InvoiceSummary.source_updated_at` wird aus sevDesk `update`/`updatedAt` gelesen.
+Der Rechnungsdetailcache verwendete dieses gemeinsame Versionsfeld bisher nicht:
+wenn die Liste nach einer Aenderung auf einem zweiten PC eine neue Revision
+zeigte, konnte `load_invoice_work_context` dennoch den noch frischen 30-Sekunden-
+Detailcache mit alter Adresse verwenden. Der PDF-LRU war ebenfalls nur nach
+Rechnungs-ID indiziert und konnte fuer dieselbe ID trotz neuer Revision das alte
+Dokument liefern.
+
+Der Work-Context-Load bindet den Detailcache jetzt an `source_updated_at` und
+weist eine Detailantwort mit abweichender Revision zurueck, statt alte Inhalte
+als aktuell zu publizieren. Ein Kontext ohne Versionsmarke gilt nicht als aktuell,
+sobald die Rechnungsliste eine Revision kennt. PDF-Cachetreffer werden ebenfalls
+nur bei passender Revision akzeptiert; Freigabe, Preview, Druck und Mailattachment
+reichen die Revisionsmarke durch. Die bestehende TTL- und Generation-
+Invalidierung bleibt erhalten.
+
+Regressionen simulieren eine externe Aenderung zwischen zwei Loads und pruefen,
+dass Kunde, Adresse und Positionen aus Revision 2 erscheinen, ein Detail-Read
+mit abweichender Revision nicht gecacht wird und ein PDF-Treffer aus Revision 1
+neu geladen wird. Invoice-Processing-Unit-Suite und PDF-Preview-Export-
+Regression: **71 Tests bestanden**. Ein Vollsuite-Lauf zeigte
+einen veralteten Test-Fake, dessen Signatur das neue Revisionsargument nicht
+annahm; der Fake wurde angepasst und seine Regression besteht nun. Striktes MyPy
+fuer `service.py`, Ruff und `git diff --check` sind gruen. F19
+bleibt offen fuer weitere Nachweise zu gemeinsamen Revisionen in Wix-/Produkt-
+Caches und die vollstaendige Cross-PC-Abnahme.

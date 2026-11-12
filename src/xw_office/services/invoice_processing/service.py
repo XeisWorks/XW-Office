@@ -307,6 +307,7 @@ class InvoiceProcessingService:
         self._invoice_printer = InvoicePrinter(config.printing, print_queue=print_queue)
         self._label_printer = LabelPrinter(config.printing, print_queue=print_queue)
         self._invoice_pdf_cache: OrderedDict[str, bytes] = OrderedDict()
+        self._invoice_pdf_cache_revisions: dict[str, str] = {}
         self._invoice_pdf_cache_bytes = 0
         self._invoice_snapshot_lock = RLock()
         self._invoice_snapshot_generation = 0
@@ -1728,6 +1729,7 @@ class InvoiceProcessingService:
         pdf_bytes = self._get_invoice_pdf_bytes(
             summary.id,
             expected_invoice_number=summary.invoice_number,
+            source_updated_at=summary.source_updated_at,
         )
         if not pdf_bytes:
             raise RuntimeError("PDF nicht verfügbar")
@@ -1745,6 +1747,7 @@ class InvoiceProcessingService:
         pdf_bytes = self._get_invoice_pdf_bytes(
             summary.id,
             expected_invoice_number=summary.invoice_number,
+            source_updated_at=summary.source_updated_at,
         )
         if not pdf_bytes:
             raise RuntimeError("PDF nicht verfuegbar")
@@ -1872,7 +1875,10 @@ class InvoiceProcessingService:
     ) -> tuple[FulfillmentFlags, str, str]:
         """Send one invoice manually or through START using a shared durable claim."""
         flags = self.read_fulfillment_flags(summary.id)
-        invoice = self._fetch_invoice_detail(summary.id)
+        invoice = self._fetch_invoice_detail(
+            summary.id,
+            expected_source_updated_at=summary.source_updated_at,
+        )
         mail_kind = self._invoice_mail_kind(summary, flags)
         subject, text_body = self._build_mail_content(summary, invoice, kind=mail_kind)
         to_email = str(recipient_override or "").strip() or self._resolve_customer_email(
@@ -2064,7 +2070,12 @@ class InvoiceProcessingService:
             ):
                 return cached
 
-        invoice = self._fetch_invoice_detail(invoice_id, force=force)
+        expected_revision = str(summary.source_updated_at or "").strip()
+        invoice = self._fetch_invoice_detail(
+            invoice_id,
+            force=force,
+            expected_source_updated_at=expected_revision,
+        )
         positions: tuple[Any, ...] = ()
         positions_error = ""
         if load_positions and invoice_id:
@@ -2117,7 +2128,9 @@ class InvoiceProcessingService:
             positions=tuple(positions),
             capabilities=capabilities,
             warnings=tuple(warning for position in positions for warning in position.warnings),
-            source_updated_at=str(summary.source_updated_at or invoice.get("update") or "").strip(),
+            source_updated_at=str(
+                expected_revision or self._invoice_source_updated_at(invoice)
+            ).strip(),
             header_loaded=True,
             positions_loaded=load_positions and not positions_error,
             positions_error=positions_error,
@@ -2155,9 +2168,7 @@ class InvoiceProcessingService:
     @staticmethod
     def _context_is_current(context: InvoiceWorkContext, summary: InvoiceSummary) -> bool:
         expected = str(summary.source_updated_at or "").strip()
-        return (
-            not expected or not context.source_updated_at or context.source_updated_at == expected
-        )
+        return not expected or context.source_updated_at == expected
 
     def load_invoice_piece_blocks(
         self,
@@ -2984,7 +2995,10 @@ class InvoiceProcessingService:
         if not summary.order_reference.strip() or self._wix_orders is None:
             return self._next_flags(stamped, payment_applicable=False, payment_booked=False)
 
-        invoice = self._fetch_invoice_detail(summary.id)
+        invoice = self._fetch_invoice_detail(
+            summary.id,
+            expected_source_updated_at=summary.source_updated_at,
+        )
         raw_invoice_id = str(invoice.get("id") or summary.id or "").strip()
         try:
             invoice_id = int(raw_invoice_id or "0")
@@ -3184,7 +3198,7 @@ class InvoiceProcessingService:
                     last_warning=warning,
                 )
 
-            refreshed_invoice = self._fetch_invoice_detail(summary.id)
+            refreshed_invoice = self._fetch_invoice_detail(summary.id, force=True)
             if self._invoice_is_paid(refreshed_invoice):
                 return self._next_flags(stamped, payment_applicable=True, payment_booked=True)
             return self._next_flags(
@@ -3235,7 +3249,12 @@ class InvoiceProcessingService:
         service = self._customer_aftercare
         if service is None:
             return flags
-        invoice = _dict_or_empty(self._fetch_invoice_detail(summary.id))
+        invoice = _dict_or_empty(
+            self._fetch_invoice_detail(
+                summary.id,
+                expected_source_updated_at=summary.source_updated_at,
+            )
+        )
         contact = _dict_or_empty(invoice.get("contact"))
         sevdesk_contact_id = str(contact.get("id") or invoice.get("contactId") or "").strip()
         order_number = str(summary.order_reference or "").strip()
@@ -3371,6 +3390,7 @@ class InvoiceProcessingService:
         pdf_bytes = self._get_invoice_pdf_bytes(
             summary.id,
             expected_invoice_number=summary.invoice_number,
+            source_updated_at=summary.source_updated_at,
         )
         if not pdf_bytes:
             raise RuntimeError("PDF nicht verfügbar")
@@ -3947,29 +3967,51 @@ class InvoiceProcessingService:
         pdf_bytes = self._get_invoice_pdf_bytes(
             summary.id,
             expected_invoice_number=invoice_number,
+            source_updated_at=summary.source_updated_at,
         )
         return MailAttachment(
             filename=f"{invoice_number}.pdf", content=pdf_bytes, mime_type="application/pdf"
         )
 
-    def _fetch_invoice_detail(self, invoice_id: str, *, force: bool = False) -> dict[str, Any]:
+    def _fetch_invoice_detail(
+        self,
+        invoice_id: str,
+        *,
+        force: bool = False,
+        expected_source_updated_at: str = "",
+    ) -> dict[str, Any]:
         invoice_key = str(invoice_id).strip()
+        expected_revision = str(expected_source_updated_at or "").strip()
         generation = self._current_invoice_snapshot_generation()
         with self._invoice_snapshot_lock:
             cached = None if force else self._invoice_detail_cache.get(invoice_key)
             cached_at = self._invoice_detail_cache_updated_at.get(invoice_key)
             if cached is not None and cached_at is not None:
                 age = time.monotonic() - cached_at
-                if 0 <= age < _INVOICE_DETAIL_CACHE_TTL_SECONDS:
+                cached_revision = self._invoice_source_updated_at(cached)
+                revision_matches = not expected_revision or cached_revision == expected_revision
+                if 0 <= age < _INVOICE_DETAIL_CACHE_TTL_SECONDS and revision_matches:
                     self._invoice_detail_cache.move_to_end(invoice_key)
                     return cached
                 self._drop_invoice_detail_cache(invoice_key)
         invoice = self._invoices.fetch_invoice_by_id(invoice_id)
         normalized = invoice if isinstance(invoice, dict) else {}
+        fetched_revision = self._invoice_source_updated_at(normalized)
+        if expected_revision and fetched_revision != expected_revision:
+            raise RuntimeError(
+                "Rechnung wurde zwischen Listen- und Detailabruf geändert. "
+                "Bitte Liste aktualisieren und erneut versuchen."
+            )
         with self._invoice_snapshot_lock:
             if generation == self._invoice_snapshot_generation:
                 self._put_invoice_detail_cache(invoice_key, normalized)
         return normalized
+
+    @staticmethod
+    def _invoice_source_updated_at(invoice: dict[str, Any]) -> str:
+        return str(
+            invoice.get("update") or invoice.get("updatedAt") or invoice.get("updated") or ""
+        ).strip()
 
     def _put_invoice_detail_cache(self, invoice_id: str, value: dict[str, Any]) -> None:
         with self._invoice_snapshot_lock:
@@ -4015,18 +4057,30 @@ class InvoiceProcessingService:
         invoice_id: str,
         *,
         expected_invoice_number: str = "",
+        source_updated_at: str = "",
     ) -> bytes:
         cache_key = str(invoice_id)
+        expected_revision = str(source_updated_at or "").strip()
         generation = self._current_invoice_snapshot_generation()
         with self._invoice_snapshot_lock:
             cached = self._invoice_pdf_cache.get(cache_key)
             if cached:
-                self._invoice_pdf_cache.move_to_end(cache_key)
-                if not self._invoice_pdf_sanity_issue(
+                cached_revision = self._invoice_pdf_cache_revisions.get(cache_key, "")
+                revision_matches = cached_revision == expected_revision
+                sanity_issue = self._invoice_pdf_sanity_issue(
                     cached,
                     expected_invoice_number=expected_invoice_number,
-                ):
+                )
+                if revision_matches and not sanity_issue:
+                    self._invoice_pdf_cache.move_to_end(cache_key)
                     return cached
+                if not revision_matches:
+                    logger.debug(
+                        "Invoice %s PDF cache revision changed; fetching current document",
+                        invoice_id,
+                    )
+                if sanity_issue:
+                    logger.debug("Invoice %s PDF cache rejected: %s", invoice_id, sanity_issue)
                 self._drop_invoice_pdf_cache_entry(cache_key)
         extractor = getattr(self._invoices, "extract_pdf_from_payload", None)
         last_exc: Exception | None = None
@@ -4054,7 +4108,11 @@ class InvoiceProcessingService:
                         else:
                             with self._invoice_snapshot_lock:
                                 if generation == self._invoice_snapshot_generation:
-                                    self._cache_invoice_pdf(cache_key, rendered_pdf)
+                                    self._cache_invoice_pdf(
+                                        cache_key,
+                                        rendered_pdf,
+                                        source_updated_at=expected_revision,
+                                    )
                             return rendered_pdf
                 pdf_bytes = self._invoices.get_invoice_pdf(invoice_id)
                 if pdf_bytes:
@@ -4066,29 +4124,43 @@ class InvoiceProcessingService:
                         raise ValueError(f"sevDesk PDF unplausibel: {sanity_issue}")
                     with self._invoice_snapshot_lock:
                         if generation == self._invoice_snapshot_generation:
-                            self._cache_invoice_pdf(cache_key, pdf_bytes)
+                            self._cache_invoice_pdf(
+                                cache_key,
+                                pdf_bytes,
+                                source_updated_at=expected_revision,
+                            )
                     return pdf_bytes
             except Exception as exc:  # noqa: BLE001 - retry transient sevDesk render/getPdf states.
                 last_exc = exc
                 logger.info("Invoice %s PDF attempt %s failed: %s", invoice_id, attempt, exc)
         raise RuntimeError("PDF nicht verfügbar") from last_exc
 
-    def _cache_invoice_pdf(self, invoice_id: str, pdf_bytes: bytes) -> None:
+    def _cache_invoice_pdf(
+        self,
+        invoice_id: str,
+        pdf_bytes: bytes,
+        *,
+        source_updated_at: str = "",
+    ) -> None:
         with self._invoice_snapshot_lock:
             previous = self._invoice_pdf_cache.pop(invoice_id, None)
+            self._invoice_pdf_cache_revisions.pop(invoice_id, None)
             if previous is not None:
                 self._invoice_pdf_cache_bytes -= len(previous)
             if len(pdf_bytes) > _INVOICE_PDF_CACHE_MAX_BYTES:
                 return
             self._invoice_pdf_cache[invoice_id] = pdf_bytes
+            self._invoice_pdf_cache_revisions[invoice_id] = str(source_updated_at or "").strip()
             self._invoice_pdf_cache_bytes += len(pdf_bytes)
             while self._invoice_pdf_cache_bytes > _INVOICE_PDF_CACHE_MAX_BYTES:
                 _old_id, old_pdf = self._invoice_pdf_cache.popitem(last=False)
+                self._invoice_pdf_cache_revisions.pop(_old_id, None)
                 self._invoice_pdf_cache_bytes -= len(old_pdf)
 
     def _drop_invoice_pdf_cache_entry(self, invoice_id: str) -> None:
         with self._invoice_snapshot_lock:
             previous = self._invoice_pdf_cache.pop(invoice_id, None)
+            self._invoice_pdf_cache_revisions.pop(invoice_id, None)
             if previous is not None:
                 self._invoice_pdf_cache_bytes = max(
                     0,
