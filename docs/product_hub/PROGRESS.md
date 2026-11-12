@@ -1583,7 +1583,7 @@ Payloads. Es wurden keine Bestands- oder Providerdaten geschrieben.
 
 ### Post-Deploy-Verifikation (12. November 2026, 01:36 CET)
 
-Product Hub und `xw-inventory-worker` sind auf Commit `59ecdde` SUCCESS deployed;
+Product Hub und `xw-inventory-worker` sind auf Commit `d88d8b6` SUCCESS deployed;
 `/health` liefert HTTP 200. Der erneute Railway-Preflight bleibt read-only mit
 Runtime-Readiness `eligible=true`, DB-Readiness `eligible=false` (Exit 2) und
 deaktivierten Master-/Shadow-Flags. Der Exact-SKU-Teil bestätigt 231 Kandidaten

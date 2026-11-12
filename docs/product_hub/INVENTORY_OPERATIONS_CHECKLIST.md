@@ -260,7 +260,7 @@ Master/Shadow blieben `false`; es wurden keine Buchungs- oder Providerdaten gesc
 
 ## Post-Deploy-Verifikation (12. November 2026, 01:36 CET)
 
-Product Hub und `xw-inventory-worker` sind auf Commit `59ecdde` SUCCESS deployed;
+Product Hub und `xw-inventory-worker` sind auf Commit `d88d8b6` SUCCESS deployed;
 `/health` liefert HTTP 200. Der erneute read-only Preflight bestätigt
 Runtime-Readiness `eligible=true`, DB-Readiness Exit 2 vor der Inventur sowie
 deaktivierte Master-/Shadow-Flags. Der Exact-SKU-Preflight fand 231 Kandidaten
