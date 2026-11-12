@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -150,7 +151,7 @@ def _matching_variant(row: object, sku: str) -> object | None:
 
 
 def find_wix_mapping_candidates(
-    products: list[object],
+    products: Sequence[object],
     *,
     product_name: str,
     product_sku: str,

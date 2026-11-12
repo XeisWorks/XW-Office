@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from html import escape
 from html.parser import HTMLParser
 
@@ -29,6 +29,8 @@ from xw_office.services.wix.product_details_client import WixProductDetailsClien
 from xw_office.web.schemas.conflicts import (
     ConflictActionOut,
     ConflictAdviceOut,
+    ConflictMappingCandidateOut,
+    ConflictMappingComparisonOut,
     ConflictCaseDetailOut,
     ConflictCaseOut,
     ConflictCreateWixProductOut,
@@ -66,11 +68,12 @@ def _compact_description(value: object, limit: int = 260) -> str:
 
 def _fallback_advice(snapshot: dict[str, object]) -> ConflictAdvice:
     """Keep deterministic conflict handling available when optional AI advice is down."""
-    conflict = snapshot.get("conflict") if isinstance(snapshot.get("conflict"), dict) else {}
-    lookup = snapshot.get("mapping_lookup") if isinstance(snapshot.get("mapping_lookup"), dict) else {}
-    candidates = lookup.get("candidates") if isinstance(lookup.get("candidates"), list) else []
+    conflict = _as_mapping(snapshot.get("conflict")) or {}
+    lookup = _as_mapping(snapshot.get("mapping_lookup")) or {}
+    candidates = lookup.get("candidates")
+    has_candidates = isinstance(candidates, list) and bool(candidates)
     is_mapping = conflict.get("type") == "WRONG_PRODUCT_MAPPING"
-    if is_mapping and candidates:
+    if is_mapping and has_candidates:
         recommendation = "Prüfe den Wix-Vorschlag und bestätige nur die passende SKU bzw. Variante."
         explanation = "Die Wix-Suche hat passende Kandidaten anhand von SKU und Produktdaten gefunden."
     elif is_mapping:
@@ -85,34 +88,46 @@ def _fallback_advice(snapshot: dict[str, object]) -> ConflictAdvice:
         likely_causes=["Verknüpfung oder Quelldaten wurden außerhalb des Product Hub geändert."],
         recommendation=recommendation,
         next_steps=["Vorschlag und SKU prüfen", "Änderung erst nach der Vorschau ausführen"],
-        confidence="medium" if candidates else "low",
+        confidence="medium" if has_candidates else "low",
         warnings=["KI-Einschätzung ist momentan nicht verfügbar; es wurde keine automatische Entscheidung getroffen."],
         evidence=[f"Konflikttyp: {conflict.get('type') or 'unbekannt'}"],
     )
 
 
-def _wix_variant(raw: dict[str, object], variant_id: str) -> dict[str, object] | None:
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
+        return None
+    return value
+
+
+def _wix_variant(raw: Mapping[str, object], variant_id: str) -> Mapping[str, object] | None:
     """Return one raw Wix variant, accepting the V1 nested variant layout."""
     expected_id = canonical_wix_id(variant_id).casefold()
-    for item in raw.get("variants") or []:
-        if not isinstance(item, dict):
+    variants = raw.get("variants")
+    if not isinstance(variants, list):
+        return None
+    for raw_item in variants:
+        item = _as_mapping(raw_item)
+        if item is None:
             continue
-        nested = item.get("variant") if isinstance(item.get("variant"), dict) else {}
+        nested = _as_mapping(item.get("variant")) or {}
         actual_id = canonical_wix_id(item.get("id") or nested.get("id")).casefold()
         if actual_id == expected_id:
             return item
     return None
 
 
-def _wix_variant_sku(item: dict[str, object]) -> str:
-    nested = item.get("variant") if isinstance(item.get("variant"), dict) else {}
+def _wix_variant_sku(item: Mapping[str, object]) -> str:
+    nested = _as_mapping(item.get("variant")) or {}
     return str(item.get("sku") or nested.get("sku") or "").strip()
 
 
-def _wix_variant_choices(item: dict[str, object]) -> dict[str, str]:
-    nested = item.get("variant") if isinstance(item.get("variant"), dict) else {}
-    raw_choices = item.get("choices") if isinstance(item.get("choices"), dict) else nested.get("choices")
-    if not isinstance(raw_choices, dict):
+def _wix_variant_choices(item: Mapping[str, object]) -> dict[str, str]:
+    nested = _as_mapping(item.get("variant")) or {}
+    raw_choices = _as_mapping(item.get("choices"))
+    if raw_choices is None:
+        raw_choices = _as_mapping(nested.get("choices"))
+    if raw_choices is None:
         return {}
     return {
         str(key).strip(): str(value).strip()
@@ -121,7 +136,7 @@ def _wix_variant_choices(item: dict[str, object]) -> dict[str, str]:
     }
 
 
-def _wix_variant_matches(raw: dict[str, object], variant_id: str, sku: str) -> bool:
+def _wix_variant_matches(raw: Mapping[str, object], variant_id: str, sku: str) -> bool:
     """Verify that a selected Wix variant belongs to this parent and owns this SKU."""
     item = _wix_variant(raw, variant_id)
     return item is not None and _wix_variant_sku(item).casefold() == str(sku or "").strip().casefold()
@@ -194,29 +209,36 @@ def _sanitize_wix_description(value: object) -> str:
 
 
 def _wix_description(raw: object) -> str:
-    if not isinstance(raw, dict):
+    raw_mapping = _as_mapping(raw)
+    if raw_mapping is None:
         return ""
-    return _sanitize_wix_description(raw.get("description") or raw.get("plainDescription"))
+    return _sanitize_wix_description(
+        raw_mapping.get("description") or raw_mapping.get("plainDescription")
+    )
 
 
 def _wix_product_type(raw: object) -> str:
-    if not isinstance(raw, dict):
+    raw_mapping = _as_mapping(raw)
+    if raw_mapping is None:
         return ""
-    product_type = str(raw.get("productType") or "").strip().casefold()
-    physical = (
-        raw.get("physicalProperties") if isinstance(raw.get("physicalProperties"), dict) else {}
-    )
-    if product_type == "digital" or physical.get("shippable") is False or raw.get("digitalFile"):
+    product_type = str(raw_mapping.get("productType") or "").strip().casefold()
+    physical = _as_mapping(raw_mapping.get("physicalProperties")) or {}
+    if (
+        product_type == "digital"
+        or physical.get("shippable") is False
+        or raw_mapping.get("digitalFile")
+    ):
         return "digital"
     return "physisch" if product_type or physical else ""
 
 
 def _catalog_value(row: object, key: str) -> object:
-    return row.get(key) if isinstance(row, dict) else getattr(row, key, None)
+    mapping = _as_mapping(row)
+    return mapping.get(key) if mapping is not None else getattr(row, key, None)
 
 
 def _catalog_reconciliation_row(
-    rows: list[object], *, external_id: str, variant_external_id: str | None, sku: str
+    rows: Sequence[object], *, external_id: str, variant_external_id: str | None, sku: str
 ) -> tuple[str, str] | None:
     """Verify an action target against the current catalog index, not client data."""
     parent_id = canonical_wix_id(external_id)
@@ -225,7 +247,10 @@ def _catalog_reconciliation_row(
         if canonical_wix_id(_catalog_value(row, "id")) != parent_id:
             continue
         if variant_id:
-            for variant in _catalog_value(row, "variants") or []:
+            variants = _catalog_value(row, "variants")
+            if not isinstance(variants, (list, tuple)):
+                return None
+            for variant in variants:
                 if canonical_wix_id(_catalog_value(variant, "id")) == variant_id:
                     actual_sku = str(_catalog_value(variant, "sku") or "").strip()
                     if actual_sku.casefold() == sku.strip().casefold():
@@ -360,7 +385,10 @@ def build_conflicts_router(
             external_id = canonical_wix_id(_catalog_value(row, "id"))
             if not external_id:
                 continue
-            raw_variants = _catalog_value(row, "variants") or []
+            raw_variants_value = _catalog_value(row, "variants")
+            raw_variants = (
+                raw_variants_value if isinstance(raw_variants_value, (list, tuple)) else []
+            )
             # Catalog V1's list response may expose the first variant SKU as
             # ``product.sku``.  A parent with options is therefore never offered
             # for automatic parent mapping/import; its concrete variants are.
@@ -535,22 +563,24 @@ def build_conflicts_router(
         }
         mapping_search_status = "not_mapping"
         mapping_search_terms: list[str] = []
-        mapping_candidates: list[dict[str, object]] = []
-        mapping_comparison: dict[str, object] | None = None
+        mapping_candidate_payloads: list[dict[str, object]] = []
+        mapping_candidates: list[ConflictMappingCandidateOut] = []
+        mapping_comparison: ConflictMappingComparisonOut | None = None
         if case.conflict_type == "WRONG_PRODUCT_MAPPING":
             mapping_search_terms = [
                 term for term in (product.sku, product.name) if str(term or "").strip()
             ]
             current_external_id = ""
             old_status = ""
-            for field in snapshot["fields"]:
-                if field["field"] != "mapping":
+            for field_bundle in bundle["fields"]:
+                if field_bundle["field"].field_path != "mapping":
                     continue
-                for observation in field["observations"]:
-                    if observation["source"] == "hub" and isinstance(observation["value"], dict):
-                        current_external_id = str(observation["value"].get("external_id") or "")
-                    if observation["source"] == "wix" and isinstance(observation["value"], dict):
-                        old_status = str(observation["value"].get("state") or "")
+                for observation in field_bundle["observations"]:
+                    value = _as_mapping(observation.raw_value)
+                    if observation.source == "hub" and value is not None:
+                        current_external_id = str(value.get("external_id") or "")
+                    if observation.source == "wix" and value is not None:
+                        old_status = str(value.get("state") or "")
             if get_wix_catalog_client is None:
                 mapping_search_status = "unavailable"
             else:
@@ -572,16 +602,22 @@ def build_conflicts_router(
                         if len(exact_sku_candidates) > 1
                         else "found" if candidates else "none"
                     )
-                    mapping_candidates = [candidate.as_dict() for candidate in candidates]
-                    if mapping_candidates and get_wix_details_client is not None:
+                    mapping_candidate_payloads = [
+                        candidate.as_dict() for candidate in candidates
+                    ]
+                    if mapping_candidate_payloads and get_wix_details_client is not None:
                         try:
                             raw = get_wix_details_client().get_product_raw(
-                                str(mapping_candidates[0]["external_id"])
+                                str(mapping_candidate_payloads[0]["external_id"])
                             )
-                            mapping_candidates[0]["description"] = _wix_description(raw)
-                            mapping_candidates[0]["product_type"] = _wix_product_type(raw)
+                            mapping_candidate_payloads[0]["description"] = _wix_description(raw)
+                            mapping_candidate_payloads[0]["product_type"] = _wix_product_type(raw)
                         except Exception:  # noqa: BLE001 - candidate metadata is optional
-                            mapping_candidates[0]["description"] = ""
+                            mapping_candidate_payloads[0]["description"] = ""
+                    mapping_candidates = [
+                        ConflictMappingCandidateOut.model_validate(candidate)
+                        for candidate in mapping_candidate_payloads
+                    ]
                 except Exception:  # noqa: BLE001 - advice remains useful if search fails
                     mapping_search_status = "unavailable"
                     # Keep provider details out of the beginner-facing search terms;
@@ -590,24 +626,24 @@ def build_conflicts_router(
                 "status": mapping_search_status,
                 "search_terms": mapping_search_terms[:2],
                 "current_external_id": current_external_id,
-                "candidates": mapping_candidates,
+                "candidates": [candidate.model_dump() for candidate in mapping_candidates],
             }
-            mapping_comparison = {
-                "hub_name": product.name,
-                "hub_sku": product.sku,
-                "hub_description": _compact_description(product.description),
-                "hub_product_type": product.product_type,
-                "hub_category": product.category or "",
-                "hub_status": product.status,
-                "hub_active": product.active,
-                "old_external_id": current_external_id,
-                "old_status": old_status,
-                "candidate": (
+            mapping_comparison = ConflictMappingComparisonOut(
+                hub_name=product.name,
+                hub_sku=product.sku,
+                hub_description=_compact_description(product.description),
+                hub_product_type=product.product_type,
+                hub_category=product.category or "",
+                hub_status=product.status,
+                hub_active=product.active,
+                old_external_id=current_external_id,
+                old_status=old_status,
+                candidate=(
                     mapping_candidates[0]
                     if mapping_candidates and mapping_search_status != "ambiguous"
                     else None
                 ),
-            }
+            )
         try:
             result = get_advice_service().advise(snapshot)
         except ConflictAdviceError:
@@ -645,7 +681,8 @@ def build_conflicts_router(
             raise HTTPException(
                 status_code=503, detail=f"Wix-Kandidat konnte nicht geprüft werden: {exc}"
             ) from exc
-        raw_id = str((raw or {}).get("id") or "").strip()
+        raw_mapping = _as_mapping(raw)
+        raw_id = str(raw_mapping.get("id") or "").strip() if raw_mapping is not None else ""
         if (
             not raw_id
             or canonical_wix_id(raw_id).casefold() != candidate.casefold()
@@ -659,7 +696,9 @@ def build_conflicts_router(
                 hub_product = service.detail(case_id)["product"]
             except KeyError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
-            if not _wix_variant_matches(raw, variant_candidate, hub_product.sku):
+            if raw_mapping is None or not _wix_variant_matches(
+                raw_mapping, variant_candidate, hub_product.sku
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail="Diese Wix-Variante gehört nicht zu diesem Produkt oder trägt nicht die Hub-SKU.",
@@ -698,10 +737,14 @@ def build_conflicts_router(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if owner is None:
             return ConflictMappingOwnerOut()
-        return ConflictMappingOwnerOut(
-            found=True,
-            is_current_case_owner=str(bundle["case"].product_id) == str(owner["product_id"]),
-            **owner,
+        return ConflictMappingOwnerOut.model_validate(
+            {
+                **owner,
+                "found": True,
+                "is_current_case_owner": (
+                    str(bundle["case"].product_id) == str(owner["product_id"])
+                ),
+            }
         )
 
     @router.post(
@@ -727,7 +770,12 @@ def build_conflicts_router(
             raise HTTPException(
                 status_code=503, detail=f"Wix-Kandidat konnte nicht geprüft werden: {exc}"
             ) from exc
-        raw_id = canonical_wix_id(str((raw or {}).get("id") or ""))
+        raw_mapping = _as_mapping(raw)
+        raw_id = (
+            canonical_wix_id(str(raw_mapping.get("id") or ""))
+            if raw_mapping is not None
+            else ""
+        )
         if not raw_id or raw_id.casefold() != candidate.casefold():
             raise HTTPException(status_code=400, detail="Diese Wix-ID wurde nicht als Produkt bestätigt")
         if variant_candidate:
@@ -735,7 +783,9 @@ def build_conflicts_router(
                 hub_product = service.detail(case_id)["product"]
             except KeyError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
-            if not _wix_variant_matches(raw, variant_candidate, hub_product.sku):
+            if raw_mapping is None or not _wix_variant_matches(
+                raw_mapping, variant_candidate, hub_product.sku
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail="Diese Wix-Variante gehört nicht zu diesem Produkt oder trägt nicht die Hub-SKU.",
@@ -804,10 +854,17 @@ def build_conflicts_router(
             raise HTTPException(
                 status_code=503, detail=f"Wix-Variante konnte nicht geprüft werden: {exc}"
             ) from exc
-        raw_id = canonical_wix_id(str((raw or {}).get("id") or ""))
+        raw_mapping = _as_mapping(raw)
+        raw_id = (
+            canonical_wix_id(str(raw_mapping.get("id") or ""))
+            if raw_mapping is not None
+            else ""
+        )
         if not raw_id or raw_id.casefold() != parent_id.casefold():
             raise HTTPException(status_code=400, detail="Das ausgewählte Wix-Produkt wurde nicht bestätigt")
-        variant = _wix_variant(raw, variant_id)
+        if raw_mapping is None:
+            raise HTTPException(status_code=400, detail="Das Wix-Produkt ist unvollstaendig")
+        variant = _wix_variant(raw_mapping, variant_id)
         if variant is None:
             raise HTTPException(status_code=400, detail="Die ausgewählte Wix-Variante wurde nicht gefunden")
         actual_sku = _wix_variant_sku(variant)

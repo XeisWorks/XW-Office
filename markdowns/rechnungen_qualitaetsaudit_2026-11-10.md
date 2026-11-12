@@ -3203,3 +3203,74 @@ Der Fallback liest die Default-Variante jetzt einmalig und bildet die optionale
 Rueckgabe explizit ab. Ein neuer Regressionstest schuetzt diesen Fall; alle
 **5 Vorschautests** sowie striktes MyPy und Ruff fuer Service und Tests sind
 gruen. Die globale MyPy-Baseline bleibt bei **122 Fehlern in 33 Dateien**.
+
+## Abschlusssteuerung und aktuelle Abarbeitungsreihenfolge (12.11.2026)
+
+Das Ziel des Audits bleibt unveraendert: alle technisch selbststaendig umsetzbaren
+Pakete aus AP01-AP08 abschliessen und G1/G2 mit echten, isolierten Betriebsbelegen
+abnehmen. Die bisherige Fortschreibung ist absichtlich chronologisch; sie ist
+kein zweiter TODO-Katalog. Fuer die weitere Arbeit gelten die Akzeptanzkriterien
+der jeweiligen AP-Abschnitte als einzige Arbeitsliste. Bereits `ERLEDIGT`
+markierte Punkte werden nicht erneut breit auditiert, ausser ein Test oder ein
+neuer Lauf widerspricht ihrem Nachweis.
+
+Aktueller Restumfang, in dieser Reihenfolge:
+
+1. **AP03/F12 und AP05/F16 (P1):** die ledgerbasierte Part-Bestandsprojektion
+und die verbleibenden Legacy-/Hub-Recovery-Codepfade abschliessen. Das
+Unknown-Claim-Reconciliation-Werkzeug ist bereits umgesetzt; sein externer
+Readback bleibt Bedienerbeleg. START-Bestandsbuchung bleibt gemaess
+Nutzerentscheidung bis zur spaeteren Aktivierung standardmaessig aus.
+Bestehende Claims/Journale und der False/True-Schalter sind Regression-Invarianten.
+2. **AP06/F17-F18 (P2):** offene synchrone I/O-Einstiege in Rechnungsdialogen
+gezielt aus dem vollstaendigen Inventar abarbeiten. Pro Einstieg Heartbeat,
+Fallidentitaet, Fehler, Doppelklick und Close/Shutdown durch einen Fake belegen.
+3. **AP07/F19 (P2):** gemeinsame Inhaltsrevision und vollstaendige Produkt-/SKU-
+Aufloesung nur dort umsetzen, wo ein reproduzierbarer stale-cache- oder
+N+1-Nachweis vorliegt; Cacheinvalidierung nach Fremd-PC-Aenderungen abnehmen.
+4. **AP08/F20 (P2):** die globale MyPy-Baseline weiter reduzieren, zuerst in
+geaenderten bzw. von Rechnungen direkt verwendeten Grenzen und danach in
+unabhaengigen, risikoarmen Modulen. Verbleibende Fehlerdateien und Ursachen
+nachvollziehbar halten; Controller nur fuer durch Tests abgesicherte,
+abgegrenzte Verantwortlichkeiten extrahieren.
+5. **G1/G2:** manuelle Drucker-/Wix-/sevDesk- und echte Zwei-Instanz-/Recovery-
+Abnahmen bleiben Betriebs-Gates. Nur die dazu zwingend benoetigten konkreten
+Belege werden vom Nutzer angefordert; bis dahin werden sie nicht als erledigt
+gezählt.
+
+Die aktuelle strikte lokale MyPy-Baseline vor der folgenden Fortschreibung
+betrug 122 Fehler in 33 Dateien. Der Regressionstest-Runner ist die Repository-
+`.venv` mit PySide6 6.11.0; das globale Python ohne PySide6 ist kein
+verbindlicher Testpfad.
+
+## AP08-Fortschreibung - Wix-Konflikt-API-Typgrenze (12.11.2026)
+
+`web/routers/conflicts.py` validiert Wix-JSON-Mappings und Variantenlisten nun
+vor dem Zugriff, behandelt fehlerhafte Variantencontainer defensiv und baut
+Advisor-Antworten ueber die konkreten Pydantic-Ausgabemodelle. Die
+Wix-Kandidatenfunktion akzeptiert kovariant `Sequence[object]`, nicht nur eine
+invariante Liste. Das veraendert keine Mapping-Entscheidung; es schliesst eine
+Typ-/Payload-Grenze und vermeidet implizite `Any`-Daten in der API-Antwort.
+Neue Regression deckt fehlerhafte Variantencontainer ab. Konflikt-Advisor und
+Konfliktwizard bestehen mit **29 Tests**; gezieltes striktes MyPy und Ruff sind
+gruen. Vollsuite fuer den vorherigen Codezustand: **2.315 bestanden, 5
+uebersprungen, 1 bestehende Starlette/httpx-Warnung (175,96 s)**; nach der
+letzten reinen Payload-Regression bleiben die 29 gezielten Tests gruen. Globales
+striktes MyPy sinkt von **122 Fehlern/33 Dateien auf 102/32**; globales Ruff ist
+gruen. Controller-Extraktion und die uebrigen APs bleiben offen.
+
+## Lokaler Vollsuite- und CI-Readback (12.11.2026)
+
+Die Vollsuite auf dem aktuellen lokalen Stand nach der Wix-Konflikt-API-Typgrenze
+besteht mit **2.316 Tests, 5 uebersprungen und 1 bestehenden
+Starlette/httpx-Deprecation-Warnung (161,06 s)**. Die beiden gezielten Konfliktsuiten
+bestehen mit **29 Tests**; gezieltes striktes MyPy und Ruff fuer Router, Advisor
+und Regressionstest sind gruen. Das globale strikte MyPy liegt bei **102 Fehlern
+in 32 Dateien**, gegenueber 122/33 vor dieser Fortschreibung. Globales Ruff ist
+gruen.
+
+GitHub-CI fuer den zuvor gepushten Commit `0dee397` ist vollstaendig erfolgreich:
+Install, Ruff und Pytest bestanden; die Hosted-Suite meldet **2.315 bestanden,
+5 uebersprungen, 1 bestehende fitz-Warnung (667,03 s)**. Der weiche Hosted-MyPy-
+Schritt meldet 131 Fehler in 37 Dateien. Dieser CI-Stand enthaelt die lokale
+Wix-Konflikt-API-Typgrenze noch nicht; deren CI-Nachweis folgt nach dem Commit.

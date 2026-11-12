@@ -13,8 +13,10 @@ from xw_office.services.product_hub.conflicts.advisor import (
 )
 from xw_office.services.wix.client import WixProduct, WixProductVariant
 from xw_office.web.routers.conflicts import (
+    _catalog_reconciliation_row,
     _fallback_advice,
     _sanitize_wix_description,
+    _wix_variant,
     _wix_variant_matches,
 )
 
@@ -177,6 +179,22 @@ def test_wix_variant_verification_requires_matching_id_and_hub_sku() -> None:
     assert _wix_variant_matches(raw, "wix-small", "XW-6012")
     assert not _wix_variant_matches(raw, "wix-small", "XW-6212")
     assert not _wix_variant_matches(raw, "other-variant", "XW-6012")
+
+
+def test_wix_payload_helpers_ignore_malformed_variant_collections() -> None:
+    raw = {"variants": [None, {"id": "wix-small", "sku": "XW-6012"}]}
+
+    assert _wix_variant(raw, "wix-small") == {"id": "wix-small", "sku": "XW-6012"}
+    assert _wix_variant({"variants": "not-a-list"}, "wix-small") is None
+    assert (
+        _catalog_reconciliation_row(
+            [{"id": "wix-parent", "variants": "not-a-list"}],
+            external_id="wix-parent",
+            variant_external_id="wix-small",
+            sku="XW-6012",
+        )
+        is None
+    )
 
 
 def test_fallback_advice_keeps_mapping_candidates_usable_without_ai() -> None:
