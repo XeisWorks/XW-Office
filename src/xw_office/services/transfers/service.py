@@ -38,6 +38,18 @@ _LOCAL_STATE_PATH = Path(__file__).resolve().parents[4] / "state" / "open_transf
 _DEFAULT_TRANSFER_MAILBOX = "transfer@xeisworks.at"
 
 
+def _dict_or_empty(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _list_or_empty(value: object) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) else None
+
+
 class OffeneUeberweisungenService:
     """Graph-backed transfer inbox workflow for Daily Business."""
 
@@ -278,7 +290,7 @@ class OffeneUeberweisungenService:
                 id=str(item.get("id") or "").strip(),
                 name=str(item.get("name") or "").strip(),
                 content_type=str(item.get("contentType") or "").strip(),
-                size=int(item.get("size")) if isinstance(item.get("size"), int) else None,
+                size=_optional_int(item.get("size")),
             )
             for item in values
             if str(item.get("id") or "").strip()
@@ -348,7 +360,7 @@ class OffeneUeberweisungenService:
 
     @staticmethod
     def _normalize_graph_message(msg: dict[str, Any]) -> dict[str, Any]:
-        body_obj = msg.get("body") if isinstance(msg.get("body"), dict) else {}
+        body_obj = _dict_or_empty(msg.get("body"))
         content = str(body_obj.get("content") or "").strip()
         content_type = str(body_obj.get("contentType") or "").strip().lower()
         normalized = dict(msg)
@@ -362,21 +374,21 @@ class OffeneUeberweisungenService:
     def _is_transfer_candidate(msg: dict[str, Any]) -> bool:
         subject = str(msg.get("subject") or "").strip().lower()
         preview = str(msg.get("bodyPreview") or "").strip().lower()
-        body_obj = msg.get("body") if isinstance(msg.get("body"), dict) else {}
+        body_obj = _dict_or_empty(msg.get("body"))
         body_text = str(body_obj.get("content") or "").strip().lower()
         hay = f"{subject} {preview} {body_text}"
         if any(token in hay for token in ("automatic reply", "out of office", "undeliverable", "delivery status")):
             return False
-        flag_obj = msg.get("flag") if isinstance(msg.get("flag"), dict) else {}
+        flag_obj = _dict_or_empty(msg.get("flag"))
         status = str(flag_obj.get("flagStatus") or "").strip().lower()
         return status != "complete"
 
     def _to_case(self, msg: dict[str, Any], *, load_thread: bool = True) -> TransferCase:
-        from_obj = msg.get("from") if isinstance(msg.get("from"), dict) else {}
-        email_obj = from_obj.get("emailAddress") if isinstance(from_obj.get("emailAddress"), dict) else {}
+        from_obj = _dict_or_empty(msg.get("from"))
+        email_obj = _dict_or_empty(from_obj.get("emailAddress"))
         sender = str(email_obj.get("address") or email_obj.get("name") or "").strip()
 
-        body_obj = msg.get("body") if isinstance(msg.get("body"), dict) else {}
+        body_obj = _dict_or_empty(msg.get("body"))
         body = str(body_obj.get("content") or "").strip()
         snippet = str(msg.get("bodyPreview") or "").strip()
         subject = str(msg.get("subject") or "").strip()
@@ -388,15 +400,15 @@ class OffeneUeberweisungenService:
                 id=str(att.get("id") or "").strip(),
                 name=str(att.get("name") or "").strip(),
                 content_type=str(att.get("contentType") or "").strip(),
-                size=int(att.get("size")) if isinstance(att.get("size"), int) else None,
+                size=_optional_int(att.get("size")),
             )
-            for att in (msg.get("attachments") if isinstance(msg.get("attachments"), list) else [])
+            for att in _list_or_empty(msg.get("attachments"))
             if isinstance(att, dict)
         ]
 
-        flag_obj = msg.get("flag") if isinstance(msg.get("flag"), dict) else {}
+        flag_obj = _dict_or_empty(msg.get("flag"))
         flag_status = str(flag_obj.get("flagStatus") or "notFlagged").strip() or "notFlagged"
-        completed_obj = flag_obj.get("completedDateTime") if isinstance(flag_obj.get("completedDateTime"), dict) else {}
+        completed_obj = _dict_or_empty(flag_obj.get("completedDateTime"))
         completed_at = str(completed_obj.get("dateTime") or "").strip()
 
         thread_text = ""
@@ -482,18 +494,18 @@ class OffeneUeberweisungenService:
         }
 
     def _case_from_dict(self, data: dict[str, Any]) -> TransferCase:
-        attachments_raw = data.get("attachments") if isinstance(data.get("attachments"), list) else []
+        attachments_raw = _list_or_empty(data.get("attachments"))
         attachments = [
             TransferAttachment(
                 id=str(item.get("id") or "").strip(),
                 name=str(item.get("name") or "").strip(),
                 content_type=str(item.get("content_type") or item.get("contentType") or "").strip(),
-                size=int(item.get("size")) if isinstance(item.get("size"), int) else None,
+                size=_optional_int(item.get("size")),
             )
             for item in attachments_raw
             if isinstance(item, dict)
         ]
-        payment_raw = data.get("payment") if isinstance(data.get("payment"), dict) else {}
+        payment_raw = _dict_or_empty(data.get("payment"))
         payment_amount_raw = payment_raw.get("amount")
         amount: Decimal | None = None
         if payment_amount_raw not in (None, ""):
@@ -501,7 +513,7 @@ class OffeneUeberweisungenService:
                 amount = Decimal(str(payment_amount_raw))
             except Exception:  # noqa: BLE001
                 amount = None
-        source_raw = payment_raw.get("source_by_field") if isinstance(payment_raw.get("source_by_field"), dict) else {}
+        source_raw = _dict_or_empty(payment_raw.get("source_by_field"))
         source_by_field: dict[str, TransferFieldSource] = {}
         for key, value in source_raw.items():
             try:
@@ -521,7 +533,7 @@ class OffeneUeberweisungenService:
             source_by_field=source_by_field,
             confidence_by_field={
                 str(k): float(v)
-                for k, v in (payment_raw.get("confidence_by_field") or {}).items()
+                for k, v in _dict_or_empty(payment_raw.get("confidence_by_field")).items()
                 if isinstance(v, (int, float))
             },
         )
