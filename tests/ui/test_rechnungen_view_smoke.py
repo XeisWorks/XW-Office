@@ -3316,6 +3316,36 @@ def test_open_product_enrichment_runs_off_ui_thread_and_discards_stale_result(
     assert view._open_product_check_key(first) not in view._open_product_prepared_blocks  # noqa: SLF001
 
 
+def test_open_print_product_row_uses_cached_catalog_title_without_ui_resolution(
+    qtbot: QtBot,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    container = _build_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    container.reset()
+    original_resolve = container.resolve
+
+    def checked_resolve(service_type: type[object]) -> object:
+        if service_type is ProductCatalogService and container.get_if_resolved(ProductCatalogService) is None:
+            raise AssertionError("Der Print-Produkte-Zeilenaufbau darf den Katalog nicht aufloesen")
+        return original_resolve(service_type)
+
+    monkeypatch.setattr(container, "resolve", checked_resolve)
+    item = PrintProductAggregate(sku="XW-010", title="Kundenangabe aus Wix", description="", quantity=1)
+    key = view._open_product_check_key(item)  # noqa: SLF001
+    view._open_product_prepared_blocks[key] = PieceBlock(  # noqa: SLF001
+        sku="XW-010", name="Kanonischer Titel", qty_needed=1
+    )
+
+    row = view._build_open_print_product_row(item)  # noqa: SLF001
+    labels = [label.text() for label in row.findChildren(QLabel)]
+
+    assert "Kanonischer Titel" in labels
+    assert "Kundenangabe: Kundenangabe aus Wix" in labels
+    assert container.get_if_resolved(ProductCatalogService) is None
+
+
 def test_late_invoice_product_configuration_is_discarded_after_selection_change(
     qtbot: QtBot, monkeypatch: MonkeyPatch
 ) -> None:

@@ -4689,15 +4689,10 @@ class RechnungenView(QWidget):
 
         sku_clean = str(item.sku or "").strip().upper()
         raw_title = str(item.title or item.sku or "Unbenanntes Produkt")
-        resolved_title = raw_title
-        if sku_clean == "XW-010":
-            try:
-                catalog: ProductCatalogService = self._container.resolve(ProductCatalogService)
-                resolution = catalog.resolve_unreleased_title(raw_title)
-                if resolution.is_resolved and resolution.canonical_name:
-                    resolved_title = resolution.canonical_name
-            except Exception:
-                pass
+        prepared_block = self._open_product_prepared_blocks.get(
+            self._open_product_check_key(item)
+        )
+        resolved_title = str(prepared_block.name or raw_title) if prepared_block is not None else raw_title
         title = QLabel(resolved_title)
         title.setWordWrap(True)
         title.setStyleSheet("color: #ffffff; font-weight: 700;")
@@ -8163,6 +8158,7 @@ class RechnungenView(QWidget):
                     f"Unreleased-Produkt '{canonical_name}' gespeichert.",
                     5000,
                 )
+                self._cache_unreleased_product_title(raw_input, canonical_name)
                 self._render_active_print_tab()
                 from xw_office.ui.modules.rechnungen.print_dialog import (
                     _configure_missing_piece_print,
@@ -8207,6 +8203,24 @@ class RechnungenView(QWidget):
         )
         worker.start()
         return None
+
+    def _cache_unreleased_product_title(self, raw_input: str, canonical_name: str) -> None:
+        aliases = {line.strip().casefold() for line in raw_input.splitlines() if line.strip()}
+        if raw_input.strip():
+            aliases.add(raw_input.strip().casefold())
+        candidates = [*self._open_overview_products, *self._session_print_products]
+        for item in candidates:
+            if (
+                str(item.sku or "").strip().upper() != "XW-010"
+                or str(item.title or "").strip().casefold() not in aliases
+            ):
+                continue
+            key = self._open_product_check_key(item)
+            block = self._open_product_prepared_blocks.get(key)
+            if block is None:
+                block = self._basic_piece_block_from_open_product(item)
+            block.name = canonical_name
+            self._open_product_prepared_blocks[key] = block
 
     def _on_add_unreleased_from_item(self, item: PrintProductAggregate) -> None:
         self._create_unreleased_product_from_alias(

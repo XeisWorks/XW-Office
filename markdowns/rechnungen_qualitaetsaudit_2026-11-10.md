@@ -2718,3 +2718,17 @@ Rechnungs-UI-Dateien sind gruen. Die Vollsuite besteht mit **2.281 Tests, 5
 optionalen PostgreSQL-Ueberspringungen und 1 bestehenden Starlette/httpx-
 Deprecation-Warnung (155,45 s)**. F17 bleibt fuer die weiteren UI-I/O- und
 Lifecycle-Pfade offen.
+
+## F17-Fortschreibung - Print-Produkte-Zeilen ohne synchronen Kataloglookup
+
+Der Aufbau der sichtbaren Print-Produkte-Zeile fragte den Unreleased-Katalog
+noch einmal synchron nach dem kanonischen Titel ab, obwohl dieselbe Aufloesung
+bereits im Worker vorbereitet wurde. Die Zeile liest jetzt ausschliesslich den
+vorbereiteten Cache; nach einer bestaetigten Titelanlage wird der sichtbare
+Eintrag unmittelbar im UI-Cache auf den kanonischen Namen umgestellt. Ein
+Kaltstarttest verhindert `ProductCatalogService.resolve()` beim Zeilenaufbau;
+die bestehende Alias-Regression prueft weiterhin die sofortige Aktualisierung
+vor dem Druckdialog. Die Rechnungsansicht-Smoke-Suite besteht mit **99 Tests**,
+Ruff global und striktes MyPy fuer alle 27 Rechnungs-UI-Dateien sind gruen. Die
+Vollsuite besteht mit **2.282 Tests, 5 optionalen PostgreSQL-Ueberspringungen
+und 1 bestehenden Starlette/httpx-Deprecation-Warnung (150,15 s)**.
