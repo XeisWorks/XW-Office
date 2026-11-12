@@ -780,7 +780,7 @@ Mehr-PC-/Prozessabbruch-, Dry-Run- und Cutover-Abnahme bleibt Gate G1/G2.
 | Gate | Priorität | Status | Benötigter Nachweis / anfängerfreundlicher Ablauf |
 | --- | --- | --- | --- |
 | G1 – Windows/Hardware/Integration | P2 | BLOCKIERT | In einer freigegebenen Testumgebung einen Wix-Testauftrag und einen manuell angelegten sevDesk-Testentwurf mit eindeutiger Testadresse bereitstellen. Testdrucker wählen, zuerst PDF/Label/PLC im Testmodus prüfen, anschließend die erlaubten START-Schritte einzeln abnehmen. Versand ausschließlich an eigene Testadresse. Auch Escape/Schließen/Retry und 100–200 % Windows-Skalierung prüfen; Ergebnis und Beleg-/Job-IDs ohne Secrets protokollieren. |
-| G2 - Mehr-PC/PostgreSQL/Cutover | P1 | BLOCKIERT | Lokal wurde ein kurzlebiger PostgreSQL-16-Testcontainer ohne Produktivdaten verwendet. Fuenf opt-in Integrationstests bestehen: zwei Clients konkurrieren um die erstmalige Rechnungsbuchung, um zwei Gutschriften mit gemeinsamer Ursprungsposition und um denselben dauerhaften Claim; zwei PrintDecisionEngine-Instanzen serialisieren den Part-Stock-GET/SET-Pfad ueber Advisory-Locks; ein injizierter DB-Fehler belegt Rollback von Ledger, Booking und Bestand. Das Gate bleibt offen fuer AP03-Prozessabbruch/Recovery in zwei echten App-Instanzen sowie Inventur-, Backup-, Shadow- und Cutover-/Rollback-Abnahme. Produktionsdatenbank und Master-Flags blieben unberuehrt. |
+| G2 - Mehr-PC/PostgreSQL/Cutover | P1 | BLOCKIERT | Die sieben opt-in PostgreSQL-Integrationstests bestehen: fuenf bisherige Race-/Rollback-Faelle sowie zwei neue echte OS-Prozessfaelle gegen die isolierte Railway-Restore-Drill-Datenbank. Einer prueft den gleichzeitigen Claim aus zwei unabhaengigen Prozessen; der andere beendet den Claim-Prozess hart und belegt, dass `running` bis zur expliziten Reconciliation sperrt und danach ein Retry gelingt. Das Gate bleibt offen fuer Recovery mit zwei echten App-Instanzen sowie Inventur-, Backup-, Shadow- und Cutover-/Rollback-Abnahme. Produktionsdatenbank und Master-Flags blieben unberuehrt. |
 
 ### Abschlussnachweis
 
@@ -3880,3 +3880,26 @@ Weitere grossflaechige View-Extraktionen haben kein engeres, durch diesen Audit
 belegtes Ziel und wuerden dem Grundsatz widersprechen, Refactorings nur bei
 nachweisbarem Nutzen auszufuehren. F20 ist erledigt; F25/F27 sowie G1/G2 bleiben
 die einzigen offenen Arbeits- und Abnahmenachweise.
+
+## Ziel- und Vorgehensreview - G2-Prozessnachweis (12.11.2026)
+
+Das registrierte Ziel bleibt treffend und sein Umfang bleibt unveraendert: neben
+Code und Regressionen verlangt es ausdruecklich Desktop-/Hardware- sowie
+Betriebsnachweise. Eine Verengung auf reine Codearbeit wuerde die vollstaendige
+Umsetzung nicht mehr abbilden. Effizienter ist ab hier ein Abschlussmodus statt
+erneuter breiter Bestandsaufnahme: bereits gruene Codebereiche nicht wieder
+oeffnen, die verbleibenden F25/F27-Metriken und G1/G2-Abnahmen als getrennte
+Gates behandeln und alle davon unabhaengigen Pruefungen vor dem abschliessenden
+Bedienerschritt erledigen.
+
+Fuer G2 wurden zwei weitere Regressionen in
+`tests/integration/test_invoice_inventory_postgres.py` ergaenzt. Der gezielte
+Lauf gegen die isolierte Railway-Umgebung `XW-Flow-Restore-Drill` bestand mit
+**7/7 Tests in 96,42 s**; damit ist jetzt auch der Mehrprozess-Claim und der
+Abbruch-/Reconciliation-Pfad auf echtem PostgreSQL nachgewiesen. Der lokale
+Volltestlauf besteht mit **2.373 Tests, 7 optionalen PostgreSQL-Ueberspringungen
+und 1 bestehenden Starlette/httpx-Deprecation-Warnung (161,33 s)**. Globales
+Ruff ist gruen, `mypy src/` meldet 0 Fehler in 499 Quelldateien und
+`git diff --check` ist sauber. Diese Tests schliessen den Datenbank-Teil der
+G2-Evidenz, aber nicht die verbleibende Abnahme mit zwei laufenden App-Instanzen
+oder den Inventur-/Backup-/Shadow-/Cutover-Ablauf.

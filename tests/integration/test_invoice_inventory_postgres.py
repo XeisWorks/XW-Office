@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import get_context
 import os
 import threading
 import uuid
@@ -75,6 +76,34 @@ def _seed_stock(factory: sessionmaker[Session]) -> uuid.UUID:
         idempotency_key=f"baseline:{uuid.uuid4()}",
     )
     return variant.id
+
+
+def _postgres_process_claim(
+    database_url: str,
+    invoice_id: str,
+    operation: str,
+    barrier: object,
+    result_queue: object,
+) -> None:
+    """Acquire one durable claim using a fresh OS process and DB connection."""
+    engine = create_engine(database_url, future=True, pool_size=1, max_overflow=0)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+    try:
+        barrier.wait(timeout=20)  # type: ignore[attr-defined]
+        claim = InvoiceOperationClaimStore(SettingKvRepository(factory)).acquire(
+            invoice_id, operation
+        )
+        result_queue.put((claim.acquired, claim.operation_id, claim.state))  # type: ignore[attr-defined]
+    finally:
+        engine.dispose()
+
+
+def _postgres_process_claim_then_abort(database_url: str, invoice_id: str, operation: str) -> None:
+    """Commit a running claim, then emulate a hard process loss before finish."""
+    engine = create_engine(database_url, future=True, pool_size=1, max_overflow=0)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
+    InvoiceOperationClaimStore(SettingKvRepository(factory)).acquire(invoice_id, operation)
+    os._exit(73)  # noqa: SLF001 - intentional uncatchable process-abort simulation.
 
 
 def test_parallel_first_booking_applies_one_inventory_movement(
@@ -202,6 +231,96 @@ def test_parallel_claim_stores_across_postgres_connections_have_one_winner(
     assert sum(claim.acquired for claim in claims) == 1
     assert {claim.state for claim in claims} == {"running"}
     assert len({claim.operation_id for claim in claims}) == 1
+
+
+def test_parallel_claims_from_separate_postgres_processes_have_one_winner(
+    postgres_factory: sessionmaker[Session],
+) -> None:
+    bind = postgres_factory.kw["bind"]
+    assert isinstance(bind, Engine)
+    database_url = bind.url.render_as_string(hide_password=False)
+    context = get_context("spawn")
+    barrier = context.Barrier(2)
+    results = context.Queue()
+    invoice_id = f"pg-process-claim-{uuid.uuid4()}"
+    processes = [
+        context.Process(
+            target=_postgres_process_claim,
+            args=(database_url, invoice_id, "invoice_mail", barrier, results),
+        )
+        for _ in range(2)
+    ]
+    try:
+        for process in processes:
+            process.start()
+        for process in processes:
+            process.join(timeout=45)
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+        assert [process.exitcode for process in processes] == [0, 0]
+        claims = [results.get(timeout=5), results.get(timeout=5)]
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+        results.close()
+
+    assert sum(bool(claim[0]) for claim in claims) == 1
+    assert {claim[2] for claim in claims} == {"running"}
+    assert len({claim[1] for claim in claims}) == 1
+
+
+def test_running_claim_survives_postgres_process_abort_and_requires_reconciliation(
+    postgres_factory: sessionmaker[Session],
+) -> None:
+    bind = postgres_factory.kw["bind"]
+    assert isinstance(bind, Engine)
+    database_url = bind.url.render_as_string(hide_password=False)
+    context = get_context("spawn")
+    invoice_id = f"pg-aborted-claim-{uuid.uuid4()}"
+    operation = "invoice_finalize"
+    process = context.Process(
+        target=_postgres_process_claim_then_abort,
+        args=(database_url, invoice_id, operation),
+    )
+    process.start()
+    process.join(timeout=45)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=5)
+    assert process.exitcode == 73
+
+    store = InvoiceOperationClaimStore(SettingKvRepository(postgres_factory))
+    open_claims = [claim for claim in store.list_open() if claim.invoice_id == invoice_id]
+    assert len(open_claims) == 1
+    orphaned = open_claims[0]
+    assert orphaned.operation == operation
+    assert orphaned.state == "running"
+    competing = InvoiceOperationClaimStore(SettingKvRepository(postgres_factory)).acquire(
+        invoice_id, operation
+    )
+    assert not competing.acquired
+    assert competing.state == "running"
+
+    reconciled = store.reconcile_open(
+        invoice_id,
+        operation,
+        orphaned.operation_id,
+        "failed",
+        reconciled_by="postgres-process-test",
+        evidence="isolated child process exited before side effect",
+        expected_state="running",
+        no_active_processes_confirmed=True,
+    )
+    assert reconciled.state == "failed"
+    retried = InvoiceOperationClaimStore(SettingKvRepository(postgres_factory)).acquire(
+        invoice_id, operation
+    )
+    assert retried.acquired
+    assert retried.operation_id == orphaned.operation_id
 
 
 def test_parallel_part_stock_updates_are_serialized_by_postgres_advisory_lock(
