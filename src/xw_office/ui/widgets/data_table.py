@@ -4,7 +4,13 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 from PySide6.QtGui import QBrush, QColor, QKeyEvent, QKeySequence
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    QPersistentModelIndex,
+    QSortFilterProxyModel,
+    Qt,
+)
 from PySide6.QtWidgets import QApplication, QHeaderView, QTableView, QWidget
 from PySide6.QtCore import QItemSelectionModel
 from PySide6.QtCore import QPoint
@@ -35,13 +41,21 @@ class SimpleTableModel(QAbstractTableModel):
         self._rows.extend(row_list)
         self.endInsertRows()
 
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def rowCount(
+        self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()
+    ) -> int:
         return len(self._rows)
 
-    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+    def columnCount(
+        self, parent: QModelIndex | QPersistentModelIndex = QModelIndex()
+    ) -> int:
         return len(self._columns)
 
-    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
+    def data(
+        self,
+        index: QModelIndex | QPersistentModelIndex,
+        role: int = Qt.ItemDataRole.DisplayRole,
+    ) -> Any:
         row = self._rows[index.row()]
         col = self._columns[index.column()]
         if role == Qt.ItemDataRole.DisplayRole:

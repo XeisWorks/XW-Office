@@ -2881,13 +2881,23 @@ Der globale MyPy-Stand sank auf **193 Fehler in 51 Dateien**.
 
 ## Aktueller Qualitaetslauf (12.11.2026)
 
-Auf Commit `85d7c97` im lokalen Windows-PySide6-venv: Vollsuite **2.301
-bestanden, 5 optionale PostgreSQL-Tests uebersprungen, 1 bestehende
-Starlette/httpx-Deprecation-Warnung (148,43 s)**; globales Ruff `ruff check .`
-mit **All checks passed**. Der zuletzt ausgefuehrte globale MyPy-Lauf fand
-**193 Fehler in 51 Dateien**; die in diesem Arbeitsabschnitt bereinigten Wix-,
-Transfer-/Graph- und PDF-Layout-Dateien haben jeweils null Fehler. Die globale
+Im lokalen Windows-PySide6-venv: Vollsuite **2.302 bestanden, 5 optionale
+PostgreSQL-Tests uebersprungen, 1 bestehende Starlette/httpx-Deprecation-
+Warnung (152,49 s)**; globales Ruff `ruff check .` mit **All checks passed**.
+Der globale MyPy-Lauf fand **190 Fehler in 50 Dateien**; die in diesem
+Arbeitsabschnitt bereinigten Wix-, Transfer-/Graph- und PDF-Layout-Dateien sowie
+`ui/widgets/data_table.py` haben jeweils null Fehler. Die globale
 Typbereinigung und Controller-Extraktion bleiben F20-offen.
+
+## F20-Fortschreibung - Qt-Tabellenmodell-Indizes
+
+`ui/widgets/data_table.py` hatte unpassende Typen an den Qt-Overrides
+`rowCount`, `columnCount` und `data`: PySide6 kann dort neben `QModelIndex` auch
+`QPersistentModelIndex` uebergeben. Die Signaturen akzeptieren jetzt beide
+Typen. Eine Regression prueft Zeilenanzahl, Spaltenanzahl und Datenzugriff ueber
+einen persistenten Index. Beide direkten DataTable-Consumer bestehen mit **13
+UI-Tests**; gezieltes MyPy und Ruff sind gruen. Der globale MyPy-Stand sank von
+193/51 auf **190 Fehler in 50 Dateien**.
 
 ## Wix- und Railway-Deployment-Readback (12.11.2026)
 
@@ -2905,3 +2915,9 @@ ist **SUCCESS**. Railway zeigt fuer beide Projekte keine ausstehenden staged
 oder applying Aenderungen. Der zweite GitHub-CI-Lauf allein fuer den
 Dokumentations-Commit wurde beendet; der laufende Volltestlauf fuer den
 Code-Commit `85d7c97` bleibt der CI-Nachweis fuer den Code.
+
+Der anschliessende Readback nach dem Audit-Commit `f76cb11` bestaetigt auch
+fuer Product Hub und Inventory Worker **SUCCESS** (Deployments
+`9f08512f-d183-4170-9e4b-c5502d04a2f1` und
+`75ea1905-4c8b-4f2a-bda3-8d10320156e5`). Der neue DataTable-Code ist in diesem
+Readback-Commit noch nicht enthalten.
