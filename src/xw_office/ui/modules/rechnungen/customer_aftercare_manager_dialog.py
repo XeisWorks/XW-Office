@@ -336,26 +336,65 @@ class CustomerAftercareManagerDialog(QDialog):
         case = self._selected_case
         if case is None:
             return
-        if not self._selected_items:
+        selected_items = list(self._selected_items)
+        if not selected_items:
             self._status.setText("Keine Produktposition fuer diesen Fall hinterlegt.")
             return
         if self._action_worker is not None and self._action_worker.isRunning():
             return
 
-        try:
-            repo: CustomerAftercareRepository = self._container.resolve(CustomerAftercareRepository)
-        except Exception:
+        detail_seq = self._detail_seq
+
+        def resolve_repository() -> CustomerAftercareRepository | None:
+            try:
+                return self._container.resolve(CustomerAftercareRepository)
+            except Exception:
+                return None
+
+        def on_repository_resolved(payload: object) -> None:
+            if self._closing or detail_seq != self._detail_seq:
+                return
+            if self._selected_case is None or self._selected_case.id != case.id:
+                return
+            repository = (
+                payload if isinstance(payload, CustomerAftercareRepository) else None
+            )
+            self._continue_prepare_nachsendung(case, selected_items, repository)
+
+        worker = BackgroundWorker(resolve_repository)
+        worker.signals.result.connect(on_repository_resolved)
+        worker.signals.error.connect(
+            lambda exc: self._show_action_error(
+                exc, "Nachsendung konnte nicht vorbereitet werden"
+            )
+        )
+        worker.signals.finished.connect(
+            lambda current=worker: self._clear_worker("_action_worker", current)
+        )
+        self._action_worker = worker
+        worker.start()
+
+    def _continue_prepare_nachsendung(
+        self,
+        case: CustomerAftercareCase,
+        selected_items: list[CustomerAftercareItem],
+        repo: CustomerAftercareRepository | None,
+    ) -> None:
+
+        if repo is None:
             # Compatibility fallback for installations without the relational
             # aftercare store (and legacy manager-only cases).
-            missing_lines = aftercare_fulfillment.missing_items_as_product_lines(self._selected_items)
+            missing_lines = aftercare_fulfillment.missing_items_as_product_lines(selected_items)
             if not missing_lines:
                 self._status.setText("Kein fehlender Artikel fuer diesen Fall hinterlegt.")
                 return
-            sendungen: OffeneSendungenService = self._container.resolve(OffeneSendungenService)
             note = aftercare_fulfillment.replacement_shipment_note(case)
             manual_case_id = aftercare_fulfillment.manual_case_id(case)
 
             def legacy_job() -> None:
+                sendungen: OffeneSendungenService = self._container.resolve(
+                    OffeneSendungenService
+                )
                 sendungen.create_manual_case(
                     case_id=manual_case_id,
                     subject=f"Lieferkorrektur {case.source_wix_order_number or case.customer_name}".strip(),
@@ -384,7 +423,7 @@ class CustomerAftercareManagerDialog(QDialog):
         address = [str(line).strip() for line in raw_address if str(line).strip()] if isinstance(raw_address, list) else []
         dialog = RedeliveryDialog(
             case,
-            self._selected_items,
+            selected_items,
             address_lines=address,
             address_source=case.address_source,
             parent=self,

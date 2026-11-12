@@ -2658,8 +2658,14 @@ Workerstart fuer Lieferschein-Anzeige, Lieferscheindruck und Labeldruck sowie da
 Nachlieferung aufgeloest. Alle vier Aufloesungen liegen jetzt in den jeweiligen
 Aktionsworkern. Eine blockierte Servicefactory beim Anzeigen eines Lieferscheins
 belegt den weiterlaufenden Qt-Eventloop und die verzugsfreie PDF-Oeffnung nach
-Freigabe. `test_customer_aftercare_manager_dialog.py`: **16 Tests bestanden**;
-striktes MyPy fuer `customer_aftercare_tab.py` und globales Ruff sind gruen. Die
-Vollsuite besteht mit **2.277 Tests, 5 optionalen PostgreSQL-Ueberspringungen und
-1 bestehenden Starlette/httpx-Deprecation-Warnung (151,00 s)**. F17 bleibt offen,
-bis die restlichen UI-I/O- und Lifecycle-Pfade geprueft sind.
+Freigabe. `CustomerAftercareManagerDialog` loest die Verfuegbarkeit des
+relationalen Repositorys und den Legacy-`OffeneSendungenService` ebenfalls im
+Worker auf; eine Sequenzpruefung verwirft die Antwort, wenn waehrenddessen ein
+anderer Fall ausgewaehlt wurde. Der blockierte Repository-Fake bestaetigt den
+Qt-Heartbeat und dass der Dialog erst nach der Resolver-Antwort erscheint.
+`test_customer_aftercare_manager_dialog.py`: **17 Tests bestanden**; striktes
+MyPy fuer beide Nachbetreuungsdateien und alle 27 Rechnungs-UI-Dateien sowie
+globales Ruff sind gruen. Die Vollsuite besteht mit **2.278 Tests, 5 optionalen
+PostgreSQL-Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung
+(148,19 s)**. F17 bleibt offen, bis die restlichen UI-I/O- und Lifecycle-Pfade
+geprueft sind.

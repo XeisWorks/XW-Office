@@ -11,6 +11,7 @@ from shiboken6 import isValid
 from xw_office.core.config import AppConfig
 from xw_office.core.worker import BackgroundWorker
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
+from xw_office.repositories.customer_aftercare import CustomerAftercareRepository
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
 from xw_office.services.sendungen.service import OffeneSendungenService
 from xw_office.ui.modules.rechnungen.customer_aftercare_manager_dialog import (
@@ -18,7 +19,10 @@ from xw_office.ui.modules.rechnungen.customer_aftercare_manager_dialog import (
 )
 from xw_office.ui.modules.rechnungen.customer_aftercare_tab import CustomerAftercareTab
 from xw_office.ui.modules.rechnungen.customer_aftercare_review_dialog import ReviewDialogOutcome
-from xw_office.ui.modules.rechnungen.redelivery_dialog import RedeliveryDialog
+from xw_office.ui.modules.rechnungen.redelivery_dialog import (
+    RedeliveryDialog,
+    RedeliveryDialogOutcome,
+)
 
 
 class _FakeService:
@@ -266,6 +270,54 @@ def test_prepare_nachsendung_creates_manual_case_from_missing_items(qtbot: objec
     product_names = [product.name for product in call["products"]]
     assert product_names == ["Notenheft B"]
     assert "nicht verrechnen" in call["note"]
+
+
+def test_nachsendung_repository_resolution_runs_off_ui_thread(qtbot: object, monkeypatch) -> None:
+    service = _FakeService()
+    entered, release = Event(), Event()
+    dialog_opened: list[bool] = []
+
+    class SlowContainer(_FakeContainer):
+        def resolve(self, typ: object) -> object:
+            if typ is CustomerAftercareRepository:
+                entered.set()
+                release.wait(timeout=3)
+                return object.__new__(CustomerAftercareRepository)
+            return super().resolve(typ)
+
+    class _CancelRedeliveryDialog:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def exec(self) -> int:
+            dialog_opened.append(True)
+            return 0
+
+        def outcome(self) -> RedeliveryDialogOutcome:
+            return RedeliveryDialogOutcome(
+                action="cancel", shipping_mode="", address_lines=(), note="", items=()
+            )
+
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.customer_aftercare_manager_dialog.RedeliveryDialog",
+        _CancelRedeliveryDialog,
+    )
+    dialog = CustomerAftercareManagerDialog(SlowContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    _wait_loaded(qtbot, dialog)
+    dialog._list.setCurrentRow(0)  # noqa: SLF001
+    qtbot.waitUntil(lambda: len(dialog._selected_items) > 0, timeout=3000)  # noqa: SLF001
+    beats: list[bool] = []
+    QTimer.singleShot(20, lambda: beats.append(True))
+
+    dialog._prepare_nachsendung()  # noqa: SLF001
+
+    qtbot.waitUntil(entered.is_set, timeout=1000)
+    qtbot.waitUntil(lambda: bool(beats), timeout=1000)
+    assert dialog_opened == []
+    release.set()
+    qtbot.waitUntil(lambda: bool(dialog_opened), timeout=2000)
+    qtbot.waitUntil(lambda: dialog._action_worker is None, timeout=2000)  # noqa: SLF001
 
 
 def test_redelivery_tab_print_request_uses_confirmed_items_and_address(qtbot: object) -> None:
