@@ -4,7 +4,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -41,6 +42,8 @@ DASHBOARD_CARDS = [
 class DashboardCard(QFrame):
     """Clickable card widget for the home dashboard."""
 
+    clicked = Signal()
+
     def __init__(
         self, title: str, subtitle: str, accent_color: str,
         parent: QWidget | None = None,
@@ -75,6 +78,11 @@ class DashboardCard(QFrame):
         sub_label.setWordWrap(True)
         layout.addWidget(sub_label)
         layout.addStretch()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class HomeView(QWidget):
@@ -112,7 +120,7 @@ class HomeView(QWidget):
                 accent_color=card_def["color"],
             )
             key = card_def["key"]
-            card.mousePressEvent = lambda event, k=key: self._on_card_click(k)
+            card.clicked.connect(lambda k=key: self._on_card_click(k))
             row, col = divmod(i, 3)
             self._grid.addWidget(card, row, col)
 

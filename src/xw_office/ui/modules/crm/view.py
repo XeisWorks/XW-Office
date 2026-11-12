@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from PySide6.QtWidgets import (
     QDialog,
@@ -184,7 +184,7 @@ class CrmView(QWidget):
 
         def job() -> list[ContactRecord]:
             if crm.has_live_connection():
-                return cast("list[ContactRecord]", crm.fetch_live_contacts())
+                return crm.fetch_live_contacts()
             return list(_DEMO_CONTACTS)
 
         self._worker = BackgroundWorker(job)
@@ -325,7 +325,7 @@ class CrmView(QWidget):
         contacts_snapshot = list(self._contacts)
 
         def job() -> list[DuplicateCandidate]:
-            return cast("list[DuplicateCandidate]", crm.find_duplicates_in_memory(contacts_snapshot))
+            return crm.find_duplicates_in_memory(contacts_snapshot)
 
         self._worker = BackgroundWorker(job)
         self._worker.signals.result.connect(self._on_scan_done)

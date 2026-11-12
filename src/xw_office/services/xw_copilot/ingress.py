@@ -72,7 +72,7 @@ class XWCopilotIngress:
         get_config = self._dry_run._config_service.load_config
 
         class _Handler(BaseHTTPRequestHandler):
-            def log_message(self, fmt: str, *args: object) -> None:  # type: ignore[override]
+            def log_message(self, fmt: str, *args: object) -> None:
                 logger.debug("Ingress: " + fmt, *args)
 
             def do_POST(self) -> None:  # noqa: N802
