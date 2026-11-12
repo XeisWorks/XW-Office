@@ -2760,10 +2760,12 @@ Entwurfloeschung, Sammel-/Einzeldruck, Fulfillment und Entwurfsfehler: nach
 Shutdown erscheinen keine Dialoge und externe PDF-Oeffnungen werden verworfen.
 Weitere Abschluss-Callbacks starten nach Shutdown keine offene Uebersicht,
 Produktvorbereitung, Hint-Vorladung oder nachfolgenden Sammeldrucke; eine
-verspaetete Produktvorpruefung startet keinen neuen sevDesk-Entwurf. Die
-Regression prueft diese Follow-up-Grenzen direkt. Der Smoke-Satz besteht mit
-**104 Tests**; globales Ruff und striktes MyPy fuer alle 27 Rechnungs-UI-Dateien
-sind gruen. Die Vollsuite besteht mit **2.287 Tests, 5 optionalen
+verspaetete Produktvorpruefung startet keinen neuen sevDesk-Entwurf. Draft-
+Vorschaufehler und -ergebnisse sowie geladene sevDesk-Detailkontexte greifen
+nach Shutdown nicht mehr auf Dialoge oder Widgets zu. Die Regression prueft
+diese Follow-up-Grenzen direkt. Der Smoke-Satz besteht mit **104 Tests**;
+globales Ruff und striktes MyPy fuer alle 27 Rechnungs-UI-Dateien sind gruen.
+Die Vollsuite besteht mit **2.287 Tests, 5 optionalen
 PostgreSQL-Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-
 Warnung (152,64 s)**. F18 bleibt fuer weitere spaete Callback-/Close-Pfade
 offen.

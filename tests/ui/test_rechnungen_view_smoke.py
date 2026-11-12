@@ -896,6 +896,10 @@ def test_shutdown_finished_callbacks_do_not_start_followup_work(
         def start(self) -> None:
             started.append("draft-create")
 
+    class FakePreviewDialog:
+        def set_preview_result(self, _message: str, *, ok: bool) -> None:
+            started.append(f"preview:{ok}")
+
     monkeypatch.setattr("xw_office.ui.modules.rechnungen.view.BackgroundWorker", FakeWorker)
 
     view._on_open_overview_finished()  # noqa: SLF001
@@ -905,6 +909,9 @@ def test_shutdown_finished_callbacks_do_not_start_followup_work(
     view._on_draft_product_plan_ready(  # noqa: SLF001
         ProductPreflightPlan(issues=[], part_categories=[])
     )
+    preview_dialog = FakePreviewDialog()
+    view._on_draft_preview_result(preview_dialog, object())  # noqa: SLF001
+    view._on_draft_preview_error(preview_dialog, RuntimeError("late preview"))  # noqa: SLF001
 
     assert started == []
 
