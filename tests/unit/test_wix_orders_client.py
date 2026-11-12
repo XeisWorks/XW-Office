@@ -947,6 +947,45 @@ def test_get_cached_order_summary_does_not_call_wix(tmp_path, monkeypatch) -> No
     assert calls == 0
 
 
+def test_expired_persistent_order_snapshot_is_refreshed(tmp_path, monkeypatch) -> None:
+    import sqlite3
+
+    class _SecretService:
+        def get_secret(self, name: str) -> str:
+            return {"WIX_API_KEY": "key", "WIX_SITE_ID": "site", "WIX_ACCOUNT_ID": ""}.get(
+                name, ""
+            )
+
+    cache = WixOrderCache(tmp_path / "cache.sqlite")
+    cache.put_order(
+        site_id="site",
+        account_id="",
+        reference="20899",
+        order={"id": "order-1", "number": "20899", "customer": "Old name"},
+    )
+    with sqlite3.connect(cache.path) as connection:
+        connection.execute("UPDATE wix_order_cache SET fetched_at = 0")
+
+    client = WixOrdersClient(secret_service=_SecretService(), order_cache=cache)  # type: ignore[arg-type]
+    refresh_calls: list[tuple[str, bool]] = []
+
+    def refresh(reference: str, *, use_cache: bool) -> dict[str, object]:
+        refresh_calls.append((reference, use_cache))
+        return {"id": "order-1", "number": "20899", "customer": "Updated name"}
+
+    monkeypatch.setattr(client, "_resolve_order_upstream", refresh)
+    monkeypatch.setattr(
+        client,
+        "_summary_from_order",
+        lambda order: {"wix_customer_name": str(order.get("customer") or "")},
+    )
+
+    summary = client.resolve_order_summary("20899")
+
+    assert summary["wix_customer_name"] == "Updated name"
+    assert refresh_calls == [("20899", True)]
+
+
 def test_fetch_order_line_items_refreshes_incomplete_cache(tmp_path, monkeypatch) -> None:
     calls = 0
 

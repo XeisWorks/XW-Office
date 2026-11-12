@@ -3378,3 +3378,20 @@ ebenfalls gruen.
 Die Vollsuite nach dieser UI-Aenderung besteht mit **2.328 Tests, 5
 Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung
 (161,53 s)**.
+
+## AP07-Fortschreibung - Ablaufzeit fuer persistente Wix-Order-Snapshots (12.11.2026)
+
+Positive Wix-Order-Snapshots liefen bisher unbegrenzt weiter, obwohl eine andere
+Workstation Adresse, Kaeufer oder Positionen inzwischen geaendert haben konnte.
+Der persistente Order-Cache verwendet jetzt eine **60-Sekunden-TTL** fuer
+positive Snapshots; negative Treffer behalten ihre separate fuenfminuetige TTL.
+Ein veralteter Snapshot loest beim naechsten Cache-Leseweg wieder einen
+Provider-Fetch aus. Der Client-Regressionstest prueft, dass eine gealterte
+Adresse/Kundendaten-Kopie tatsaechlich durch die aktualisierte Wix-Antwort
+ersetzt wird; die Wix-Order-Cache- und Client-Suiten bestehen mit **46 Tests**.
+Ruff, striktes MyPy fuer die Cachegrenze und `git diff --check` sind gruen.
+Die Rechnungsdetailansicht liest diese Cachegrenze nun im Background-Worker
+(AP06-Fortschreibung oben).
+Die Vollsuite nach dem TTL-Nachtrag besteht mit **2.329 Tests, 5
+Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung
+(151,42 s)**; globales Ruff und `git diff --check` sind gruen.

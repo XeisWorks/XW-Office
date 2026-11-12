@@ -27,7 +27,7 @@ def test_wix_order_cache_persists_order_aliases(tmp_path: Path) -> None:
     assert by_id.order["number"] == "20845"
 
 
-def test_wix_order_cache_keeps_successful_orders_until_explicitly_pruned(tmp_path: Path) -> None:
+def test_wix_order_cache_expires_successful_orders_by_default(tmp_path: Path) -> None:
     cache = WixOrderCache(tmp_path / "cache.sqlite")
     cache.put_order(
         site_id="site",
@@ -38,17 +38,17 @@ def test_wix_order_cache_keeps_successful_orders_until_explicitly_pruned(tmp_pat
     with sqlite3.connect(cache.path) as con:
         con.execute("UPDATE wix_order_cache SET fetched_at = 0")
 
-    permanent_hit = cache.get_order(site_id="site", account_id="", reference="20845")
-    explicitly_expired = cache.get_order(
+    default_expired = cache.get_order(site_id="site", account_id="", reference="20845")
+    permanent_hit = cache.get_order(
         site_id="site",
         account_id="",
         reference="20845",
-        max_age_seconds=1,
+        max_age_seconds=None,
     )
 
+    assert default_expired is None
     assert permanent_hit is not None
     assert permanent_hit.found is True
-    assert explicitly_expired is None
 
 
 def test_wix_order_cache_expires_missing_orders_by_default(tmp_path: Path) -> None:
