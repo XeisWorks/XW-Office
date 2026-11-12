@@ -3422,7 +3422,25 @@ veraendern. Zwei Regressionen decken Gleichstand mit offenem Konflikt und einen
 externen Konflikt nach vorheriger Projektion ab. Die Projektionssuite besteht
 mit **6 Tests**, striktes MyPy fuer Service und Tests sowie Ruff sind gruen. Die
 vollstaendige Suite besteht mit **2.332 Tests, 5 Ueberspringungen und 1
-bestehenden Starlette/httpx-Deprecation-Warnung (155,11 s)**. Die
-ledgerbasierte Sollmenge bleibt die materialisierte Hub-Ledgerbilanz; produktive
-Projektion und Inventur-Cutover bleiben durch den bestehenden Master-Gate
-geschuetzt.
+bestehenden Starlette/httpx-Deprecation-Warnung (155,11 s)**. Der Projektor
+verwendet den bestaetigten Hub-Bestand; produktive Projektion und Inventur-
+Cutover bleiben durch den bestehenden Master-Gate geschuetzt.
+
+## AP03-Nachtrag - Ledgerbeleg fuer externe Bestandsprojektion (12.11.2026)
+
+`InventoryProjectionService` uebernimmt eine vorhandene `InventoryStock`-Zeile
+nicht mehr allein als ausreichenden Bestandsbeleg. Die Sollmenge stammt aus der
+Ledger-Bewegungssumme pro Variante und Lagerort, die `InventoryRepository`
+gebuendelt liefert; die materialisierte Menge muss dazu passen. Fehlt eine
+Bewegung, wird die Variante uebersprungen; so kann eine allein durch
+Schwellenwerte erzeugte Materialisierungszeile mit Menge 0 keinen externen
+Nullbestand ausloesen. Weicht die materialisierte Menge von der Ledger-Summe ab
+oder fehlt die Bestandszeile trotz Ledger, endet die jeweilige sevDesk-/Wix-
+Projektion als Fehler vor einem externen Schreibzugriff. Der Write-Gate bleibt
+unveraendert.
+Regressionen decken beide Provider beim Schwellenwert-Nullbestand und einen
+Ledger-/Materialisierungsdrift ab. Die **8 Projektions-Tests**, striktes MyPy
+fuer Repository, Projektor und Tests, globales Ruff und `git diff --check` sind
+gruen. Die Vollsuite besteht mit **2.334 Tests, 5 Ueberspringungen und 1
+bestehenden Starlette/httpx-Deprecation-Warnung (154,19 s)**. Die verbleibenden
+Cutover- und Recovery-Gates bleiben offen.

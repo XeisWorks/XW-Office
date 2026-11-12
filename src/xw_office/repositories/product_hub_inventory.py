@@ -88,6 +88,32 @@ class InventoryRepository:
             )
             return list(session.scalars(statement).all())
 
+    def list_ledger_balances_by_variants(
+        self, variant_ids: list[uuid.UUID], location_id: uuid.UUID
+    ) -> dict[uuid.UUID, int]:
+        """Sum recorded movements for each variant with ledger evidence.
+
+        A variant absent from the returned mapping has no movement history. That
+        distinction matters because threshold settings can create a materialized
+        zero-stock row before an opening balance has been reviewed and recorded.
+        """
+        identifiers = list(dict.fromkeys(variant_ids))
+        if not identifiers:
+            return {}
+        with self._scope() as session:
+            statement = (
+                select(InventoryMovement.variant_id, func.sum(InventoryMovement.delta))
+                .where(
+                    InventoryMovement.variant_id.in_(identifiers),
+                    InventoryMovement.location_id == location_id,
+                )
+                .group_by(InventoryMovement.variant_id)
+            )
+            return {
+                variant_id: int(balance or 0)
+                for variant_id, balance in session.execute(statement).all()
+            }
+
     def set_stock_thresholds(
         self,
         variant_id: uuid.UUID,

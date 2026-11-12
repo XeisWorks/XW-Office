@@ -10,7 +10,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.models.base import Base
+from xw_office.models.product_hub_inventory import InventoryStock
 from xw_office.repositories.product_hub import ProductHubRepository
+from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.repositories.product_hub_sync import SyncRepository
 from xw_office.services.product_hub.inventory import InventoryV2Service
@@ -20,9 +22,11 @@ from xw_office.services.product_hub.inventory_projection import InventoryProject
 class _FakeSevdesk:
     def __init__(self, stocks: dict[str, int]) -> None:
         self.stocks = dict(stocks)
+        self.reads: list[str] = []
         self.writes: list[tuple[str, int]] = []
 
     def get_part_stock(self, part_id: str, *, strict: bool = False) -> int:
+        self.reads.append(part_id)
         return self.stocks[part_id]
 
     def set_part_stock(self, part_id: str, new_stock: int) -> None:
@@ -202,4 +206,68 @@ def test_conflicting_dry_run_does_not_persist_a_conflict() -> None:
 
     assert preview.conflicts == 1
     assert SyncRepository(factory).list_open_sync_conflicts(channel="sevdesk") == []
+
+
+def test_threshold_only_zero_stock_is_not_projected_without_ledger_evidence() -> None:
+    factory = _factory()
+    products = ProductHubRepository(factory)
+    product, variant = products.create_product(
+        sku="XW-THRESHOLD", name="Threshold only", status="live", product_type="physical"
+    )
+    products.create_channel_mapping(
+        channel="sevdesk", entity_type="product", internal_entity_id=product.id, external_id="part-zero"
+    )
+    products.create_channel_mapping(
+        channel="wix", entity_type="product", internal_entity_id=product.id, external_id="wix-threshold"
+    )
+    inventory = InventoryRepository(factory)
+    location = inventory.get_or_create_location(code="MAIN", name="Hauptlager")
+    inventory.set_stock_thresholds(variant.id, location.id, target_stock=12)
+    sevdesk = _FakeSevdesk({"part-zero": 7})
+    wix = _FakeWix(
+        {
+            "wix-threshold": [
+                {
+                    "id": "wix-inv-zero",
+                    "productId": "wix-threshold",
+                    "quantity": 7,
+                    "trackQuantity": True,
+                    "revision": "1",
+                }
+            ]
+        }
+    )
+
+    result = InventoryProjectionService(
+        factory, sevdesk=sevdesk, wix=wix, write_enabled=lambda: True
+    ).run(dry_run=False)
+
+    assert result.skipped == 2
+    assert all("Ledger-Bewegung" in item.detail for item in result.items)
+    assert sevdesk.reads == []
+    assert sevdesk.writes == []
+    assert wix.writes == []
+
+
+def test_materialized_stock_mismatch_with_ledger_blocks_projection() -> None:
+    factory = _factory()
+    _product_id, variant_id = _seed(factory)
+    inventory = InventoryRepository(factory)
+    location = inventory.get_location_by_code("MAIN")
+    assert location is not None
+    with factory() as session:
+        stock = session.get(InventoryStock, (variant_id, location.id))
+        assert stock is not None
+        stock.on_hand = 9
+        session.commit()
+    sevdesk = _FakeSevdesk({"part-1": 4})
+
+    result = InventoryProjectionService(
+        factory, sevdesk=sevdesk, write_enabled=lambda: True
+    ).run(dry_run=False)
+
+    assert result.errors == 1
+    assert "Ledger-Summe" in result.items[0].detail
+    assert sevdesk.reads == []
+    assert sevdesk.writes == []
 

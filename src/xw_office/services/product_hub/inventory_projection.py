@@ -185,6 +185,9 @@ class InventoryProjectionService:
                 [variant.id for variant in variants], location.id
             )
         }
+        ledger_balance_by_variant = self._inventory.list_ledger_balances_by_variants(
+            [variant.id for variant in variants], location.id
+        )
         variant_mappings = self._variant_mappings(variants)
         product_mappings = self._mapping_by_product(products)
 
@@ -194,7 +197,12 @@ class InventoryProjectionService:
                 variants, products_by_id, eligible_by_product, variant_mappings, product_mappings
             ):
                 result.items.append(
-                    self._project_sevdesk(target, stock_by_variant.get(target.variant.id), dry_run=dry_run)
+                    self._project_sevdesk(
+                        target,
+                        stock_by_variant.get(target.variant.id),
+                        ledger_balance_by_variant.get(target.variant.id),
+                        dry_run=dry_run,
+                    )
                 )
         if self._wix is not None:
             for product in products:
@@ -206,6 +214,7 @@ class InventoryProjectionService:
                         product,
                         product_variants,
                         stock_by_variant,
+                        ledger_balance_by_variant,
                         variant_mappings,
                         product_mappings.get(("wix", product.id)),
                         location_id=str(location.id),
@@ -266,13 +275,21 @@ class InventoryProjectionService:
         return [candidate for candidate in candidates if candidate.external_id not in duplicate_ids]
 
     def _project_sevdesk(
-        self, target: _Target, stock: InventoryStock | None, *, dry_run: bool
+        self,
+        target: _Target,
+        stock: InventoryStock | None,
+        ledger_balance: int | None,
+        *,
+        dry_run: bool,
     ) -> InventoryProjectionItem:
-        if stock is None:
-            return self._skipped(target, "Kein bestätigter Hub-Bestand für den Lagerort vorhanden.", "sevdesk")
+        desired, validation = self._confirmed_hub_quantity(
+            target, channel="sevdesk", stock=stock, ledger_balance=ledger_balance
+        )
+        if validation is not None:
+            return validation
         if self._sevdesk is None:
             return self._skipped(target, "sevDesk-Projektor ist nicht konfiguriert.", "sevdesk")
-        desired = max(0, int(stock.on_hand))
+        assert desired is not None
         try:
             # Physical product printing performs the same Part GET/SET under
             # this shared lock. Keep the projection read, decision, write, and
@@ -292,6 +309,7 @@ class InventoryProjectionService:
         product: Product,
         variants: list[ProductVariant],
         stock_by_variant: dict[uuid.UUID, InventoryStock],
+        ledger_balance_by_variant: dict[uuid.UUID, int],
         variant_mappings: dict[tuple[str, uuid.UUID], ChannelMapping],
         product_mapping: ChannelMapping | None,
         *,
@@ -354,10 +372,16 @@ class InventoryProjectionService:
                 result.append(self._skipped(target, "Wix-Inventarposition ohne Revision.", "wix"))
                 continue
             stock = stock_by_variant.get(variant.id)
-            if stock is None:
-                result.append(self._skipped(target, "Kein bestätigter Hub-Bestand für den Lagerort vorhanden.", "wix"))
+            desired, validation = self._confirmed_hub_quantity(
+                target,
+                channel="wix",
+                stock=stock,
+                ledger_balance=ledger_balance_by_variant.get(variant.id),
+            )
+            if validation is not None:
+                result.append(validation)
                 continue
-            desired = max(0, int(stock.on_hand))
+            assert desired is not None
             try:
                 current = int(match.get("quantity") or 0)
                 def write_wix() -> str | None:
@@ -373,6 +397,34 @@ class InventoryProjectionService:
             except Exception as exc:  # noqa: BLE001
                 result.append(self._error(target, "wix", str(exc)))
         return result
+
+    @staticmethod
+    def _confirmed_hub_quantity(
+        target: _Target,
+        *,
+        channel: str,
+        stock: InventoryStock | None,
+        ledger_balance: int | None,
+    ) -> tuple[int | None, InventoryProjectionItem | None]:
+        if ledger_balance is None:
+            return None, InventoryProjectionService._skipped(
+                target,
+                "Für den Lagerort ist noch keine bestätigte Ledger-Bewegung vorhanden.",
+                channel,
+            )
+        if stock is None:
+            return None, InventoryProjectionService._error(
+                target,
+                channel,
+                "Ledger-Bewegungen sind vorhanden, aber die materialisierte Hub-Bestandszeile fehlt.",
+            )
+        if int(stock.on_hand) != ledger_balance:
+            return None, InventoryProjectionService._error(
+                target,
+                channel,
+                "Materialisierter Hub-Bestand stimmt nicht mit der Ledger-Summe überein.",
+            )
+        return max(0, ledger_balance), None
 
     @staticmethod
     def _match_wix_inventory_item(
