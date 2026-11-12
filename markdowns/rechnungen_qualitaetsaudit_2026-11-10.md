@@ -2442,3 +2442,15 @@ blockierende Auditprobleme, dazu 29 Mengenabweichungen und 710 offene Konflikte.
 `inventory_master_enabled=false` und `inventory_shadow_enabled=false`; es gab keine
 Ledger-/Buchungs- oder Providerdaten-Schreibungen. G2 bleibt durch Inventur,
 Konfliktbereinigung, Shadow-Nachweis, Providerprojektionen, Backup und Sign-off blockiert.
+
+## F17-Fortschreibung - Lageralarm-Popup-Serviceauflösung (12.11.2026)
+
+`InventoryAlertsDialog` löst Inventory-, Task- und Mailservices jetzt erst im
+jeweiligen `BackgroundWorker` auf. Damit liegen auch langsame Container-/DB-
+Initialisierung beim Öffnen des Lageralarm-Popups nicht mehr im GUI-Thread. Die
+Schreibaktionen erfassen ihre UI-Werte vor dem Workerstart und rufen die Services
+innerhalb des Jobs auf. Eine neue Regression blockiert `container.resolve()` beim
+ersten Laden und bestätigt, dass der Qt-Heartbeat während der Dialogerstellung
+weiterläuft. `test_inventory_alerts_dialog.py`: **3 bestanden**; Ruff und striktes
+MyPy für das Dialogmodul bestanden. F17 bleibt teilweise offen, bis die übrigen
+statischen UI-I/O- und Callback-Pfade vollständig nachgeprüft sind.

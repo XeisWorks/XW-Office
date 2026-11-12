@@ -33,9 +33,6 @@ class InventoryAlertsDialog(QDialog):
     def __init__(self, container: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._container = container
-        self._inventory: InventoryV2Service = container.resolve(InventoryV2Service)
-        self._tasks: InventoryAlertTaskService = container.resolve(InventoryAlertTaskService)
-        self._mail: MailDeliveryService = container.resolve(MailDeliveryService)
         self._details: list[InventoryAlertDetail] = []
         self._worker: BackgroundWorker | None = None
         self._write_worker: BackgroundWorker | None = None
@@ -100,7 +97,13 @@ class InventoryAlertsDialog(QDialog):
             self._refresh_pending = True
             return
         self._set_busy(True)
-        worker = BackgroundWorker(self._inventory.list_open_alert_details)
+        container = self._container
+
+        def job() -> list[InventoryAlertDetail]:
+            inventory: InventoryV2Service = container.resolve(InventoryV2Service)
+            return inventory.list_open_alert_details()
+
+        worker = BackgroundWorker(job)
         self._worker = worker
         worker.signals.result.connect(self._on_details_loaded)
         worker.signals.error.connect(self._on_refresh_error)
@@ -201,12 +204,11 @@ class InventoryAlertsDialog(QDialog):
         variant_id = detail.alert.variant_id
         location_code = detail.location_code
         reorder_point = self._threshold.value()
+        container = self._container
         self._run_action(
-            lambda: self._inventory.update_thresholds(
-                variant_id=variant_id,
-                location_code=location_code,
-                reorder_point=reorder_point,
-                reorder_mode="fixed",
+            lambda: container.resolve(InventoryV2Service).update_thresholds(
+                variant_id=variant_id, location_code=location_code,
+                reorder_point=reorder_point, reorder_mode="fixed",
             ),
             self._threshold_change_finished,
         )
@@ -218,8 +220,9 @@ class InventoryAlertsDialog(QDialog):
         variant_id = detail.alert.variant_id
         location_code = detail.location_code
         automatic_point = detail.automatic_reorder_point
+        container = self._container
         self._run_action(
-            lambda: self._inventory.update_thresholds(
+            lambda: container.resolve(InventoryV2Service).update_thresholds(
                 variant_id=variant_id,
                 location_code=location_code,
                 reorder_point=automatic_point,
@@ -263,9 +266,13 @@ class InventoryAlertsDialog(QDialog):
                     str(getattr(result, "error", "")) or "Task-Mail konnte nicht gesendet werden.",
                 )
 
-        self._run_action(
-            lambda: self._tasks.create_and_send(alert_id, mail_delivery=self._mail),
-            show_result,
-        )
+        container = self._container
+
+        def job() -> object:
+            tasks: InventoryAlertTaskService = container.resolve(InventoryAlertTaskService)
+            mail: MailDeliveryService = container.resolve(MailDeliveryService)
+            return tasks.create_and_send(alert_id, mail_delivery=mail)
+
+        self._run_action(job, show_result)
 
 __all__ = ["InventoryAlertsDialog"]

@@ -96,6 +96,34 @@ def test_inventory_alert_load_and_save_leave_event_loop_responsive(qtbot) -> Non
     assert not dialog.isVisible()
 
 
+def test_inventory_service_resolution_does_not_block_dialog_creation(qtbot) -> None:
+    resolve_started = Event()
+    release = Event()
+
+    class SlowContainer(_AlertsContainer):
+        def resolve(self, service_type: object) -> object:
+            if service_type is InventoryV2Service:
+                resolve_started.set()
+                release.wait(2)
+                return self.inventory
+            return super().resolve(service_type)
+
+    class Inventory:
+        def list_open_alert_details(self):
+            return []
+
+    dialog = InventoryAlertsDialog(SlowContainer(Inventory()))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    heartbeats: list[bool] = []
+    QTimer.singleShot(20, lambda: heartbeats.append(True))
+    qtbot.waitUntil(resolve_started.is_set, timeout=1000)
+    qtbot.waitUntil(lambda: bool(heartbeats), timeout=1000)
+    assert dialog._list.isEnabled() is False  # noqa: SLF001
+    release.set()
+    qtbot.waitUntil(lambda: dialog._worker is None, timeout=1000)  # noqa: SLF001
+    assert dialog._list.count() == 0  # noqa: SLF001
+
+
 def test_threshold_change_notifies_parent_immediately(qtbot) -> None:
     detail = SimpleNamespace(
         alert=SimpleNamespace(id="alert-2", variant_id="variant-2"),
