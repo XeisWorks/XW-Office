@@ -3503,3 +3503,23 @@ Die Vollsuite besteht mit **2.337 Tests, 5 Ueberspringungen und 1 bestehenden
 Starlette/httpx-Deprecation-Warnung (152,16 s)**. STARTs eigener
 `start_stock_booking_enabled`-Schalter bleibt unabhaengig davon standardmaessig
 aus; reale Master-Aktivierung und Zwei-Instanz-Recovery bleiben G2-Gates.
+
+## AP06/F17-Fortschreibung - Cache-Reads der Rechnungsuebersicht (12.11.2026)
+
+Auch die sofortige Rechnungsuebersicht hatte trotz ihrer Bezeichnung als
+Cacheansicht Wix-Cachezugriffe im Qt-Hauptthread ausgefuehrt:
+`overview_from_visible_summaries` las persistierte Order-Metadaten und
+Positionsdaten, waehrend die Rechnungsseite aktualisiert wurde. Die synchrone
+Ansicht verwendet jetzt nur den bereits im Speicher gehaltenen Digitalstatus;
+Wix-Cache und persistierte SKU-Flags werden ausschliesslich im bestehenden
+Overview-Worker aufgeloest. Der Fallback fuer nicht klassifizierte Ordern nutzt
+fuer den unmittelbaren Lauf ebenfalls nur den In-Memory-Cache.
+
+Ein Qt-Heartbeat-Regressionstest blockiert Wix-Metadaten-/Positionscache und
+SKU-Flag-Fakes einzeln und bestaetigt, dass beide Aufrufe ausserhalb des
+Hauptthreads laufen, waehrend der Eventloop weiterarbeitet. Rechnungs-UI und
+Overview-Unit-Suite: **114 Tests bestanden**; gezieltes striktes MyPy fuer
+`view.py`, Ruff und `git diff --check` sind gruen. F17 bleibt offen, bis die
+verbleibenden synchronen I/O-Einstiege aus dem Inventar abgearbeitet sind. Die
+Vollsuite besteht mit **2.341 Tests, 5 optionalen PostgreSQL-Ueberspringungen
+und 1 bestehenden Starlette/httpx-Deprecation-Warnung (159,28 s)**.

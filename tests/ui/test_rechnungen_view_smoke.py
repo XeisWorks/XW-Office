@@ -3877,6 +3877,75 @@ def test_rechnungen_clearing_search_restores_staged_drafts_and_recent_invoices(
     assert view._table.model().sourceModel().rowCount() == 2  # noqa: SLF001
 
 
+def test_open_invoice_overview_reads_persistent_caches_off_ui_thread(
+    qtbot: QtBot,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    main_thread_id = get_ident()
+    entered_cache, release_cache = Event(), Event()
+    entered_flags, release_flags, heartbeat = Event(), Event(), Event()
+    flag_threads: list[int] = []
+    wix_cache_threads: list[int] = []
+
+    def blocked_flag_lookup(_sku: str) -> bool:
+        flag_threads.append(get_ident())
+        entered_flags.set()
+        assert release_flags.wait(3)
+        return True
+
+    monkeypatch.setattr(invoice_service, "is_flagged_sku", blocked_flag_lookup)
+
+    class CachedWix(_FakeWixOrdersClient):
+        def get_cached_order_summary(self, _reference: str) -> dict[str, str] | None:
+            wix_cache_threads.append(get_ident())
+            entered_cache.set()
+            assert release_cache.wait(3)
+            return {"wix_customer_name": "Cached customer", "wix_shipping_name": "Cached customer"}
+
+        def get_cached_order_line_items(self, _reference: str) -> list[object]:
+            wix_cache_threads.append(get_ident())
+            return [types.SimpleNamespace(sku="XW-CACHED", name="Gecachtes Produkt", qty=1)]
+
+    container.register(WixOrdersClient, lambda _: CachedWix())
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = InvoiceSummary(
+        id="overview-sku-cache",
+        invoiceNumber="RE-OVERVIEW-SKU-CACHE",
+        status_code=100,
+        order_reference="20846",
+    )
+    view._summaries = [summary]  # noqa: SLF001
+    view._wix_digital_cache[summary.order_reference] = False  # noqa: SLF001
+    view.show()
+    heartbeat_timer = QTimer(view)
+    heartbeat_timer.setInterval(5)
+    heartbeat_timer.timeout.connect(heartbeat.set)
+    heartbeat_timer.start()
+
+    try:
+        view._refresh_open_invoice_overview()  # noqa: SLF001
+        qtbot.waitUntil(entered_cache.is_set, timeout=2000)
+        qtbot.waitUntil(heartbeat.is_set, timeout=1000)
+        assert wix_cache_threads
+        assert all(thread_id != main_thread_id for thread_id in wix_cache_threads)
+        release_cache.set()
+        qtbot.waitUntil(entered_flags.is_set, timeout=2000)
+        heartbeat.clear()
+        qtbot.waitUntil(heartbeat.is_set, timeout=1000)
+        assert flag_threads
+        assert all(thread_id != main_thread_id for thread_id in flag_threads)
+    finally:
+        heartbeat_timer.stop()
+        release_cache.set()
+        release_flags.set()
+
+    qtbot.waitUntil(lambda: view._open_overview_worker is None, timeout=3000)  # noqa: SLF001
+    assert flag_threads
+    assert wix_cache_threads
+
+
 def test_main_window_rechnungen_warms_drafts_but_defers_open_invoice_contexts(
     qtbot: object,
     monkeypatch,

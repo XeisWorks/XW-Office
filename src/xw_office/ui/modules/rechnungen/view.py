@@ -142,7 +142,6 @@ from xw_office.ui.modules.rechnungen.open_invoice_overview import (
     overview_payload_from_object,
     plan_open_print_products,
     resolve_open_invoice_overview,
-    unknown_open_invoice_summaries,
 )
 from xw_office.ui.modules.rechnungen.plc_label_dialog import (
     PlcLabelPrintDialog,
@@ -3235,21 +3234,13 @@ class RechnungenView(QWidget):
 
     def _refresh_open_invoice_overview(self) -> None:
         open_rows = [s for s in self._summaries if s.status_code == 100]
-        try:
-            wix_client: WixOrdersClient | None = self._container.resolve(WixOrdersClient)
-        except Exception:  # noqa: BLE001 - overview still works with UI cache only.
-            wix_client = None
-        try:
-            invoice_service: InvoiceProcessingService | None = self._container.resolve(InvoiceProcessingService)
-        except Exception:  # noqa: BLE001 - overview still works without SKU flags.
-            invoice_service = None
-        sku_filter = invoice_service.is_flagged_sku if invoice_service is not None else None
         overview = overview_from_visible_summaries(
             open_rows,
             digital_cache=self._wix_digital_cache,
-            wix_client=wix_client,
-            sku_filter=sku_filter,
-            include_print_products=True,
+            # Both the persistent Wix cache and persisted SKU flags can read
+            # SQLite/SettingKV. Resolve them in the background overview worker.
+            wix_client=None,
+            include_print_products=False,
         )
 
         if overview.total == 0:
@@ -3314,32 +3305,23 @@ class RechnungenView(QWidget):
         self,
         open_rows: list[InvoiceSummary],
     ) -> None:
-        try:
-            wix_client: WixOrdersClient | None = self._container.resolve(WixOrdersClient)
-        except Exception:  # noqa: BLE001 - the local overview remains available.
-            wix_client = None
         key = open_invoice_overview_key(open_rows)
         if self._open_overview_visible_key and key != self._open_overview_visible_key:
             return
         self._open_overview_visible_key = key
-        unknown_rows = unknown_open_invoice_summaries(
-            open_rows,
-            digital_cache=self._wix_digital_cache,
-            wix_client=wix_client,
-        )
-        try:
-            invoice_service: InvoiceProcessingService | None = self._container.resolve(InvoiceProcessingService)
-        except Exception:  # noqa: BLE001 - overview still works without SKU flags.
-            invoice_service = None
-        sku_filter = invoice_service.is_flagged_sku if invoice_service is not None else None
+        unknown_rows = [
+            summary
+            for summary in open_rows
+            if str(summary.order_reference or "").strip()
+            and str(summary.order_reference or "").strip() not in self._wix_digital_cache
+        ]
         self._open_overview_seq += 1
         self._open_overview_all_rows = list(open_rows)
         self._open_overview_base = overview_from_visible_summaries(
             open_rows,
             digital_cache=self._wix_digital_cache,
-            wix_client=wix_client,
-            sku_filter=sku_filter,
-            include_print_products=True,
+            # Wix cache and SKU flags are resolved by the background worker.
+            include_print_products=False,
         )
         self._open_overview_batch_results = []
         self._pending_open_overview_rows = [
