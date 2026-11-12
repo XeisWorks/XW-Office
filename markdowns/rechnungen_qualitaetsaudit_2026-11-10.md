@@ -14,7 +14,7 @@ zwischen diesen Bausteinen: Fallidentität bei asynchronen Antworten, dauerhafte
 Beanspruchen externer Schreibaktionen, unvollständige Positionsdaten sowie
 Transaktionsgrenzen zwischen Lagerbewegung, Buchungsmarke und Legacy-Bestand.
 
-**26 Code-/Testbefunde: 18 ERLEDIGT, 6 OFFEN, 2 BLOCKIERT. Keine bestaetigte P0-Stoerung.**
+**27 Code-/Testbefunde: 19 ERLEDIGT, 6 OFFEN, 2 BLOCKIERT. Keine bestaetigte P0-Stoerung.**
 Zwei zusaetzliche Betriebsabnahmen sind BLOCKIERT durch benoetigte Testbelege,
 Hardware und eine isolierte PostgreSQL-Betriebsumgebung; sie sind nicht als
 zusaetzliche Softwarefehler gezaehlt. OFFEN bedeutet eine konkrete, abgrenzbare
@@ -157,7 +157,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F20 | P2 | OFFEN | pytest laedt keine lokale dotenv-Konfiguration; sensible Umgebungsvariablen werden entfernt und externe Socket-Verbindungen blockiert (Loopback bleibt erlaubt). `InvoiceProcessingService`, `tagesgeschaeft_view.py`, `redelivery_dialog.py`, `customer_aftercare_tab.py`, `buyer_note_review_dialog.py`, `buyer_note_delivery_dialog.py`, `print_decision.py`, `OffeneDruckeService`, `ProductsView`, `DigitalLicenseService`, `SpecialOrderService`, `products/catalog.py`, `services/product_hub/inventory.py`, `services/product_hub/inventory_count.py`, `services/product_hub/inventory_forecast_refresh.py`, `web/routers/inventory_count.py`, `services/product_hub/inventory_alert_tasks.py`, `services/product_hub/inventory_external_mirror.py`, `services/product_hub/conflicts/service.py`, `services/inventory/service.py`, `sevdesk/invoice_client.py`, `sevdesk/part_client.py`, `draft_invoice/service.py`, `plc/polling.py`, `plc/customs_document.py`, `plc/models.py`, `plc/service.py`, `plc/packing_list.py`, `plc/webservice.py`, `printing/pdf_renderer.py`, `sendungen/delivery_note.py`, `invoice_processing/context.py`, `services/customer_aftercare/redelivery.py`, `services/customer_aftercare/inbox_service.py`, `migrations/versions/026_customer_aftercare_redelivery.py`, `migrations/versions/027_customer_aftercare_snooze_context.py` und `ui/main_window.py` sind jeweils gezielt mit `--follow-imports=silent` mypy-fehlerfrei. Die MainWindow-Grenzen validieren Startup-Worker-Payloads und Theme-Anwendungsziel explizit; Performance-Snapshots und Shutdown-Hooks sind konkret typisiert/geprueft. `InventoryExternalMirrorService` grenzt JSON-Bestandswerte vor der Umwandlung auf die weiterhin akzeptierten Zahl-/Textformen ein; Legacy-Bestandsspiegel, START-Journal und Printplan-Payloads werden ebenfalls explizit eingegrenzt. Letzte Vollsuite: **2.290 bestanden, 5 uebersprungen, 1 bestehende Starlette/httpx-Deprecation-Warnung (192,36 s)**. Aktuelle lokale MyPy-Baseline: **315 Fehler in 57 Dateien**; globales Ruff ist gruen. Hosted-Windows-Run `42987122286` auf `04171c5`: Ruff erfolgreich, **2.134 bestanden, 5 uebersprungen, 1 Warnung (615,78 s)**; weicher MyPy-Schritt **403 Fehler in 74 Dateien**. Hosted-Windows-Run `43044613867` auf `4fed6ee`: Ruff erfolgreich, **2.187 bestanden, 5 uebersprungen, 1 Warnung (550,94 s)**; weicher MyPy-Schritt **359 Fehler in 63 Dateien**. Die betroffenen Rechnungsdateien `view.py` und `tagesgeschaeft_view.py` sind in diesem Lauf fehlerfrei; die verbleibenden globalen MyPy-Fehler liegen in anderen Dateien. Die 24 Befunde des bisher installierten Ruff 0.15.9 wurden bereinigt. Ruff 0.17.4 pinnt die etablierte Regelbasis E4/E7/E9/F. Globale Typbereinigung und Controller-Extraktion bleiben offen. | Gesamtsuite lokal ohne Credentials/externe Verbindungen; CI verwendet reproduzierbare Ruff-Version und Regelbasis; globale Mypy-Baseline bleibt offen |
 | F21 | P1 | ERLEDIGT | `view.py::_DraftInvoiceDialog`: nach erfolgreicher Vorschau konnte die Ordernummer ge?ndert und weiterhin bestaetigt werden. Jede Eingabe?nderung invalidiert nun die Vorschaufreigabe. | Qt-Test: Vorschau A ? Eingabe B bleibt gesperrt, erst Vorschau B erlaubt Best?tigen |
 | F22 | P2 | ERLEDIGT | `InvoiceProcessingService.resolve_invoice_list_hints`: ein temporaerer Wix-Resolve-Fehler wurde als dauerhafter leerer Cacheeintrag abgelegt, sodass Notiz-/Pruefhinweise bis zum Neustart fehlten. Fehlerantworten werden nicht mehr gecacht und koennen beim naechsten Prefetch erneut geladen werden. | Fake mit Timeout beim ersten und erfolgreichem zweiten Resolve; zweiter Aufruf zeigt Wix-Notiz |
-| F23 | P1 | BLOCKIERT | `SpecialOrderService` beansprucht den SHA-256-Fingerprint des Auftrags vor dem POST dauerhaft ueber `InvoiceOperationClaimStore`/SettingKV. Die Claim-ID wird als stabiler `clientRequestKey` mitgesendet; parallele Versuche und Neustarts sehen `running`/`unknown` und senden keinen zweiten POST. Jeder Fehler nach Claim-Erwerb bleibt vorsichtshalber `unknown` und wird sichtbar gesperrt; nach bestaetigtem Erfolg erlaubt eine neue bewusste Aktion eine frische Claim-ID. Regressionen decken Timeout mit gemeinsamem SettingKV ueber zwei Serviceinstanzen sowie neuen Request-Key nach Erfolg ab. Wix REST legt den Key nur als Notiz ab und garantiert keine serverseitige Idempotenz. Ein exakter Readback ueber die Wix-REST-Suche ist implementiert; der konfigurierte XW-Endpunktvertrag ist nicht verifiziert. Manuelle Abstimmung eines unklaren Claims bleibt erforderlich. | Timeout/unklarer Ausgang blockiert Folge-POSTs auch prozessuebergreifend; Erfolg erlaubt bewusst neuen Link mit frischer ID. Serverseitige Deduplizierung ist nicht zugesichert; Wix-REST-Readback fuer exakte Request-Key-Treffer ist implementiert, Live-Berechtigung und XW-Endpunkt-Readback bleiben externe/operative Restpunkte |
+| F23 | P1 | BLOCKIERT | `SpecialOrderService` beansprucht den SHA-256-Fingerprint des Auftrags vor dem POST dauerhaft ueber `InvoiceOperationClaimStore`/SettingKV. Die Claim-ID wird als stabiler `clientRequestKey` mitgesendet; parallele Versuche und Neustarts sehen `running`/`unknown` und senden keinen zweiten POST. Jeder Fehler nach Claim-Erwerb bleibt vorsichtshalber `unknown` und wird sichtbar gesperrt; nach bestaetigtem Erfolg erlaubt eine neue bewusste Aktion eine frische Claim-ID. Das Wix-Backend prueft jetzt vor dem Create einen exakten Request-Key-Treffer und exponiert eine authentifizierte Readback-Aktion fuer unbekannte Ausgangszustaende; XW-Office nutzt diese ohne lokale Wix-API-Zugangsdaten. Mehrdeutige, unvollstaendige, fehlerhafte oder leere Antworten loesen keinen zweiten POST aus. Wix garantiert mit der Notiz weiterhin keine atomare serverseitige Deduplizierung. Website-Aenderung ist getestet, aber noch nicht in den verbundenen Main-Branch integriert; Live-Berechtigung und Readback im Wix-Testkonto sind unbestaetigt. | XW-Office-Regressionsfaelle und volle Suite **2.296 bestanden, 5 uebersprungen, 1 bestehende Warnung**; Website `check:all` mit **155 Unit-Tests** gruen. Exakte Treffer reconciliieren unknown ohne zweiten Create, alle anderen Ergebnisse halten Claim unknown; Push auf den verbundenen Main-Branch und Wix-Testkonto-/Berechtigungsbeleg stehen noch aus |
 | F24 | P1 | ERLEDIGT | START behandelte den Product-Hub-Bestand trotz ausgeschaltetem Master-Flag als Preflight-Gate; zudem konnte ein einfacher START-Klick die Bestandspruefung umgehen. Der vom Nutzer gewuenschte `inventory.start_stock_booking_enabled`-Schalter ist standardmaessig `false` und deaktiviert START-Bestandspruefung, Legacy-/Hub-Buchung und bestandsbezogene Resume-Arbeit gemeinsam; Rechnung, Druck, Zahlung, Wix und Mail bleiben aktiv. Aktivierung benoetigt nach Bauabschluss einen bewussten Konfigurationswechsel und weiterhin ein separates Product-Hub-Masterflag fuer Hub-Buchungen. | Tests fuer beide Schalterzustaende, Replay, Resume und Teilfehler; Nutzerlog vom 11.11.2026 bestaetigt sieben Rechnungen ohne Bestandsbuchung erfolgreich verarbeitet; kein Codex-Produktiv-START ausgefuehrt |
 
 ## F20-Fortschreibung - optionale JSON-Felder bei Nachlieferungen
@@ -174,8 +174,9 @@ besteht die Vollsuite mit **2.288 Tests, 5 optionalen PostgreSQL-Ueberspringunge
 und 1 bestehenden Starlette/httpx-Deprecation-Warnung (152,08 s)**; globales
 Ruff ist gruen. F20 bleibt offen fuer weitere Typbereinigung und die geplante
 Controller-Extraktion.
-| F25 | P2 | OFFEN | `logs/xw_office.log` vom 11.11.2026: beim Rechnungslisten-Laden wurden Eventloop-Luecken bis 4.787 ms und 2.490 ms gemessen; 50 Non-Draft-Zeilen brauchten 4.772 ms, ein weiterer Lauf 1.996 ms. Neue Phasenmetriken trennen jetzt sevDesk-Fetch, JSON-Parsing, Summary-Normalisierung, Observer, Flags, Tabellenzeilen, Fulfillment-Aufbereitung und Qt-Tabellenupdate. Die Logs belegen UI-Blockaden, isolieren aber noch nicht, ob Python-GIL-Last der Worker, sevDesk-Payload-Normalisierung oder Qt-Modell-/Tabellenaktualisierung ursaechlich ist. | Reproduzierbares Profiling von sevDesk-Listenabfrage, Row-Preparation und `set_data`; keine Netzwerk-/Datenbankarbeit im GUI-Thread; nachweislich weniger als 250 ms GUI-Blockade fuer 50 vorbereitete Zeilen; Regression mit blockiertem Fake und Qt-Heartbeat |
+| F25 | P2 | ERLEDIGT | `logs/xw_office.log` vom 11.11.2026: beim Rechnungslisten-Laden wurden Eventloop-Luecken bis 4.787 ms und 2.490 ms gemessen; 50 Non-Draft-Zeilen brauchten 4.772 ms, ein weiterer Lauf 1.996 ms. Neue Phasenmetriken trennen jetzt sevDesk-Fetch, JSON-Parsing, Summary-Normalisierung, Observer, Flags, Tabellenzeilen, Fulfillment-Aufbereitung und Qt-Tabellenupdate. Der aktuelle Desktop-Lauf vom 12.11.2026 trennt die Hintergrundladezeit von der UI-Anwendung: 50 Zeilen wurden in 1.352 ms vorbereitet (load 891 ms, Flags 288 ms, Fulfillment 171 ms, Row-Vorbereitung 1 ms); beim Listen-Update wurde eine 55-ms-Eventloop-Luecke gemessen. Das UI-Apply-Metriklogging greift ab 100 ms und blieb fuer diesen Lauf aus. Eine 381-ms-Luecke trat separat kurz nach App-Start vor dem Listenladen auf und wird nicht der Tabellenaktualisierung zugerechnet. | 50-Zeilen-Qt-Regression unter 250 ms; Hintergrundarbeit mit Phasenmetriken; aktueller Desktop-Logbeleg 55-ms-Eventloop-Luecke fuer 50-Zeilen-Anwendung; blockierte Fake- und Qt-Heartbeat-Regressionen |
 | F26 | P2 | ERLEDIGT | Beim automatischen PLC-Labelversand wurde bei einem physischen Paket ein Packlisten-PDF erzeugt und auf `Paketmarke A5` gedruckt, obwohl der manuelle Packlisten-Button bereits mindestens zwei Pakete verlangt. Ursache war die alleinige Pruefung auf vorhandene Packlisten-Kontexte in `plc_label_dialog.py`; ein Kontext wird auch fuer ein Paket benoetigt, damit dessen Inhalt vor dem PLC-Aufruf im lokalen Collo-/Paketjournal gespeichert wird. Der automatische PDF-/Druckpfad prueft jetzt `len(shipment.parcels) >= 2`; die Inhalts-Snapshots bleiben fuer ein Paket erhalten und in den PLC-Infos sichtbar. | Fake-Regressionen: ein Paket mit zwei PLC-Codes erzeugt weder PDF noch Druckauftrag, behaelt aber seine Produktinhalte im Collo-Journal; zwei Pakete erzeugen weiterhin ein gemeinsames Packlisten-PDF und einen Druckauftrag. 46 PLC-/UI-Tests bestanden; Ruff und gezieltes MyPy gruen |
+| F27 | P2 | OFFEN | Der Desktop-Loglauf vom 11.11.2026 verzeichnete waehrend Produkt-/Labeldruck-Dispatch Eventloop-Luecken von 334 bis 487 ms; zeitliche Korrelation belegt noch keine Ursache. Die ausgefuehrte Druckstrecke hat PDF-/Spoolerarbeit im BackgroundWorker, aber die aktuelle Commit-Version wurde seitdem nicht mit einem START-Produktdruck profiliert. Es bleibt zu isolieren, ob PDF-Validierung, native Druckschnittstelle oder GIL-/Qt-Wechsel den GUI-Heartbeat stoert. | Sicherer Fake-Druck mit Qt-Heartbeat und gemessener Maximal-Luecke unter 250 ms; Phasenmessung der aktuellen Druckvorbereitung; Gate G1 bestaetigt einen erlaubten Testdruck mit Job-ID ohne Produktivbelege |
 
 ## 5. Performance-Audit
 
@@ -2302,11 +2303,11 @@ Der Nachaudit fand in `RefundsDialog` noch synchrone Container-Aufloesungen vor 
 
 Ein Vollsuite-Lauf direkt vor diesem Nachaudit deckte einen Test-Race in `test_offene_sendungen_dialog.py` auf: Der Fake erhoehte `refresh_called` im Worker, bevor das Qt-Ergebnis gerendert war. Der Test wartete zuvor nur auf den Worker-Nebeneffekt und las dadurch gelegentlich den Lade- statt Endstatus. Er wartet nun auf den sichtbaren abgeschlossenen UI-Status; die betroffenen Sendungen-/Refund-Dialogtests bestehen zusammen mit 14 Tests.
 
-## Fortschreibung F23 - Wix Payment-Link-Readback
+## Fortschreibung F23 - Wix- und Website-Endpoint-Readback
 
-Die direkte Wix-REST-Variante sucht bei einem zuvor als unknown gespeicherten Request jetzt per `POST /payment-links/v1/payment-links/search` nach dessen `clientRequestKey`. Die Suchantwort wird anschliessend lokal anhand des JSON-Felds `note.text.clientRequestKey` exakt geprueft. Genau ein Treffer liefert den bestehenden Payment-Link zurueck und protokolliert den Claim mit Suchbeleg als `succeeded`; kein Treffer, mehrere Treffer, ein unvollstaendiges 100er-Ergebnis oder ein Suchfehler loesen keinen neuen POST aus und lassen den Claim gesperrt. REST-Linkantworten mit Wix' verschachteltem `links.url.url` werden korrekt extrahiert.
+Das Wix-Backend prueft vor dem Create ueber `POST /payment-links/v1/payment-links/search`, ob exakt ein Payment-Link dessen JSON-Feld `note.text.clientRequestKey` enthaelt; bei genau einem Treffer gibt es diesen Link zurueck statt einen neuen anzulegen. Die authentifizierte XW-Website-Funktion bietet dieselbe Suche als `action: readback` an. XW-Office ruft sie fuer einen `unknown`-Claim auf, wenn lokale Wix-REST-Zugangsdaten fehlen. Genau ein valider Treffer reconciliert den Claim zu `succeeded`; null, mehrere, malformed, limitierte oder fehlgeschlagene Antworten halten den Claim gesperrt und erzeugen keinen zweiten POST. Die Website-Aenderungen liegen derzeit im Feature-Worktree `XW-Website_v2_payment_link_readback`; Commit, Push auf den verbundenen Main-Branch und Wix-Testkonto-Beleg sind noch ausstehend.
 
-Regressionen pruefen exakten Readback, verschachtelte URLs, erfolgreiche Claim-Reconciliation ohne zweiten POST und Sperre bei mehreren Treffern. Alle **9 Tests** in `test_special_order_service.py`, gezieltes striktes MyPy fuer `service.py` und Ruff fuer Service/Test sind gruen. Wix dokumentiert `note.text` als durchsuchbares Feld im [Search-Payment-Links-Endpunkt](https://dev.wix.com/docs/api-reference/business-management/get-paid/payment-links/payment-links/search-payment-links); die Live-API wurde nicht aufgerufen. Der alternative XW-Endpunkt hat weiterhin keinen verifizierten Readback-/Idempotenzvertrag. F23 bleibt deshalb teilweise offen, bis dieser Pfad und die Wix-Berechtigung im echten Testkonto bestaetigt sind.
+Alle **15 Tests** in `test_special_order_service.py`, striktes MyPy fuer `service.py` und Ruff fuer Service/Test sind gruen. Die volle XW-Office-Suite besteht mit **2.296 Tests, 5 optionalen PostgreSQL-Ueberspringungen und 1 bestehenden Starlette/httpx-Warnung (216,73 s)**. Website `check:all` ist gruen: TypeScript-Pruefung, ESLint und **155 Unit-Tests**. Wix dokumentiert `note.text` als durchsuchbares Feld im [Search-Payment-Links-Endpunkt](https://dev.wix.com/docs/api-reference/business-management/get-paid/payment-links/payment-links/search); die Live-API und ihre Berechtigungen wurden nicht aufgerufen. Die Wix-Notiz ist kein atomarer Deduplizierungsmechanismus; F23 bleibt bis zum Main-Branch-Push und externen Testnachweis blockiert.
 
 ## Fortschreibung AP07 - sevDesk-Historie fuer Forecasts gebuendelt
 
@@ -2426,8 +2427,8 @@ diese Gesamtzeit enthaelt den Worker-Abruf. Die dazu protokollierten Eventloop-G
 liegen bei 91 ms und 69 ms. Seit dem erfolgreichen START-Lauf um 21:38:58 wurden
 acht Eventloop-Samples mit einem Maximum von 116 ms beobachtet. Aeltere 334-487-ms-
 Gaps fallen zeitlich in die START-Druckdispatch-Phase; die Logs belegen Korrelation,
-aber keine Ursache. F25 bleibt TEILWEISE bis die Druckdispatch-GIL-/Qt-Last separat
-profiliert und die 250-ms-Anforderung fuer den kompletten START-Druckpfad belegt ist.
+aber keine Ursache. Der Rechnungslisten-Anteil ist mit dem aktuellen 50-Zeilen-Lauf abgenommen; die
+Produktdruck-Dispatch-Luecken werden getrennt in F27 weiterverfolgt.
 
 ### G2 - frischer Produktions-Read-only-Nachweis (12.11.2026, 00:37 CET)
 
@@ -2591,7 +2592,7 @@ PostgreSQL-Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnun
 (164,48 s)**. Globales Ruff und striktes MyPy fuer alle 27 Rechnungs-UI-Dateien
 sind ebenfalls gruen.
 
-## F25-Fortschreibung - Laufzeitprofil aus Desktop-Log (11.11.2026)
+## F27-Fortschreibung - Produktdruck-Dispatch und Eventloop (11.11.2026)
 
 Die laufende Desktop-Instanz startete um 21:36:40 auf dem damaligen Commit
 `70ac3c2`. Beim ersten Laden wurden 50 Nichtentwurfsrechnungen in 1.257 ms
@@ -2602,9 +2603,10 @@ Luecken von 334 bis 487 ms zeitgleich mit Rechnungs- und Label-Print-Dispatch;
 der Produkt-Preflight selbst lief 3.837 ms im Worker. Das trennt die schnelle
 Auswahl-Anzeige vom laengeren Worker-Load, bestaetigt aber weiter UI-Luecken ueber
 dem 250-ms-Ziel waehrend Druck-Dispatch. Die Instanz laeuft noch mit altem Code;
-ein Profil des aktuellen `main`-Stands nach normalem Neustart fehlt. F25 bleibt
-TEILWEISE, bis die Phasenmessung fuer den aktuellen Stand bestaetigt, dass 50
-vorbereitete Zeilen und der Druckpfad das Ziel einhalten.
+Das Log stammt von altem Commit `70ac3c2`; der aktuelle Lauf vom 12.11.2026
+belegt F25 fuer den Rechnungslisten-Flow, enthielt aber keinen START-Produktdruck.
+F27 bleibt offen, bis der aktuelle Druckdispatch ohne unbeabsichtigte physische
+Ausgabe mit Fake-/Qt-Heartbeat-Messung und spaeterem Testdruck abgenommen ist.
 
 ### F17-Fortschreibung - Produktdruck-Konfiguration beim ersten Druck
 
@@ -2786,19 +2788,9 @@ PostgreSQL-Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-
 Warnung (164,16 s)**. Die Lifecycle-Pruefung F18 ist nach dem Audit aller
 betroffenen Worker-, Dialog- und Close-Pfade abgeschlossen.
 
-## F25-Fortschreibung - vorbereitete Rechnungszeilen
+## F25-Fortschreibung - vorbereitete Rechnungszeilen und Live-Profil
 
-Ein reproduzierbarer Qt-Smoke-Test spielt 50 bereits normalisierte
-Rechnungszeilen durch `_apply_load_result_data`, einschliesslich Sortierung,
-Tabellenmodell und Detailrefresh. Der lokale Lauf bleibt unter dem Ziel von
-250 ms GUI-Blockade; der Test behaelt diese Grenze als Regression. Damit ist
-die vorbereitete UI-Aufbereitung eingegrenzt. Ein aktueller sevDesk-Lauf mit
-Phasenmetriken und Eventloop-Snapshot fehlt weiterhin, deshalb bleibt F25
-offen. Die Rechnungsansicht-Smoke-Suite besteht mit **102 Tests**, die
-Vollsuite mit **2.285 Tests, 5 optionalen PostgreSQL-Ueberspringungen und 1
-bestehenden Starlette/httpx-Deprecation-Warnung (152,60 s)**; globales Ruff und
-striktes MyPy fuer alle 27 Rechnungs-UI-Dateien sind gruen.
-
+Ein reproduzierbarer Qt-Smoke-Test spielt 50 bereits normalisierte Rechnungszeilen durch `_apply_load_result_data`, einschliesslich Sortierung, Tabellenmodell und Detailrefresh; die UI-Blockade bleibt unter 250 ms. Der Desktop-Loglauf vom 12.11.2026 auf Commit `c5629ea` zeigt beim Laden der 50 neuesten Nicht-Entwurfsrechnungen eine Hintergrunddauer von **1.353 ms**: Load 891 ms, Flags 288 ms, Fulfillment 171 ms und Row-Aufbereitung 1 ms. Beim Anwenden lag die gemessene Eventloop-Luecke bei **55 ms**. Das UI-Apply-Metriklogging greift ab 100 ms und erzeugte fuer diesen Lauf keinen Eintrag. Eine separate 381-ms-Luecke trat beim App-Start vor dem Listenladen auf und wird nicht der Tabellenaktualisierung zugerechnet. F25 ist fuer den Listen-Flow abgenommen; allgemeines Startup-Profiling liegt ausserhalb dieses Befunds.
 
 ## F20-Fortschreibung - Customer-Aftercare-Migrationsschema
 

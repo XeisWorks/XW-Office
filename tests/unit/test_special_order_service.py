@@ -109,12 +109,116 @@ def test_unclear_payment_link_result_blocks_retry_across_service_instances(monke
 
     monkeypatch.setattr(first, "_create_payment_link_via_endpoint", accepted_then_timed_out)
     monkeypatch.setattr(second, "_create_payment_link_via_endpoint", accepted_then_timed_out)
+    monkeypatch.setattr(second, "_readback_payment_links_by_request_key", lambda _key: [])
     with pytest.raises(TimeoutError):
         _create(first)
     with pytest.raises(RuntimeError, match="Ergebnis ist noch offen oder unklar"):
         _create(second)
     assert len(sent_keys) == 1
     assert json.loads(next(iter(settings.values.values())))["state"] == "unknown"
+
+
+def test_endpoint_readback_reconciles_unclear_claim_without_duplicate_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _SharedSettings()
+    first = _service(settings)
+    second = _service(settings)
+    sent_keys: list[str] = []
+    readback_requests: list[dict[str, object]] = []
+
+    def accepted_then_timed_out(payload: dict[str, object], *, fallback_title: str) -> SpecialOrderLink:
+        sent_keys.append(str(payload["clientRequestKey"]))
+        raise TimeoutError("response lost")
+
+    class _Client:
+        def __init__(self, *, timeout: float) -> None:
+            assert timeout == 30.0
+
+        def __enter__(self) -> _Client:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def post(self, url: str, *, headers: dict[str, str], json: dict[str, object]) -> httpx.Response:
+            readback_requests.append({"url": url, "headers": headers, "json": json})
+            return httpx.Response(200, json={
+                "ok": True,
+                "matches": [{
+                    "id": "endpoint-link",
+                    "url": "https://example.test/recovered",
+                    "status": "ACTIVE",
+                    "title": "Testauftrag",
+                }],
+            })
+
+    monkeypatch.setattr(first, "_create_payment_link_via_endpoint", accepted_then_timed_out)
+    monkeypatch.setattr("xw_office.services.special_orders.service.httpx.Client", _Client)
+    with pytest.raises(TimeoutError):
+        _create(first)
+
+    recovered = _create(second)
+
+    assert recovered.id == "endpoint-link"
+    assert recovered.url == "https://example.test/recovered"
+    assert readback_requests[0]["json"] == {
+        "action": "readback",
+        "clientRequestKey": sent_keys[0],
+    }
+    assert readback_requests[0]["headers"]["x-xw-special-order-secret"] == "secret"  # type: ignore[index]
+    claim = json.loads(next(iter(settings.values.values())))
+    assert claim["state"] == "succeeded"
+    assert len(sent_keys) == 1
+
+
+@pytest.mark.parametrize("readback_result", [
+    {"ok": True, "matches": []},
+    {"ok": True, "matches": [{"id": "one", "url": "https://example.test/one"}] * 2},
+    {"ok": True, "matches": [{"id": "missing-url"}]},
+    {"ok": False, "error": "wix_search_failed"},
+    {"ok": True, "matches": "invalid"},
+])
+def test_endpoint_readback_without_one_valid_match_keeps_claim_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+    readback_result: dict[str, object],
+) -> None:
+    settings = _SharedSettings()
+    first = _service(settings)
+    second = _service(settings)
+    sent_keys: list[str] = []
+    readback_count = 0
+
+    def accepted_then_timed_out(payload: dict[str, object], *, fallback_title: str) -> SpecialOrderLink:
+        sent_keys.append(str(payload["clientRequestKey"]))
+        raise TimeoutError("response lost")
+
+    class _Client:
+        def __init__(self, *, timeout: float) -> None:
+            pass
+
+        def __enter__(self) -> _Client:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def post(self, _url: str, *, headers: dict[str, str], json: dict[str, object]) -> httpx.Response:
+            nonlocal readback_count
+            readback_count += 1
+            return httpx.Response(200, json=readback_result)
+
+    monkeypatch.setattr(first, "_create_payment_link_via_endpoint", accepted_then_timed_out)
+    monkeypatch.setattr("xw_office.services.special_orders.service.httpx.Client", _Client)
+    with pytest.raises(TimeoutError):
+        _create(first)
+    with pytest.raises(RuntimeError, match="Ergebnis ist noch offen oder unklar"):
+        _create(second)
+
+    claim = json.loads(next(iter(settings.values.values())))
+    assert claim["state"] == "unknown"
+    assert len(sent_keys) == 1
+    assert readback_count == 1
 
 
 def test_exact_wix_readback_reconciles_unclear_claim_without_second_post(

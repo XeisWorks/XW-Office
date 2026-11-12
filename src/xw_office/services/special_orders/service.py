@@ -89,8 +89,11 @@ class SpecialOrderService:
         if not claim.acquired:
             if claim.state == "succeeded":
                 raise RuntimeError("Payment Link wurde bereits erstellt; bitte den bestehenden Link verwenden.")
-            if claim.state == "unknown" and self._wix_api_key() and self._wix_site_id():
-                matches = self.search_payment_links_by_request_key(claim.operation_id)
+            if claim.state == "unknown":
+                try:
+                    matches = self._readback_payment_links_by_request_key(claim.operation_id)
+                except Exception:
+                    matches = []
                 if len(matches) == 1:
                     recovered = matches[0]
                     self._claims.reconcile_unknown(
@@ -98,10 +101,10 @@ class SpecialOrderService:
                         claim.operation,
                         claim.operation_id,
                         "succeeded",
-                        reconciled_by="Wix API request-key readback",
+                        reconciled_by="Wix request-key readback",
                         evidence=(
-                            "Search Payment Links returned exactly one payment link with "
-                            f"an exact note.text clientRequestKey match; link_id={recovered.id}"
+                            "Payment-link readback returned exactly one payment link with "
+                            f"an exact clientRequestKey match; link_id={recovered.id}"
                         ),
                     )
                     return recovered
@@ -223,6 +226,45 @@ class SpecialOrderService:
                 fallback_title=str(payment_link.get("title") or "Payment Link"),
             )
             matches.append(link)
+        return matches
+
+    def _readback_payment_links_by_request_key(self, request_key: str) -> list[SpecialOrderLink]:
+        if self._wix_api_key() and self._wix_site_id():
+            return self.search_payment_links_by_request_key(request_key)
+        endpoint = self._endpoint()
+        secret = self._secret()
+        if not endpoint:
+            raise RuntimeError("XW_SPECIAL_ORDER_ENDPOINT fehlt")
+        if not secret:
+            raise RuntimeError("XW_SPECIAL_ORDER_SECRET fehlt")
+
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                endpoint,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-xw-special-order-secret": secret,
+                },
+                json={"action": "readback", "clientRequestKey": request_key},
+            )
+            data = self._response_json(response)
+            if response.status_code >= 400:
+                raise RuntimeError(self._response_error_message(response, data, prefix="Payment-Link-Readback"))
+
+        result = self._string_keyed_dict(data)
+        raw_matches = result.get("matches") if result and result.get("ok") is True else None
+        if not isinstance(raw_matches, list):
+            raise RuntimeError("Payment-Link-Readback lieferte keine Ergebnisliste")
+        matches: list[SpecialOrderLink] = []
+        for raw_match in raw_matches:
+            match = self._string_keyed_dict(raw_match)
+            if match is None:
+                raise RuntimeError("Payment-Link-Readback lieferte einen ungueltigen Treffer")
+            matches.append(
+                self._link_from_endpoint_response(
+                    {"ok": True, **match}, fallback_title="Payment Link"
+                )
+            )
         return matches
 
     def _payment_link_payload(self, payload: dict[str, object]) -> dict[str, object]:
