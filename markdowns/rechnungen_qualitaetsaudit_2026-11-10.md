@@ -3125,3 +3125,12 @@ QR-Korrektur besteht mit **2.311 Tests, 5 optionalen PostgreSQL-
 Ueberspringungen und 1 bestehenden Warnung (155,14 s)**. Hosted-CI fuer
 `ec2222b` und `052bea7` laeuft beim Schreiben dieser Fortschreibung noch; F20
 bleibt wegen weiterer Module und F17 wegen noch offener UI-I/O-Pfade offen.
+
+## F17/F20-Fortschreibung - BackgroundWorker-Prioritaet (12.11.2026)
+
+`BackgroundWorker.start()` verwendet jetzt den in PySide6 korrekt typisierten
+Default `QThread.Priority.InheritPriority`. Das Verhalten bleibt auf geerbter
+Thread-Prioritaet; Qt-Worker-Lifecycle, asynchrone UI-Aktionen und OPEN-PRINTS-
+Dialog bestehen mit **11 Regressionstests**. Strict MyPy und Ruff fuer den
+zentralen Worker sind gruen. Die globale lokale MyPy-Baseline sinkt auf **132
+Fehler in 37 Dateien**. Eine umfassende UI-I/O-Inventur bleibt unter F17 offen.

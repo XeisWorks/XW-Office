@@ -56,7 +56,9 @@ class BackgroundWorker(QThread):
         self.finished.connect(self.signals.finished.emit)
         self.finished.connect(self._release_running_reference)
 
-    def start(self, priority: QThread.Priority = QThread.InheritPriority) -> None:
+    def start(
+        self, priority: QThread.Priority = QThread.Priority.InheritPriority
+    ) -> None:
         """Start the worker while retaining it until its native thread stops."""
         type(self)._running_workers.add(self)
         super().start(priority)
