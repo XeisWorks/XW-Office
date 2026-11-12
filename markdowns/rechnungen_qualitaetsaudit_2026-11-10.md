@@ -3110,3 +3110,18 @@ PostgreSQL-Ueberspringungen und 1 bestehenden Warnung (165,39 s)**. Strict MyPy
 und Ruff fuer beide Services und Tests sind gruen. Die globale lokale
 MyPy-Baseline sinkt von 143 Fehlern in 40 Dateien auf **140 Fehler in 39
 Dateien**. F17 und die uebrigen F20-Aufraeumarbeiten bleiben offen.
+
+## F20-Fortschreibung - EPC-QR-Typgrenzen (12.11.2026)
+
+Der Ueberweisungs-QR-Generator hat optionale OpenCV/PyMuPDF/NumPy-Abhaengigkeiten
+jetzt mit explizit optionalen Laufzeitwerten typisiert. Bildkonvertierung,
+validierter Betrag und PNG-Ausgabepfad sind an ihren Bibliotheksgrenzen sauber
+eingegrenzt; die Behandlung gueltiger Zahlungsdaten bleibt unveraendert.
+`test_payment_qr.py` und die Ueberweisungs-Service-Regressionen bestehen mit
+**21 Tests**. Strict MyPy und Ruff fuer den QR-Service sind gruen. Die globale
+lokale MyPy-Baseline sinkt weiter auf **133 Fehler in 38 Dateien**. Die
+Vollsuite nach beiden zuletzt gepushten OPEN-PRINTS-Commits und dieser lokalen
+QR-Korrektur besteht mit **2.311 Tests, 5 optionalen PostgreSQL-
+Ueberspringungen und 1 bestehenden Warnung (155,14 s)**. Hosted-CI fuer
+`ec2222b` und `052bea7` laeuft beim Schreiben dieser Fortschreibung noch; F20
+bleibt wegen weiterer Module und F17 wegen noch offener UI-I/O-Pfade offen.

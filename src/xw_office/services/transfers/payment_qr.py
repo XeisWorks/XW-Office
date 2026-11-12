@@ -15,22 +15,31 @@ from segno import helpers
 import stdnum.bic
 import stdnum.iban
 
-try:
-    import cv2  # type: ignore
-except Exception:  # pragma: no cover
-    cv2 = None
-
-try:
-    import fitz  # type: ignore
-except Exception:  # pragma: no cover
-    fitz = None
-
-try:
-    import numpy as np  # type: ignore
-except Exception:  # pragma: no cover
-    np = None
-
 from xw_office.services.transfers.models import TransferFieldSource, TransferPaymentData
+
+cv2: Any = None
+try:
+    import cv2 as _cv2
+except Exception:  # pragma: no cover
+    pass
+else:
+    cv2 = _cv2
+
+fitz: Any = None
+try:
+    import fitz as _fitz  # type: ignore[import-untyped]
+except Exception:  # pragma: no cover
+    pass
+else:
+    fitz = _fitz
+
+np: Any = None
+try:
+    import numpy as _np
+except Exception:  # pragma: no cover
+    pass
+else:
+    np = _np
 
 logger = logging.getLogger(__name__)
 
@@ -285,7 +294,9 @@ def _extract_existing_epc_payload(pdf_bytes: bytes) -> str:
             page = doc.load_page(page_idx)
             pix = page.get_pixmap(dpi=220, alpha=False)
             channels = int(getattr(pix, "n", 3) or 3)
-            image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, channels)
+            image: Any = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                pix.height, pix.width, channels
+            )
             if channels >= 3:
                 image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
@@ -545,16 +556,19 @@ def create_epc_qr_from_payment_data(
     remittance = invoice_number or str(payment.remittance_text or "").strip()
     structured_reference = remittance if _is_structured_epc_reference(remittance) else None
     unstructured_text = None if structured_reference else (remittance or None)
+    amount = payment.amount
+    if amount is None:
+        raise PaymentQrError("Betrag muss groesser als 0 sein.")
 
     qr = helpers.make_epc_qr(
         name=payment.recipient,
         iban=payment.iban,
-        amount=payment.amount,
+        amount=amount,
         text=unstructured_text,
         reference=structured_reference,
         bic=(payment.bic or None),
     )
-    qr.save(output_path, kind="png", scale=10)
+    qr.save(str(output_path), kind="png", scale=10)
     return output_path
 
 
