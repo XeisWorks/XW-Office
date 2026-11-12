@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from threading import Event, Timer, get_ident
+from time import perf_counter
 import types
 from pathlib import Path
 from uuid import uuid4
@@ -3662,6 +3663,39 @@ def test_rechnungen_sorts_staged_loads_by_actuality_descending(qtbot: object) ->
         "RE-NEW",
         "RE-OLD",
     ]
+
+
+def test_50_prepared_invoice_rows_apply_within_gui_block_budget(qtbot: QtBot) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summaries = [
+        InvoiceSummary.model_validate(
+            {
+                "id": str(1000 + index),
+                "invoiceNumber": f"RE-{1000 + index}",
+                "invoiceDate": f"2026-08-{(index % 28) + 1:02}T12:00:00",
+                "status": 1000,
+                "contact_name": f"Kunde {index:02}",
+            }
+        )
+        for index in range(50)
+    ]
+    rows = [summary.as_table_row() for summary in summaries]
+
+    started = perf_counter()
+    view._apply_load_result_data(  # noqa: SLF001
+        rows,
+        summaries,
+        True,
+        1000,
+        False,
+        allow_background_prefetch=False,
+    )
+    elapsed_ms = (perf_counter() - started) * 1000
+
+    assert view._table.model().sourceModel().rowCount() == 50  # noqa: SLF001
+    assert elapsed_ms < 250, f"50 vorbereitete Rechnungszeilen blockierten {elapsed_ms:.1f} ms"
 
 
 def test_rechnungen_clearing_search_restores_staged_drafts_and_recent_invoices(

@@ -2760,3 +2760,16 @@ striktes MyPy fuer alle 27 Rechnungs-UI-Dateien sind gruen. Die Vollsuite
 besteht mit **2.284 Tests, 5 optionalen PostgreSQL-Ueberspringungen und 1
 bestehenden Starlette/httpx-Deprecation-Warnung (158,55 s)**. F18 bleibt fuer
 weitere spaete Callback-/Close-Pfade offen.
+
+## F25-Fortschreibung - vorbereitete Rechnungszeilen
+
+Ein reproduzierbarer Qt-Smoke-Test spielt 50 bereits normalisierte
+Rechnungszeilen durch `_apply_load_result_data`, einschliesslich Sortierung,
+Tabellenmodell und Detailrefresh. Der lokale Lauf bleibt unter dem Ziel von
+250 ms GUI-Blockade; der Test behaelt diese Grenze als Regression. Damit ist
+die vorbereitete UI-Aufbereitung eingegrenzt. Ein aktueller sevDesk-Lauf mit
+Phasenmetriken und Eventloop-Snapshot fehlt weiterhin, deshalb bleibt F25
+offen. Die Rechnungsansicht-Smoke-Suite besteht mit **102 Tests**, die
+Vollsuite mit **2.285 Tests, 5 optionalen PostgreSQL-Ueberspringungen und 1
+bestehenden Starlette/httpx-Deprecation-Warnung (152,60 s)**; globales Ruff und
+striktes MyPy fuer alle 27 Rechnungs-UI-Dateien sind gruen.
