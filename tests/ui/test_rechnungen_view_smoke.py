@@ -2091,6 +2091,7 @@ def test_last_run_print_and_unreleased_panels_restore_after_restart(qtbot: objec
         label_print_ids=["invoice-1"],
     )
 
+    qtbot.waitUntil(lambda: bool(invoice_service.last_start_overview.get("saved_at")))
     assert invoice_service.last_start_overview["saved_at"]
     persisted_run = invoice_service.last_start_overview["runs"][0]
     assert persisted_run["invoice_print_ids"] == ["invoice-1"]
@@ -2098,6 +2099,7 @@ def test_last_run_print_and_unreleased_panels_restore_after_restart(qtbot: objec
     restarted = RechnungenView(container)
     qtbot.addWidget(restarted)
     restarted._restore_last_start_overview()  # noqa: SLF001
+    qtbot.waitUntil(lambda: bool(restarted._print_run_history))  # noqa: SLF001
 
     assert restarted._active_run_output_ids(labels=False) == ["invoice-1"]  # noqa: SLF001
     assert restarted._active_run_output_ids(labels=True) == ["invoice-1"]  # noqa: SLF001
@@ -2108,6 +2110,94 @@ def test_last_run_print_and_unreleased_panels_restore_after_restart(qtbot: objec
     assert "Unreleased-Produkt" in restarted._open_products_text.toPlainText()  # noqa: SLF001
     assert "Bitte sauber verpacken." in restarted._buyer_notes_text.toPlainText()  # noqa: SLF001
     assert "Marsch für Anna -> Anna Versand [20910]" in restarted._unreleased_text.toPlainText()  # noqa: SLF001
+
+
+def test_start_history_settings_write_runs_off_ui_thread_and_keeps_latest_run(
+    qtbot: object,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    monkeypatch.setattr(view, "_restore_last_start_overview", lambda *_args: None)
+    main_thread_id = get_ident()
+    first_entered, release_first, heartbeat = Event(), Event(), Event()
+    written: list[dict[str, object]] = []
+
+    def write(payload: dict[str, object]) -> None:
+        assert get_ident() != main_thread_id
+        written.append(dict(payload))
+        if len(written) == 1:
+            first_entered.set()
+            assert release_first.wait(3)
+        invoice_service.last_start_overview = dict(payload)
+
+    monkeypatch.setattr(invoice_service, "write_last_start_overview", write)
+    timer = QTimer(view)
+    timer.setInterval(5)
+    timer.timeout.connect(heartbeat.set)
+    timer.start()
+    try:
+        view.mark_print_products_last_run(invoice_print_ids=["first-run"])
+        qtbot.waitUntil(first_entered.is_set, timeout=2000)
+        qtbot.waitUntil(heartbeat.is_set, timeout=1000)
+        view.mark_print_products_last_run(invoice_print_ids=["second-run"])
+        assert invoice_service.last_start_overview == {}
+    finally:
+        release_first.set()
+        timer.stop()
+
+    qtbot.waitUntil(
+        lambda: view._print_history_worker is None  # noqa: SLF001
+        and invoice_service.last_start_overview.get("runs", [{}])[0].get("invoice_print_ids")
+        == ["second-run"],
+        timeout=3000,
+    )
+    assert [payload["runs"][0]["invoice_print_ids"] for payload in written] == [
+        ["first-run"],
+        ["second-run"],
+    ]
+
+
+def test_start_history_restore_runs_off_ui_thread(qtbot: object, monkeypatch: MonkeyPatch) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    invoice_service.last_start_overview = {
+        "saved_at": "2026-11-12T08:00:00+01:00",
+        "runs": [
+            {
+                "saved_at": "2026-11-12T08:00:00+01:00",
+                "print_products": [{"sku": "SKU-1", "title": "Noten", "quantity": 1}],
+            }
+        ],
+    }
+    main_thread_id = get_ident()
+    entered, release, heartbeat = Event(), Event(), Event()
+    original_read = invoice_service.read_last_start_overview
+
+    def read() -> dict[str, object]:
+        assert get_ident() != main_thread_id
+        entered.set()
+        assert release.wait(3)
+        return original_read()
+
+    monkeypatch.setattr(invoice_service, "read_last_start_overview", read)
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    timer = QTimer(view)
+    timer.setInterval(5)
+    timer.timeout.connect(heartbeat.set)
+    timer.start()
+    try:
+        view._restore_last_start_overview()  # noqa: SLF001
+        qtbot.waitUntil(entered.is_set, timeout=2000)
+        qtbot.waitUntil(heartbeat.is_set, timeout=1000)
+        assert view._print_run_history == []  # noqa: SLF001
+    finally:
+        release.set()
+        timer.stop()
+
+    qtbot.waitUntil(lambda: bool(view._print_run_history), timeout=3000)  # noqa: SLF001
+    assert view._last_run_print_products[0].title == "Noten"  # noqa: SLF001
 
 
 def test_run_output_buttons_print_all_persisted_targets(qtbot: object, monkeypatch: object) -> None:

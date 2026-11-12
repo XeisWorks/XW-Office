@@ -2700,3 +2700,21 @@ globales Ruff sind gruen. Die Vollsuite besteht mit **2.279 Tests, 5 optionalen
 PostgreSQL-Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung
 (150,87 s)**. F17 bleibt bis zum Abschluss der uebrigen UI-I/O- und
 Lifecycle-Pruefung offen.
+
+## F17-Fortschreibung - START-Verlauf im Hintergrund persistieren
+
+Der gespeicherte PRINT-/UNRELEASED-Verlauf wurde beim Oeffnen synchron aus
+SettingKV bzw. der lokalen Datei gelesen und nach START synchron geschrieben.
+Beide Serviceaufloesungen und I/O-Vorgaenge laufen jetzt ueber einen
+lifecycle-verfolgten Worker. Ein nachfolgender START-Snapshot wartet auf einen
+laufenden Write und wird danach serialisiert gespeichert, sodass der neueste
+Lauf nicht von einem aelteren, spaeter abgeschlossenen Write ueberschrieben wird.
+Die ungenutzten synchronen Legacy-Lese-/Schreib-Helfer fuer denselben Snapshot
+wurden entfernt.
+Die Tests blockieren Read und Write, pruefen Qt-Heartbeats, Thread-Grenzen,
+Restore nach Neustart und die Reihenfolge zweier Writes. `test_rechnungen_view_smoke.py`
+besteht mit **98 Tests**; globales Ruff und striktes MyPy fuer alle 27
+Rechnungs-UI-Dateien sind gruen. Die Vollsuite besteht mit **2.281 Tests, 5
+optionalen PostgreSQL-Ueberspringungen und 1 bestehenden Starlette/httpx-
+Deprecation-Warnung (155,45 s)**. F17 bleibt fuer die weiteren UI-I/O- und
+Lifecycle-Pfade offen.

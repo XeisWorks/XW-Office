@@ -1392,6 +1392,8 @@ class RechnungenView(QWidget):
         self._pending_stuecke_reference = ""
         self._wix_context_cache: dict[str, dict[str, object]] = {}
         self._unreleased_catalog_worker: BackgroundWorker | None = None
+        self._print_history_worker: BackgroundWorker | None = None
+        self._pending_print_history_payload: dict[str, object] | None = None
         self._shipping_address_overrides: dict[str, list[str]] = {}
         self._shipping_source_lines: list[str] = []
         self._wix_context_seq = 0
@@ -2264,6 +2266,7 @@ class RechnungenView(QWidget):
                 self._open_product_preparation_worker,
                 self._product_print_worker,
                 self._unreleased_catalog_worker,
+                self._print_history_worker,
                 self._redelivery_prepare_worker,
                 self._redelivery_apply_worker,
                 *self._sevdesk_context_workers,
@@ -3902,60 +3905,68 @@ class RechnungenView(QWidget):
         }
 
     def _persist_print_run_history(self) -> None:
-        try:
-            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+        payload = {
+            "schema_version": 2,
+            "saved_at": self._print_run_history[0].saved_at if self._print_run_history else "",
+            "runs": [self._snapshot_payload(snapshot) for snapshot in self._print_run_history],
+        }
+        if self._print_history_worker is not None and self._print_history_worker.isRunning():
+            self._pending_print_history_payload = payload
+            return
+        self._start_print_history_write(payload)
+
+    def _start_print_history_write(self, payload: dict[str, object]) -> None:
+        container = self._container
+
+        def write() -> None:
+            service: InvoiceProcessingService = container.resolve(InvoiceProcessingService)
             writer = getattr(service, "write_last_start_overview", None)
             if callable(writer):
-                writer({
-                    "schema_version": 2,
-                    "saved_at": self._print_run_history[0].saved_at if self._print_run_history else "",
-                    "runs": [self._snapshot_payload(snapshot) for snapshot in self._print_run_history],
-                })
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("PRINT run history persistence failed: %s", exc)
+                writer(payload)
 
-    def _persist_last_start_overview(self) -> None:
-        try:
-            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-            writer = getattr(service, "write_last_start_overview", None)
-            if not callable(writer):
-                return
-            writer(
-                {
-                    "schema_version": 1,
-                    "saved_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-                    "print_products": [
-                        {
-                            "sku": item.sku,
-                            "title": item.title,
-                            "description": item.description,
-                            "quantity": item.quantity,
-                            "category_label": item.category_label,
-                        }
-                        for item in self._last_run_print_products
-                    ],
-                    "unreleased_assignments": [
-                        {
-                            "title": item.title,
-                            "shipping_name": item.shipping_name,
-                            "order_reference": item.order_reference,
-                        }
-                        for item in self._last_run_unreleased
-                    ],
-                }
-            )
-        except Exception as exc:  # noqa: BLE001 - the completed START must remain usable.
-            logger.warning("Last START overview persistence failed: %s", exc)
+        worker = BackgroundWorker(write)
+        self._print_history_worker = worker
+        worker.signals.error.connect(
+            lambda exc: logger.warning("PRINT run history persistence failed: %s", exc)
+        )
+        worker.signals.finished.connect(
+            lambda current=worker: self._on_print_history_worker_finished(current)
+        )
+        worker.start()
 
-    def _restore_last_start_overview(self) -> None:
-        if self._start_workflow_running or self._print_run_history:
+    def _on_print_history_worker_finished(self, worker: BackgroundWorker) -> None:
+        if self._print_history_worker is not worker:
             return
-        try:
-            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-            reader = getattr(service, "read_last_start_overview", None)
-            payload = reader() if callable(reader) else {}
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("PRINT run history restore failed: %s", exc)
+        self._print_history_worker = None
+        pending = self._pending_print_history_payload
+        self._pending_print_history_payload = None
+        if pending is not None:
+            self._start_print_history_write(pending)
+
+    def _restore_last_start_overview(self, payload: object | None = None) -> None:
+        if self._shutting_down or self._start_workflow_running or self._print_run_history:
+            return
+        if payload is None:
+            if self._print_history_worker is not None and self._print_history_worker.isRunning():
+                return
+            container = self._container
+
+            def read() -> object:
+                service: InvoiceProcessingService = container.resolve(InvoiceProcessingService)
+                reader = getattr(service, "read_last_start_overview", None)
+                result = reader() if callable(reader) else {}
+                return {} if result is None else result
+
+            worker = BackgroundWorker(read)
+            self._print_history_worker = worker
+            worker.signals.result.connect(self._restore_last_start_overview)
+            worker.signals.error.connect(
+                lambda exc: logger.warning("PRINT run history restore failed: %s", exc)
+            )
+            worker.signals.finished.connect(
+                lambda current=worker: self._on_print_history_worker_finished(current)
+            )
+            worker.start()
             return
         if not isinstance(payload, dict):
             return
@@ -4047,79 +4058,6 @@ class RechnungenView(QWidget):
         self._print_products_last_run = True
         self._rebuild_print_product_tabs(select_history=True)
         self._render_active_print_tab()
-
-    def _restore_legacy_start_overview(self) -> None:
-        if self._start_workflow_running or self._print_products_last_run:
-            return
-        try:
-            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
-            reader = getattr(service, "read_last_start_overview", None)
-            payload = reader() if callable(reader) else {}
-        except Exception as exc:  # noqa: BLE001 - dashboard can fall back to live data.
-            logger.warning("Last START overview restore failed: %s", exc)
-            return
-        if not isinstance(payload, dict) or not str(payload.get("saved_at") or "").strip():
-            return
-
-        products: list[PrintProductAggregate] = []
-        for row in _list_payload(payload.get("print_products")):
-            if not isinstance(row, dict):
-                continue
-            sku = str(row.get("sku") or "").strip()
-            title = str(row.get("title") or "").strip()
-            if not sku and not title:
-                continue
-            try:
-                quantity = max(0, int(row.get("quantity") or 0))
-            except (TypeError, ValueError):
-                quantity = 0
-            products.append(
-                PrintProductAggregate(
-                    sku=sku,
-                    title=title,
-                    description=str(row.get("description") or "").strip(),
-                    quantity=quantity,
-                    category_label=str(row.get("category_label") or "").strip(),
-                )
-            )
-
-        assignments: list[UnreleasedAssignment] = []
-        raw_assignments = payload.get("unreleased_assignments")
-        for row in raw_assignments if isinstance(raw_assignments, list) else []:
-            if not isinstance(row, dict):
-                continue
-            title = str(row.get("title") or "").strip()
-            if not title:
-                continue
-            assignments.append(
-                UnreleasedAssignment(
-                    title=title,
-                    shipping_name=str(row.get("shipping_name") or "").strip()
-                    or "Versandname nicht verfügbar",
-                    order_reference=str(row.get("order_reference") or "").strip(),
-                )
-            )
-
-        self._last_run_print_products = products
-        self._last_run_unreleased = assignments
-        self._print_products_last_run = True
-        self._gb_open_products.setTitle("PRINT PRODUKTE (last run)")
-        self._gb_unreleased.setTitle("UNRELEASED (last run)")
-        overview = OpenInvoiceOverview(
-            key="persisted-last-run",
-            total=0,
-            with_ref=0,
-            physical=0,
-            digital=0,
-            unknown=0,
-            with_note=0,
-            plc=0,
-            complete=True,
-            print_products=list(products),
-            unreleased_assignments=list(assignments),
-        )
-        self._render_open_print_products(overview)
-        self._render_unreleased_assignments(overview)
 
     def _clear_unreleased_rows(self) -> None:
         while self._unreleased_rows_layout.count():
