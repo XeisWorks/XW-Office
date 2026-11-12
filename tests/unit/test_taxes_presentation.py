@@ -12,6 +12,7 @@ from pytestqt.qtbot import QtBot
 
 from xw_office.core.container import Container
 from xw_office.services.finanzonline.filing_status import FilingStatus
+from xw_office.services.finanzonline.uva_soap import UvaSubmitResult
 from xw_office.ui.modules.taxes.presentation import UvaPresentation, format_euro, validate_preview
 from xw_office.ui.modules.taxes.view import TaxesView
 
@@ -266,3 +267,38 @@ def test_blockers_not_hidden_by_missing_or_inconsistent_counts(
 )
 def test_euro_formatting(amount: str, expected: str) -> None:
     assert format_euro(amount) == expected
+
+
+def test_uva_submit_result_uses_positive_payment_action_without_dispatching(
+    tax_view: _UvaOnlyTaxesView, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from xw_office.ui.modules.taxes import view as view_module
+
+    captured: list[tuple[str, object]] = []
+
+    class CapturedDialog:
+        def __init__(
+            self,
+            *_args: object,
+            actions: list[tuple[str, object]] | None = None,
+            **_kwargs: object,
+        ) -> None:
+            captured.extend(actions or [])
+
+        def exec(self) -> int:
+            return 0
+
+    monkeypatch.setattr(view_module, "OperationResultDialog", CapturedDialog)
+    monkeypatch.setattr(tax_view, "_update_uva_filing_status", lambda _payload: None)
+    result = UvaSubmitResult(
+        ok=True,
+        test_mode=False,
+        uva_payload={"zahlbetrag": "31.75", "jahr": 2026, "monat": 8},
+    )
+
+    tax_view._show_uva_submit_result(result)
+
+    assert len(captured) == 1
+    label, callback = captured[0]
+    assert label == "Bericht + Zahlung weitergeben"
+    assert callable(callback)

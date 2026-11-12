@@ -7,7 +7,7 @@ import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Callable, ClassVar
 
 from PySide6.QtCore import QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -698,10 +698,10 @@ class TaxesView(QWidget):
         context = " · ".join(item for item in (period, f"Zahlbetrag {_format_euro(str(res.uva_payload.get('zahlbetrag') or '0.00'))} EUR" if res.uva_payload else "") if item)
         if res.filing_status_error:
             context = (context + " · Lokaler Status nicht gespeichert").strip(" ·")
-        actions: list[tuple[str, object]] = []
+        actions: list[tuple[str, Callable[[], None]]] = []
         if res.ok and not res.test_mode and res.uva_payload:
-            amount = tax_amount(str(res.uva_payload.get("zahlbetrag") or "0.00"))
-            actions.append(("Bericht + Zahlung weitergeben" if amount > 0 else "Bericht an sevDesk senden", lambda: self._dispatch_uva_followup(res)))
+            payment_amount = tax_amount(str(res.uva_payload.get("zahlbetrag") or "0.00"))
+            actions.append(("Bericht + Zahlung weitergeben" if payment_amount > 0 else "Bericht an sevDesk senden", lambda: self._dispatch_uva_followup(res)))
         OperationResultDialog(self, tone=tone, title="UVA-Abgabe", summary=summary, context=context,
             details="\n".join(lines) + ("\n\n" + "\n\n".join(detail_parts) if detail_parts else ""),
             actions=actions).exec()
@@ -1247,7 +1247,11 @@ class TaxesView(QWidget):
                 summary="Zahlungsauftrag an XW-Flow gesendet", context="XW-Flow prüft und dedupliziert den Zahlungsfall.").exec())
             worker.signals.error.connect(lambda exc: OperationResultDialog(self, tone="error", title="Nachricht konnte nicht gesendet werden",
                 summary="Zahlungsauftrag konnte nicht gesendet werden", context="Mail-Einstellungen und Zahlungsprofil prüfen.", details=str(exc)).exec())
-            worker.signals.finished.connect(lambda: (setattr(self, "_oss_payment_worker", None), payment_button.setEnabled(True)))
+            def on_finished() -> None:
+                self._oss_payment_worker = None
+                payment_button.setEnabled(True)
+
+            worker.signals.finished.connect(on_finished)
             worker.start()
 
         def on_mark_submitted() -> None:
