@@ -2979,3 +2979,21 @@ Product Hub (`bc5a0c99-e9e5-401c-ad5f-c7ee94d6ca56`) und Inventory Worker
 (`a1c28423-8992-4576-951e-25ab1e8c52e7`). GitHub-CI fuer diesen Commit ist
 vollstaendig erfolgreich; der MyPy-Unterbefehl bleibt ein dokumentierter
 weicher Warn-Gate.
+
+## Deployment- und CI-Readback nach Wix-Publish (12.11.2026)
+
+Der Wix-Webauftritt bleibt auf dem bereits veroeffentlichten Stand `0f883d4`
+(Wix-UI-Version `18585`); seit diesem Wix-Publish gab es keine neuen
+Website-Quelldateien. Die Wix-sevDesk-API steht separat auf `main` / Commit
+`464fd75`, Deployment `aab362ab-f131-4523-b2fb-0733d8b8a986`, **SUCCESS**.
+Im Repository `XW-Office` stehen Product Hub (Deployment
+`df5f6ca3-4d68-4105-a42f-f7d66ba1414c`) und Inventory Worker (Deployment
+`5b105b00-a84d-4843-9a6a-c8dd17a45cff`) auf `main` / Commit `9aa4063`, beide
+**SUCCESS**; PostgreSQL ist **SUCCESS**.
+
+GitHub-CI fuer `9aa4063` ist abgeschlossen: Installation, Ruff und Pytest sind
+erfolgreich. Der globale MyPy-Unterlauf meldet 181 Fehler in 49 Dateien und
+bleibt ein weicher Warn-Gate; lokal liegt der Stand bei 172 Fehlern in 45
+Dateien. Der lokale vollstaendige Testlauf bestand mit 2.303 Tests; 5 optionale
+PostgreSQL-Tests wurden uebersprungen. Der Arbeitsbaum ist sauber und `main`
+entspricht `origin/main`.
