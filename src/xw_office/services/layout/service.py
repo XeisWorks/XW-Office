@@ -6,6 +6,7 @@ import io
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 _INVALID_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*]+')
@@ -24,11 +25,11 @@ def _mm_to_points(mm: float) -> float:
 
 
 def _build_a5_target_rects(
-    fitz_module: object,
+    fitz_module: Any,
     a4_width: float,
     a4_height: float,
     margin_pt: float,
-) -> tuple[object, object]:
+) -> tuple[Any, Any]:
     """Return two landscape A5 slots centered in the upper and lower A4 halves."""
     a5_width, a5_height = fitz_module.paper_size("a5")
     slot_width = max(a5_width, a5_height)
@@ -61,7 +62,7 @@ def _build_a5_target_rects(
     return top_rect, bottom_rect
 
 
-def _fit_rect(fitz_module: object, target: object, width: float, height: float) -> object:
+def _fit_rect(fitz_module: Any, target: Any, width: float, height: float) -> Any:
     if width <= 0 or height <= 0:
         return fitz_module.Rect(target)
     scale = min(target.width / width, target.height / height)
@@ -72,7 +73,7 @@ def _fit_rect(fitz_module: object, target: object, width: float, height: float) 
     return fitz_module.Rect(x0, y0, x0 + fitted_width, y0 + fitted_height)
 
 
-def _normalize_page_rotations(doc: object) -> None:
+def _normalize_page_rotations(doc: Any) -> None:
     for page in doc:
         if page.rotation:
             page.remove_rotation()
@@ -115,8 +116,8 @@ def _watermark_output_path(source_pdf: Path, target_dir: Path, user_name: str) -
 
 
 def _insert_side_watermark(
-    fitz_module: object,
-    document: object,
+    fitz_module: Any,
+    document: Any,
     user_name: str,
     *,
     font_size: float = 11.0,
@@ -191,7 +192,7 @@ class LayoutToolsService:
         Mixed page rotations are normalized on a per-page working copy before placement.
         """
         try:
-            import fitz  # type: ignore[import-untyped]
+            import fitz  # type: ignore[import-untyped]  # PyMuPDF does not publish stubs.
         except ImportError as exc:
             raise RuntimeError("PyMuPDF not installed") from exc
 
@@ -288,7 +289,7 @@ class LayoutToolsService:
     ) -> Path:
         """Create a side-watermarked licensed PDF without overwriting existing files."""
         try:
-            import fitz  # type: ignore[import-untyped]
+            import fitz
         except ImportError as exc:
             raise RuntimeError("PyMuPDF not installed") from exc
 
@@ -348,7 +349,7 @@ class LayoutToolsService:
         keep portrait cover/end pages intact.
         """
         try:
-            import fitz  # type: ignore[import-untyped]
+            import fitz
         except ImportError as exc:
             raise RuntimeError("PyMuPDF not installed") from exc
 
@@ -454,7 +455,7 @@ class LayoutToolsService:
     ) -> bytes:
         """Return a QR-Code as PNG bytes."""
         try:
-            import segno  # type: ignore[import-untyped]
+            import segno
         except ImportError as exc:
             raise RuntimeError("segno not installed") from exc
 
@@ -466,7 +467,7 @@ class LayoutToolsService:
     def validate_isbn(self, isbn_str: str) -> tuple[bool, str]:
         """Validate ISBN-10 or ISBN-13. Returns (is_valid, canonical_or_error)."""
         try:
-            from stdnum import isbn as _isbn  # type: ignore[import-untyped]
+            from stdnum import isbn as _isbn
         except ImportError as exc:
             raise RuntimeError("python-stdnum not installed") from exc
 
@@ -489,7 +490,7 @@ class LayoutToolsService:
     ) -> bytes:
         """Insert blank A4 pages after the given 0-based page indices."""
         try:
-            import fitz  # type: ignore[import-untyped]
+            import fitz
         except ImportError as exc:
             raise RuntimeError("PyMuPDF not installed") from exc
 
@@ -520,7 +521,7 @@ class LayoutToolsService:
     ) -> bytes:
         """Generate a minimal text-based cover page PDF."""
         try:
-            import fitz  # type: ignore[import-untyped]
+            import fitz
         except ImportError as exc:
             raise RuntimeError("PyMuPDF not installed") from exc
 
