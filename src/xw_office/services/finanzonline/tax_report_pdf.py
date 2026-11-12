@@ -2,14 +2,16 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
-import fitz
+import fitz  # type: ignore[import-untyped]
 
 
 def render_uva_report(payload: dict[str, Any], *, reference: str = "", test_mode: bool = False) -> bytes:
-    year = int(payload.get("jahr") or payload.get("year"))
-    month = int(payload.get("monat") or payload.get("month"))
+    year_value = cast(int | str, payload.get("jahr") or payload.get("year"))
+    month_value = cast(int | str, payload.get("monat") or payload.get("month"))
+    year = int(year_value)
+    month = int(month_value)
     lines = [
         "Umsatzsteuervoranmeldung U30", f"Periode: {month:02d}/{year}",
         f"Status: {'TEST – keine produktive Abgabe' if test_mode else 'Produktiv übermittelt'}",
@@ -23,14 +25,16 @@ def render_uva_report(payload: dict[str, Any], *, reference: str = "", test_mode
     doc = fitz.open()
     page = doc.new_page()
     page.insert_textbox(fitz.Rect(54, 48, 540, 780), "\n".join(lines), fontsize=10, lineheight=1.35)
-    output = doc.tobytes()
+    output = cast(bytes, doc.tobytes())
     doc.close()
     return output
 
 
 def render_u13_report(payload: dict[str, Any], *, reference: str = "", test_mode: bool = False) -> bytes:
-    year = int(payload.get("jahr") or payload.get("year"))
-    month = int(payload.get("monat") or payload.get("month"))
+    year_value = cast(int | str, payload.get("jahr") or payload.get("year"))
+    month_value = cast(int | str, payload.get("monat") or payload.get("month"))
+    year = int(year_value)
+    month = int(month_value)
     rows = payload.get("rows") or []
     lines = [
         "Zusammenfassende Meldung U13",
@@ -46,6 +50,6 @@ def render_u13_report(payload: dict[str, Any], *, reference: str = "", test_mode
     doc = fitz.open()
     page = doc.new_page()
     page.insert_textbox(fitz.Rect(54, 48, 540, 780), "\n".join(lines), fontsize=10, lineheight=1.35)
-    output = doc.tobytes()
+    output = cast(bytes, doc.tobytes())
     doc.close()
     return output
