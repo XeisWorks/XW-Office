@@ -9,6 +9,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from xw_office.models.base import Base
+from xw_office.core.config import AppConfig
+from xw_office.core.container import Container
 from xw_office.repositories.plc_shipment import PlcParcelEvidence, PlcShipmentRepository
 from xw_office.ui.modules.rechnungen.plc_evidence_dialog import PlcEvidenceDialog
 
@@ -156,3 +158,23 @@ def test_tracking_import_and_code_confirmation_run_in_workers(qtbot, monkeypatch
     repository.release.set()
     qtbot.waitUntil(lambda: dialog._worker is None, timeout=2000)  # noqa: SLF001
     assert repository.import_calls == [b"<tracking />"]
+
+
+def test_evidence_repository_resolution_does_not_block_dialog_creation(qtbot) -> None:
+    repository = _Repository()
+
+    class SlowContainer(Container):
+        def resolve(self, service_type):
+            assert service_type is PlcShipmentRepository
+            repository.entered.set()
+            assert repository.release.wait(3)
+            return repository
+
+    container = SlowContainer(AppConfig())
+    dialog = PlcEvidenceDialog(container, invoice_id="invoice-1", invoice_number="RE-1")
+    qtbot.addWidget(dialog)
+    _assert_event_loop_responds(qtbot, repository.entered)
+    assert dialog._details.toPlainText() == ""  # noqa: SLF001
+    repository.release.set()
+    qtbot.waitUntil(lambda: dialog._worker is None, timeout=2000)  # noqa: SLF001
+    assert "PLC-1" in dialog._details.toPlainText()  # noqa: SLF001

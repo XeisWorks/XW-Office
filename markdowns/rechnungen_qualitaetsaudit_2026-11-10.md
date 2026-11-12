@@ -2263,10 +2263,11 @@ Regressionen mit beiden Schalterzuständen: **194 gezielte Tests bestanden** (Re
 
 ## PLC-Packlisten bei Einpaket-Sendungen am 11.11.2026
 
-- **F26 - P2, ERLEDIGT (Code):** Die beiden vom Nutzer um 21:37 ausgeloesten PLC-Webservice-Laeufe reihten jeweils nach dem Label auch ein Packlisten-PDF auf `Paketmarke A5` ein. Die Logs zeigen zwei Codes je Lauf; das ist kein Beleg fuer zwei physische Pakete, weil eine Collo-Gruppe mehrere PLC-Codes enthalten kann. Der Dialog stand fuer diese Sendungen laut Nutzer auf einem Paket.
+- **F26 - P2, ERLEDIGT (Code), Laufzeit bestaetigt mit Neustart erforderlich:** Die beiden vom Nutzer um 21:37 ausgeloesten PLC-Webservice-Laeufe reihten jeweils nach dem Label auch ein Packlisten-PDF auf `Paketmarke A5` ein. Die Logs zeigen zwei Codes je Lauf; das ist kein Beleg fuer zwei physische Pakete, weil eine Collo-Gruppe mehrere PLC-Codes enthalten kann. Der Dialog stand fuer diese Sendungen laut Nutzer auf einem Paket.
 - Ursache: Der automatische Nachbereitungspfad druckte bei jedem nichtleeren `packing_contexts`. Auch ein einzelnes Paket erzeugt diesen Kontext fuer den unveraenderlichen Inhalts-Snapshot. Die PDF-Erzeugung und der Packlisten-Queue-Write sind nun an mindestens zwei `shipment.parcels` gebunden. Der manuelle Packlisten-Button hatte diese Grenze bereits.
 - Der Einpaket-Kontext wird weiterhin vor dem externen PLC-Aufruf als `plc_parcel_manifest.contents_json` gespeichert; die PLC-Infoansicht zeigt den Paketinhalt auch ohne Packlisten-PDF. Die PLC-`ColloCodeList` wird getrennt gespeichert; zwei Codes in einer Collo-Gruppe werden nicht als zwei Pakete gezaehlt. An den Post-Webservice selbst werden Artikelpositionen fuer EU/AT-Sendungen nicht als `ColloArticleList` uebertragen; diese Liste ist im bestehenden SOAP-Mapping nur fuer Zollsendungen gesetzt.
-- Nachweis: **45 gezielte PLC-Service-/Dialogtests bestanden**, darunter neue Regressionen fuer ein Paket ohne Packlisten-PDF/Queue, zwei Pakete mit Packlisten-PDF/Queue und den Einpaket-Inhalt im lokalen Collo-Journal. Zusaetzlich bestanden 14 PLC-Info-/Archivtests. Ruff und gezieltes MyPy gruen. Es wurde kein weiterer produktiver PLC-Aufruf oder Druck durch Codex ausgeloest. Bereits gedruckte Packlisten bleiben historische Archivbelege.
+- Laufzeitursache bestaetigt: Die beiden Drucklogs stammen von 21:37:07 und 21:37:34; Fix-Commit `711c05e` wurde erst um 21:45:16 erstellt. Bei der Nachpruefung lief `scripts/xw_office_gui.pyw` weiterhin aus demselben venv als Prozess mit Startzeit 21:36:40 und hatte deshalb noch den alten Modulcode geladen. Den laufenden GUI-Prozess nicht automatisch beendet; der neue Code wird beim naechsten normalen Neustart geladen.
+- Nachweis: **45 gezielte PLC-Service-/Dialogtests bestanden**, darunter Regressionen fuer ein Paket ohne Packlisten-PDF/Queue trotz zweier Codes in einer Collo-Gruppe, zwei Pakete mit Packlisten-PDF/Queue und den Einpaket-Inhalt im lokalen Collo-Journal. Die aktuelle PLC-Dialogdatei besteht erneut mit **26 Tests**; Ruff und gezieltes MyPy sind gruen. Zusaetzlich bestanden 14 PLC-Info-/Archivtests. Es wurde kein weiterer produktiver PLC-Aufruf oder Druck durch Codex ausgeloest. Bereits gedruckte Packlisten bleiben historische Archivbelege.
 
 
 ## Fortschreibung 11.11.2026 - Rechnungslisten-I/O im Worker
@@ -2547,3 +2548,29 @@ keinen PostgreSQL- oder Dateizugriff mehr aus. Fuer manuelle Sendungen wird der
 Store nur bei tatsaechlicher Teilerfuellungsbuchung im Finalizer-Worker angelegt.
 Die PLC-UI-Suite besteht mit **26 Tests**; Ruff und striktes MyPy fuer den Dialog
 sind gruen.
+
+## Vollsuite nach F17-Nachpruefung und PLC-Teilerfuellungsread (12.11.2026)
+
+Auf dem Codecommit `afe5811` besteht die vollstaendige lokale Suite mit **2.272
+Tests, 5 optionalen PostgreSQL-Ueberspringungen und 1 bestehenden
+Starlette/httpx-Deprecation-Warnung (160,34 s)**. Globales Ruff ist gruen; striktes
+MyPy fuer alle 27 Rechnungs-UI-Dateien meldet 0 Fehler; `git diff --check` ist
+sauber. Der Hosted-CI-Testjob fuer `afe5811` ist beim Check noch `in_progress`.
+Der Railway-Preflight-Fix auf `59ecdde` betrifft nur das read-only Operationsskript;
+Product-Hub und Inventory-Worker bauen diesen Stand noch, ohne produktive
+Bestandsflags oder -daten zu aendern.
+
+## F17-Fortschreibung - PLC-Paketnachweis im Worker (12.11.2026)
+
+Beim Oeffnen von „PLC-Infos“ loeste `RechnungenView` das
+`PlcShipmentRepository` noch synchron auf, bevor der Dialog seine bereits
+asynchrone Abfrage startete. Die Repository-Aufloesung erfolgt jetzt im
+Ladeworker. Ein blockierter Container-Fake bestaetigt, dass Dialogaufbau und
+Qt-Heartbeat weiterlaufen; der Dialog verwendet anschliessend dieselbe
+Repository-Instanz fuer Nachladen, Codezuordnung und Trackingimport. Die
+Rechnungsansicht- und PLC-Nachweisregressionen bestehen zusammen mit **98 Tests**;
+Ruff und striktes MyPy fuer `view.py` und `plc_evidence_dialog.py` sind gruen.
+Die Vollsuite auf diesem Arbeitsstand besteht mit **2.273 Tests, 5 optionalen
+PostgreSQL-Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung
+(164,48 s)**. Globales Ruff und striktes MyPy fuer alle 27 Rechnungs-UI-Dateien
+sind ebenfalls gruen.

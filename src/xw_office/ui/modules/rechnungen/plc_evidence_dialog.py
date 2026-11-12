@@ -16,17 +16,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from xw_office.core.container import Container
 from xw_office.repositories.plc_shipment import PlcParcelEvidence, PlcShipmentRepository
 from xw_office.core.worker import BackgroundWorker
 
 
 class PlcEvidenceDialog(QDialog):
     def __init__(
-        self, repository: PlcShipmentRepository, *, invoice_id: str,
+        self, repository: PlcShipmentRepository | Container, *, invoice_id: str,
         invoice_number: str = "", parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self._repository = repository
+        self._repository_source = repository
         self._invoice_id = invoice_id
         self._invoice_number = invoice_number
         self._worker: BackgroundWorker | None = None
@@ -88,11 +89,15 @@ class PlcEvidenceDialog(QDialog):
             return
         self._set_busy(True)
         self._start_worker(
-            lambda: self._repository.list_parcel_evidence(
+            lambda: self._repository().list_parcel_evidence(
                 invoice_id=self._invoice_id, invoice_number=self._invoice_number
             ),
             self._render,
         )
+
+    def _repository(self) -> PlcShipmentRepository:
+        source = self._repository_source
+        return source.resolve(PlcShipmentRepository) if isinstance(source, Container) else source
 
     def _render(self, result: object) -> None:
         if self._closing:
@@ -249,7 +254,7 @@ class PlcEvidenceDialog(QDialog):
             return
 
         def job() -> int:
-            return self._repository.import_post_tracking_xml(
+            return self._repository().import_post_tracking_xml(
                 Path(filename).read_bytes(),
                 invoice_id=self._invoice_id,
                 invoice_number=self._invoice_number,
@@ -276,7 +281,7 @@ class PlcEvidenceDialog(QDialog):
         tracking_code = self._code.text().strip()
 
         def job() -> bool:
-            return self._repository.confirm_parcel_code(
+            return self._repository().confirm_parcel_code(
                 shipment_id=shipment_id,
                 package_number=package_number,
                 tracking_code=tracking_code,

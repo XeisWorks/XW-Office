@@ -99,7 +99,6 @@ from xw_office.services.inventory import InventoryService
 from xw_office.services.product_hub.inventory import InventoryV2Service
 from xw_office.services.mailing.outlook_compose import open_classic_outlook_draft
 from xw_office.services.plc.label_archive import PlcLabelArchive
-from xw_office.repositories.plc_shipment import PlcShipmentRepository
 from xw_office.ui.modules.rechnungen.plc_evidence_dialog import PlcEvidenceDialog
 from xw_office.services.printer_status.service import PrinterStatusService
 from xw_office.services.products.catalog import (
@@ -6631,9 +6630,8 @@ class RechnungenView(QWidget):
         if summary is None:
             return
         try:
-            repository: PlcShipmentRepository = self._container.resolve(PlcShipmentRepository)
             dialog = PlcEvidenceDialog(
-                repository, invoice_id=str(summary.id or ""),
+                self._container, invoice_id=str(summary.id or ""),
                 invoice_number=str(summary.invoice_number or ""), parent=self,
             )
             dialog.exec()
