@@ -206,6 +206,12 @@ class _PlcArchiveLookup:
 
 
 @dataclass(frozen=True)
+class _ArchivedPlcReprintResult:
+    label_job_id: str
+    customs_job_id: str
+
+
+@dataclass(frozen=True)
 class _RunOutputPrintRequest:
     invoice_ids: tuple[str, ...]
     labels: bool
@@ -1346,6 +1352,7 @@ class RechnungenView(QWidget):
         self._invoice_pdf_preview_worker: BackgroundWorker | None = None
         self._delete_draft_worker: BackgroundWorker | None = None
         self._archived_packing_list_worker: BackgroundWorker | None = None
+        self._archived_plc_reprint_worker: BackgroundWorker | None = None
         self._open_overview_worker: BackgroundWorker | None = None
         self._open_product_preparation_worker: BackgroundWorker | None = None
         self._open_product_preparation_seq = 0
@@ -2260,6 +2267,7 @@ class RechnungenView(QWidget):
                 self._invoice_pdf_preview_worker,
                 self._delete_draft_worker,
                 self._archived_packing_list_worker,
+                self._archived_plc_reprint_worker,
                 self._open_overview_worker,
                 self._open_product_preparation_worker,
                 self._product_print_worker,
@@ -5663,34 +5671,10 @@ class RechnungenView(QWidget):
             clicked = box.clickedButton()
             if clicked is reprint_btn:
                 reference = str(summary.order_reference or summary.invoice_number or summary.id or "").strip()
-                try:
-                    label_job_id = queue_archived_plc_label(
-                        self._container,
-                        existing_label_path,
-                        reference,
-                    )
-                    customs_job_id = ""
-                    if existing_customs_path:
-                        customs_job_id = queue_archived_plc_customs(
-                            self._container,
-                            existing_customs_print_path or existing_customs_path,
-                            reference,
-                        )
-                except Exception as exc:  # noqa: BLE001 - archives remain available for manual recovery.
-                    QMessageBox.warning(
-                        self,
-                        "PLC-Nachdruck",
-                        "Der Nachdruck konnte nicht vollständig eingereiht werden. "
-                        f"Die archivierten PDFs bleiben erhalten.\n\n{exc}",
-                    )
-                    return
-                job_text = label_job_id[:8] + "…"
-                if customs_job_id:
-                    job_text += " / " + customs_job_id[:8] + "…"
-                QMessageBox.information(
-                    self,
-                    "PLC-Nachdruck",
-                    f"Archivierter Nachdruck eingereiht: {job_text}",
+                self._reprint_archived_plc_documents(
+                    existing_label_path,
+                    existing_customs_print_path or existing_customs_path,
+                    reference,
                 )
                 return
             if clicked is open_btn:
@@ -6613,6 +6597,61 @@ class RechnungenView(QWidget):
         )
         self._archived_packing_list_worker = worker
         worker.start()
+
+    def _reprint_archived_plc_documents(
+        self, label_path: str, customs_path: str, reference: str
+    ) -> None:
+        if self._shutting_down or self._archived_plc_reprint_worker is not None:
+            return
+
+        def job() -> _ArchivedPlcReprintResult:
+            label_job_id = queue_archived_plc_label(self._container, label_path, reference)
+            customs_job_id = (
+                queue_archived_plc_customs(self._container, customs_path, reference)
+                if customs_path
+                else ""
+            )
+            return _ArchivedPlcReprintResult(label_job_id, customs_job_id)
+
+        worker = BackgroundWorker(job)
+        worker.signals.result.connect(self._on_archived_plc_reprint_result)
+        worker.signals.error.connect(self._on_archived_plc_reprint_error)
+        worker.signals.finished.connect(
+            lambda current=worker: self._on_archived_plc_reprint_finished(current)
+        )
+        self._archived_plc_reprint_worker = worker
+        worker.start()
+
+    def _on_archived_plc_reprint_result(self, payload: object) -> None:
+        if self._shutting_down:
+            return
+        if not isinstance(payload, _ArchivedPlcReprintResult):
+            self._on_archived_plc_reprint_error(
+                RuntimeError("Ungueltige PLC-Nachdruckantwort")
+            )
+            return
+        job_text = payload.label_job_id[:8] + "…"
+        if payload.customs_job_id:
+            job_text += " / " + payload.customs_job_id[:8] + "…"
+        QMessageBox.information(
+            self,
+            "PLC-Nachdruck",
+            f"Archivierter Nachdruck eingereiht: {job_text}",
+        )
+
+    def _on_archived_plc_reprint_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
+        QMessageBox.warning(
+            self,
+            "PLC-Nachdruck",
+            "Der Nachdruck konnte nicht vollständig eingereiht werden. "
+            f"Die archivierten PDFs bleiben erhalten.\n\n{exc}",
+        )
+
+    def _on_archived_plc_reprint_finished(self, worker: BackgroundWorker) -> None:
+        if self._archived_plc_reprint_worker is worker:
+            self._archived_plc_reprint_worker = None
 
     def _on_archived_packing_list_reprinted(self, payload: object) -> None:
         if self._shutting_down:

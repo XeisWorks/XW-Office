@@ -1402,6 +1402,114 @@ def test_archived_packing_lists_appear_in_view_and_print_menus(
     assert queued == [(container, str(packlist), "20844")]
 
 
+def test_archived_plc_reprint_runs_off_ui_thread_and_ignores_duplicate(
+    qtbot: object,
+    monkeypatch: object,
+) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    started = Event()
+    release = Event()
+    calls: list[tuple[int, object, str, str]] = []
+    messages: list[tuple[object, ...]] = []
+    ui_thread_id = get_ident()
+
+    def queue_label(passed_container: object, path: str, reference: str) -> str:
+        calls.append((get_ident(), passed_container, path, reference))
+        started.set()
+        assert release.wait(2)
+        return "plc-label-job"
+
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.queue_archived_plc_label",
+        queue_label,
+    )
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.QMessageBox.information",
+        lambda *args: messages.append(args),
+    )
+
+    heartbeat: list[bool] = []
+    timer = QTimer(view)
+    timer.timeout.connect(lambda: heartbeat.append(True))
+    timer.start(5)
+    view._reprint_archived_plc_documents("label.pdf", "", "20844")  # noqa: SLF001
+    qtbot.waitUntil(started.is_set)  # type: ignore[attr-defined]
+    qtbot.waitUntil(lambda: bool(heartbeat))  # type: ignore[attr-defined]
+    view._reprint_archived_plc_documents("duplicate.pdf", "", "20844")  # noqa: SLF001
+    assert len(calls) == 1
+    assert calls[0] == (calls[0][0], container, "label.pdf", "20844")
+    assert calls[0][0] != ui_thread_id
+    release.set()
+    qtbot.waitUntil(  # type: ignore[attr-defined]
+        lambda: view._archived_plc_reprint_worker is None  # noqa: SLF001
+    )
+    timer.stop()
+
+    assert messages
+    assert "plc-labe…" in messages[0][2]
+
+
+def test_archived_plc_reprint_worker_is_waited_for_during_shutdown(
+    qtbot: object,
+    monkeypatch: object,
+) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    started = Event()
+    release = Event()
+
+    def queue_label(_container: object, _path: str, _reference: str) -> str:
+        started.set()
+        assert release.wait(2)
+        return "plc-label-job"
+
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.queue_archived_plc_label",
+        queue_label,
+    )
+    view._reprint_archived_plc_documents("label.pdf", "", "20844")  # noqa: SLF001
+    qtbot.waitUntil(started.is_set)  # type: ignore[attr-defined]
+    view.request_shutdown()
+    assert not view.shutdown_complete()
+    release.set()
+    qtbot.waitUntil(view.shutdown_complete)  # type: ignore[attr-defined]
+
+
+def test_archived_plc_reprint_reports_queue_errors(
+    qtbot: object,
+    monkeypatch: object,
+) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    warnings: list[str] = []
+    reported = Event()
+
+    def queue_label(_container: object, _path: str, _reference: str) -> str:
+        raise RuntimeError("printer queue unavailable")
+
+    def warning(_parent: object, _title: str, message: str) -> None:
+        warnings.append(message)
+        reported.set()
+
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.queue_archived_plc_label",
+        queue_label,
+    )
+    monkeypatch.setattr(QMessageBox, "warning", warning)
+    view._reprint_archived_plc_documents("label.pdf", "", "20844")  # noqa: SLF001
+    qtbot.waitUntil(reported.is_set)  # type: ignore[attr-defined]
+
+    assert len(warnings) == 1
+    assert "printer queue unavailable" in warnings[0]
+    qtbot.waitUntil(  # type: ignore[attr-defined]
+        lambda: view._archived_plc_reprint_worker is None  # noqa: SLF001
+    )
+
+
 def test_packing_list_menu_timestamp_does_not_stat_archive_file(monkeypatch: object) -> None:
     def unexpected_stat(_path: Path, *_args: object, **_kwargs: object) -> object:
         raise AssertionError("Packlisten-Menue darf keine Datei-Metadaten lesen")
