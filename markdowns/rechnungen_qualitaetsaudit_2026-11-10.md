@@ -3903,3 +3903,7 @@ Ruff ist gruen, `mypy src/` meldet 0 Fehler in 499 Quelldateien und
 `git diff --check` ist sauber. Diese Tests schliessen den Datenbank-Teil der
 G2-Evidenz, aber nicht die verbleibende Abnahme mit zwei laufenden App-Instanzen
 oder den Inventur-/Backup-/Shadow-/Cutover-Ablauf.
+
+GitHub Actions Windows-Run [`43267418365`](https://github.com/XeisWorks/XW-Office/actions/runs/43267418365)
+auf Commit `5cd3e58` ist vollstaendig gruen: Install, Ruff und MyPy bestanden;
+**2.373 bestanden, 7 uebersprungen, 1 bestehende Warnung (624,44 s)**.
