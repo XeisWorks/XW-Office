@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from xw_office.services.products.catalog import ProductCatalogService
+from xw_office.services.products.catalog import ProductCatalogService, UnreleasedProduct
 
 
 @dataclass(frozen=True)
@@ -400,7 +400,7 @@ class UnreleasedCatalogDialog(QDialog):
             self._table.setItem(row, 1, owner_item)
             self._table.setItem(row, 2, aliases_item)
 
-    def _selected_product(self) -> object | None:
+    def _selected_product(self) -> UnreleasedProduct | None:
         row = self._table.currentRow()
         if 0 <= row < len(self._displayed_products):
             return self._displayed_products[row]

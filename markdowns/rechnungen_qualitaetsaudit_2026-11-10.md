@@ -2884,10 +2884,13 @@ Der globale MyPy-Stand sank auf **193 Fehler in 51 Dateien**.
 Im lokalen Windows-PySide6-venv: Vollsuite **2.302 bestanden, 5 optionale
 PostgreSQL-Tests uebersprungen, 1 bestehende Starlette/httpx-Deprecation-
 Warnung (152,49 s)**; globales Ruff `ruff check .` mit **All checks passed**.
-Der globale MyPy-Lauf fand **190 Fehler in 50 Dateien**; die in diesem
-Arbeitsabschnitt bereinigten Wix-, Transfer-/Graph- und PDF-Layout-Dateien sowie
-`ui/widgets/data_table.py` haben jeweils null Fehler. Die globale
-Typbereinigung und Controller-Extraktion bleiben F20-offen.
+Der Vollsuite-Lauf erfolgte nach dem Qt-Tabellenfix und vor dem anschliessenden
+reinen Unreleased-Dialog-Typfix; dessen direkt betroffene Rechnungs-Smoke- und
+Dialogtests bestanden danach separat. Der globale MyPy-Lauf fand zuletzt **183
+Fehler in 49 Dateien**; die in diesem Arbeitsabschnitt bereinigten Wix-,
+Transfer-/Graph-, PDF-Layout-, Tabellenmodell- und Unreleased-Dialog-Dateien
+haben jeweils null Fehler. Die globale Typbereinigung und Controller-Extraktion
+bleiben F20-offen.
 
 ## F20-Fortschreibung - Qt-Tabellenmodell-Indizes
 
@@ -2898,6 +2901,15 @@ Typen. Eine Regression prueft Zeilenanzahl, Spaltenanzahl und Datenzugriff ueber
 einen persistenten Index. Beide direkten DataTable-Consumer bestehen mit **13
 UI-Tests**; gezieltes MyPy und Ruff sind gruen. Der globale MyPy-Stand sank von
 193/51 auf **190 Fehler in 50 Dateien**.
+
+## F20-Fortschreibung - Typ des Unreleased-Produkts
+
+Der Auswahlhelfer im Unreleased-Produktdialog gab `object | None` zurueck,
+obwohl der Katalog ausschliesslich `UnreleasedProduct`-Datensaetze liefert.
+Der engere Rueckgabetyp erhaelt die Owner-, Alias- und kanonischen Titelfelder
+ohne dynamische Annahmen. Die Dialog- und Rechnungs-Smoke-Tests bestehen mit
+**109 Tests**; striktes MyPy und Ruff fuer den Dialog sind gruen. Der globale
+MyPy-Stand sank auf **183 Fehler in 49 Dateien**.
 
 ## Wix- und Railway-Deployment-Readback (12.11.2026)
 
@@ -2921,3 +2933,10 @@ fuer Product Hub und Inventory Worker **SUCCESS** (Deployments
 `9f08512f-d183-4170-9e4b-c5502d04a2f1` und
 `75ea1905-4c8b-4f2a-bda3-8d10320156e5`). Der neue DataTable-Code ist in diesem
 Readback-Commit noch nicht enthalten.
+
+Nach dem Typfix-Commit `e93ac73` bestaetigte Railway erneut **SUCCESS** fuer
+Product Hub und Inventory Worker (Deployments
+`f517f688-359a-4a4f-a436-cc1d666c1b7d` und
+`681a4da4-58f6-4779-a506-313d23836b97`). Dieser Commit enthaelt den
+Qt-Tabellenmodell-Fix; der danach vorgenommene reine Rueckgabetyp-Fix im
+Unreleased-Produktdialog ist darin noch nicht enthalten.
