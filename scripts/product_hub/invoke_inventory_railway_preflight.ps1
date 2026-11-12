@@ -3,7 +3,8 @@ param(
     [string]$ProjectId = "b9ca5990-0aaf-4757-9efd-14119c1bdabf",
     [string]$EnvironmentName = "production",
     [string]$PythonExecutable = "",
-    [string]$OutputDirectory = (Join-Path $env:TEMP "xw-inventory-cutover")
+    [string]$OutputDirectory = (Join-Path $env:TEMP "xw-inventory-cutover"),
+    [switch]$IncludeExactMappingSummary
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,6 +28,7 @@ $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $snapshotPath = Join-Path $OutputDirectory "inventory-snapshot-$stamp.json"
 $dbReadinessPath = Join-Path $OutputDirectory "db-readiness-$stamp.json"
 $runtimeReadinessPath = Join-Path $OutputDirectory "runtime-readiness-$stamp.json"
+$mappingSummaryPath = Join-Path $OutputDirectory "exact-mapping-summary-$stamp.json"
 
 function Invoke-RailwayCapture {
     param(
@@ -83,6 +85,7 @@ $services = @(
 )
 $postgresService = $services | Where-Object { $_.name -eq "Postgres" } | Select-Object -First 1
 $productHubService = $services | Where-Object { $_.name -eq "XW-Product-Hub" } | Select-Object -First 1
+$workerService = $services | Where-Object { $_.name -eq "xw-inventory-worker" } | Select-Object -First 1
 if (-not $postgresService -or -not $productHubService) {
     throw "Postgres- oder XW-Product-Hub-Service wurde in Projekt '$ProjectId' / '$EnvironmentName' nicht gefunden."
 }
@@ -118,6 +121,19 @@ $runtimeReadiness = Invoke-RailwayCapture `
     ) `
     -CapturePath $runtimeReadinessPath
 
+$mappingSummary = $null
+if ($IncludeExactMappingSummary) {
+    if (-not $workerService) {
+        throw "Der optionale Exact-Mapping-Preflight benötigt den Service 'xw-inventory-worker'."
+    }
+    $mappingSummary = Invoke-RailwayCapture `
+        -Arguments @(
+            "run", "--project", $ProjectId, "--service", $workerService.id, "--environment", $EnvironmentName, "--",
+            $PythonExecutable, "scripts/product_hub/preview_exact_inventory_mappings.py", "--summary"
+        ) `
+        -CapturePath $mappingSummaryPath
+}
+
 $summary = [pscustomobject]@{
     checkedAt = (Get-Date).ToUniversalTime().ToString("o")
     healthStatus = $health.StatusCode
@@ -134,6 +150,13 @@ $summary = [pscustomobject]@{
         report = $runtimeReadinessPath
     }
 }
+if ($IncludeExactMappingSummary) {
+    $summary | Add-Member -NotePropertyName exactMappingSummary -NotePropertyValue ([pscustomobject]@{
+        exitCode = $mappingSummary.ExitCode
+        ready = ($mappingSummary.ExitCode -eq 0)
+        report = $mappingSummaryPath
+    })
+}
 
 $summary | ConvertTo-Json -Depth 6
 if ($runtimeReadiness.ExitCode -ne 0) {
@@ -141,4 +164,7 @@ if ($runtimeReadiness.ExitCode -ne 0) {
 }
 if ($dbReadiness.ExitCode -notin @(0, 2)) {
     exit $dbReadiness.ExitCode
+}
+if ($IncludeExactMappingSummary -and $mappingSummary.ExitCode -ne 0) {
+    exit $mappingSummary.ExitCode
 }
