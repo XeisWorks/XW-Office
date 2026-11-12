@@ -12,7 +12,7 @@ from typing import Any
 
 from xw_office.services.inventory.service import InventoryService, ProductRow
 from xw_office.services.wix.client import WixProduct
-from xw_office.services.wix.product_details_client import WixProductDetailsClient
+from xw_office.services.wix.product_details_client import UpdateResult, WixProductDetailsClient
 
 logger = logging.getLogger(__name__)
 
@@ -520,7 +520,7 @@ class ProductFieldBulkService:
             items=items,
         )
 
-    def _call_details_update(self, product_id: str, wix_field: str, value: str) -> object:
+    def _call_details_update(self, product_id: str, wix_field: str, value: str) -> UpdateResult:
         """Dispatch to the appropriate WixProductDetailsClient method."""
         coerced = self._coerce_for_details(wix_field, value)
         dispatch = {

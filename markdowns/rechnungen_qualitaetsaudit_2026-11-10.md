@@ -2883,17 +2883,16 @@ Der globale MyPy-Stand sank auf **193 Fehler in 51 Dateien**.
 
 Im lokalen Windows-PySide6-venv: Vollsuite **2.302 bestanden, 5 optionale
 PostgreSQL-Tests uebersprungen, 1 bestehende Starlette/httpx-Deprecation-
-Warnung (152,49 s)**; globales Ruff `ruff check .` mit **All checks passed**.
-Der Vollsuite-Lauf erfolgte nach dem Qt-Tabellenfix und vor dem anschliessenden
-reinen Unreleased-Dialog-Typfix; dessen direkt betroffene Rechnungs-Smoke- und
-Dialogtests bestanden danach separat. GitHub-CI `43189075628` fuer Commit
+Warnung (147,87 s)**; globales Ruff `ruff check .` mit **All checks passed**.
+Dieser Lauf enthaelt die Qt-Tabellen-, Unreleased-Dialog- und aktuellen
+Inventory-/Wix-Bulk-Typkorrekturen. GitHub-CI `43189075628` fuer Commit
 `05db7b3` ist erfolgreich: **2.302 bestanden, 5 uebersprungen, 1 Warnung
 (795,98 s)**. Der weiche Hosted-MyPy-Schritt meldete **192 Fehler in 53
 Dateien**; das Job-Ergebnis blieb wegen `continue-on-error` erfolgreich. Lokal
-fand der globale MyPy-Lauf zuletzt **183 Fehler in 49 Dateien**; die Ursache
-der unterschiedlichen globalen Baselines ist nicht isoliert. Die in diesem
-Arbeitsabschnitt bereinigten Wix-,
-Transfer-/Graph-, PDF-Layout-, Tabellenmodell- und Unreleased-Dialog-Dateien
+fand der globale MyPy-Lauf zuletzt **175 Fehler in 47 Dateien**; die Ursache
+der unterschiedlichen lokalen/Hosted-Baselines ist nicht isoliert. Die in
+diesem Arbeitsabschnitt bereinigten Wix-, Transfer-/Graph-, PDF-Layout-,
+Tabellenmodell-, Unreleased-Dialog-, Inventory- und Product-Field-Bulk-Dateien
 haben jeweils null Fehler. Die globale Typbereinigung und Controller-Extraktion
 bleiben F20-offen.
 
@@ -2918,6 +2917,19 @@ Der engere Rueckgabetyp erhaelt die Owner-, Alias- und kanonischen Titelfelder
 ohne dynamische Annahmen. Die Dialog- und Rechnungs-Smoke-Tests bestehen mit
 **109 Tests**; striktes MyPy und Ruff fuer den Dialog sind gruen. Der globale
 MyPy-Stand sank auf **183 Fehler in 49 Dateien**.
+
+## F20-Fortschreibung - Inventory- und Wix-Feldupdates
+
+`InventoryService.apply_stock_correction` prueft, dass ein lokaler Settings-
+Speicher fuer den Legacy-Pfad vorhanden ist; diese Garantie war nach dem
+Master-Store-Zweig fuer MyPy nicht mehr sichtbar. Eine explizite Guard nach
+dem erfolgreich zurueckkehrenden Master-Zweig schliesst die optionale Grenze
+fuer den Legacy-Fallback. `ProductFieldBulkService._call_details_update`
+lieferte sechs Wix-Updatefelder als `object`; die Rueckgabe ist jetzt als
+konkretes `UpdateResult` typisiert. START-Bestandskorrektur und Wix-Bulk-
+Service-Tests bestehen mit **30 Tests**; beide Dateien sind im gezielten MyPy
+und Ruff fehlerfrei. Lokal sank der globale MyPy-Stand auf **175 Fehler in 47
+Dateien**.
 
 ## Wix- und Railway-Deployment-Readback (12.11.2026)
 

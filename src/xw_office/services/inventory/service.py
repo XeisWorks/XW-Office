@@ -1129,6 +1129,10 @@ class InventoryService:
                 reference=clean_reference,
             )
 
+        settings_repo = self._settings_repo
+        if settings_repo is None:
+            raise RuntimeError("Lokaler Einstellungs-Speicher ist nicht verfuegbar")
+
         result: dict[str, int] = {}
 
         def mutate_stock(raw: str | None) -> str:
@@ -1164,12 +1168,12 @@ class InventoryService:
             result["new"] = new_stock
             return json.dumps(payload, ensure_ascii=False)
 
-        atomic_mutator = getattr(self._settings_repo, "mutate_value_json", None)
+        atomic_mutator = getattr(settings_repo, "mutate_value_json", None)
         if callable(atomic_mutator):
             atomic_mutator(_STOCK_KEY, mutate_stock)
         else:
-            current_raw = self._settings_repo.get_value_json(_STOCK_KEY)
-            self._settings_repo.set_value_json(_STOCK_KEY, mutate_stock(current_raw))
+            current_raw = settings_repo.get_value_json(_STOCK_KEY)
+            settings_repo.set_value_json(_STOCK_KEY, mutate_stock(current_raw))
         previous = result["previous"]
         new_stock = result["new"]
         if self.update_product_fields({wanted: {"on_hand": new_stock}}) <= 0:
