@@ -15,7 +15,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass, field
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -42,7 +42,7 @@ class WixSnapshotSource(Protocol):
 class WixCatalogIndexSource(Protocol):
     """Cheap paginated catalog index used to avoid per-product detail reads."""
 
-    def list_products(self, *, include_hidden: bool = True) -> list[object]: ...
+    def list_products(self, *, include_hidden: bool = True) -> Sequence[object]: ...
 
 
 @dataclass

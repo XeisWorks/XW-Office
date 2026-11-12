@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from contextlib import contextmanager
+from typing import cast
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import Table, create_engine, inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session, sessionmaker
@@ -38,31 +39,34 @@ from xw_office.models import (
     TaxFollowupDispatch,
 )
 
-_CORE_TABLES = (
-    ApiSecret.__table__,
-    CustomerAftercareCase.__table__,
-    CustomerAftercareItem.__table__,
-    ExpenseIgnoreRule.__table__,
-    ExpenseDocumentLink.__table__,
-    ExpenseDocumentScan.__table__,
-    ExpenseImportRun.__table__,
-    ExpenseMatchRule.__table__,
-    ExpensePurposeRule.__table__,
-    ExpenseProfileAssignment.__table__,
-    ExpensePosition.__table__,
-    ExpensePositionAssignment.__table__,
-    ExpensePositionRule.__table__,
-    ExpenseReviewDecision.__table__,
-    ExpenseShiftEntry.__table__,
-    ExpenseSupplierLink.__table__,
-    ExpenseTransactionSnapshot.__table__,
-    InvoiceSearchIndex.__table__,
-    PcRegistry.__table__,
-    PlcShipment.__table__,
-    PlcParcelManifest.__table__,
-    PlcTrackingEvent.__table__,
-    SettingKV.__table__,
-    TaxFollowupDispatch.__table__,
+_CORE_TABLES = cast(
+    tuple[Table, ...],
+    (
+        ApiSecret.__table__,
+        CustomerAftercareCase.__table__,
+        CustomerAftercareItem.__table__,
+        ExpenseIgnoreRule.__table__,
+        ExpenseDocumentLink.__table__,
+        ExpenseDocumentScan.__table__,
+        ExpenseImportRun.__table__,
+        ExpenseMatchRule.__table__,
+        ExpensePurposeRule.__table__,
+        ExpenseProfileAssignment.__table__,
+        ExpensePosition.__table__,
+        ExpensePositionAssignment.__table__,
+        ExpensePositionRule.__table__,
+        ExpenseReviewDecision.__table__,
+        ExpenseShiftEntry.__table__,
+        ExpenseSupplierLink.__table__,
+        ExpenseTransactionSnapshot.__table__,
+        InvoiceSearchIndex.__table__,
+        PcRegistry.__table__,
+        PlcShipment.__table__,
+        PlcParcelManifest.__table__,
+        PlcTrackingEvent.__table__,
+        SettingKV.__table__,
+        TaxFollowupDispatch.__table__,
+    ),
 )
 
 

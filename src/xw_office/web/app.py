@@ -259,6 +259,10 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
         else None
     )
 
+    def get_database_session_factory() -> sessionmaker[Session]:
+        assert _session_factory is not None  # guarded by require_product_hub_enabled
+        return _session_factory
+
     def require_product_hub_enabled() -> None:
         if _session_factory is None or not resolved.product_hub_catalog_read_enabled:
             raise HTTPException(
@@ -554,13 +558,14 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
     )
     app.include_router(
         build_inventory_count_router(
-            lambda: InventoryCountService(_session_factory), require_product_hub_edit_enabled
+            lambda: InventoryCountService(get_database_session_factory()),
+            require_product_hub_edit_enabled,
         ),
         dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
     )
     app.include_router(
         build_inventory_alert_task_router(
-            lambda: InventoryAlertTaskService(_session_factory),
+            lambda: InventoryAlertTaskService(get_database_session_factory()),
             lambda: MailDeliveryService(),
             require_product_hub_edit_enabled,
         ),
