@@ -28,7 +28,8 @@ from xw_office.services.drucke.service import OffeneDruckeService, PrintAttachme
 class OffeneDruckeDialog(QDialog):
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._service: OffeneDruckeService = container.resolve(OffeneDruckeService)
+        self._container = container
+        self._service: OffeneDruckeService | None = None
         self._cases: list[PrintCase] = []
         self._attachments: list[PrintAttachment] = []
         self._worker: BackgroundWorker | None = None
@@ -105,11 +106,15 @@ class OffeneDruckeDialog(QDialog):
             return
         self._refresh.setEnabled(False)
         self._status.setText("Aktualisiere OPEN PRINTS…")
-        worker = BackgroundWorker(
-            lambda: (
-                self._service.refresh_from_graph() if refresh else self._service.load_open_cases()
-            )
-        )
+        container = self._container
+        current_service = self._service
+
+        def job() -> tuple[OffeneDruckeService, list[PrintCase], str]:
+            service = current_service or container.resolve(OffeneDruckeService)
+            cases = service.refresh_from_graph() if refresh else service.load_open_cases()
+            return service, cases, service.last_flow_sync_error()
+
+        worker = BackgroundWorker(job)
         self._worker = worker
         worker.signals.result.connect(self._loaded)
         worker.signals.error.connect(self._load_error)
@@ -125,13 +130,18 @@ class OffeneDruckeDialog(QDialog):
     def _loaded(self, result: object) -> None:
         if self._closing:
             return
-        self._cases = result if isinstance(result, list) else []
+        if not isinstance(result, tuple) or len(result) != 3:
+            return
+        service, cases, diagnostic = result
+        if not isinstance(cases, list):
+            return
+        self._service = service
+        self._cases = cases
         self._list.clear()
         for case in self._cases:
             item = QListWidgetItem(f"{case.title}\n{case.received_at}")
             item.setData(Qt.ItemDataRole.UserRole, case.id)
             self._list.addItem(item)
-        diagnostic = self._service.last_flow_sync_error()
         self._status.setText(
             f"{len(self._cases)} offene Druckaufträge" + (f" · {diagnostic}" if diagnostic else "")
         )
@@ -159,6 +169,12 @@ class OffeneDruckeDialog(QDialog):
         row = self._list.currentRow()
         return self._cases[row] if 0 <= row < len(self._cases) else None
 
+    def _require_service(self) -> OffeneDruckeService:
+        service = self._service
+        if service is None:
+            raise RuntimeError("OPEN-PRINTS-Service ist noch nicht geladen")
+        return service
+
     def _select(self, _row: int) -> None:
         self._attachment_seq += 1
         seq = self._attachment_seq
@@ -173,7 +189,8 @@ class OffeneDruckeDialog(QDialog):
         self._open_attachment_button.setEnabled(False)
         if self._attachment_worker is not None and self._attachment_worker.isRunning():
             return
-        self._attachment_worker = BackgroundWorker(lambda: self._service.list_attachments(case.id))
+        service = self._require_service()
+        self._attachment_worker = BackgroundWorker(lambda: service.list_attachments(case.id))
         worker = self._attachment_worker
         worker.signals.result.connect(
             lambda result: self._attachments_loaded(result) if seq == self._attachment_seq else None
@@ -226,10 +243,11 @@ class OffeneDruckeDialog(QDialog):
         ):
             return
         attachment = self._attachments[row]
+        service = self._require_service()
         self._open_attachment_button.setEnabled(False)
         seq = self._attachment_seq
         self._attachment_worker = BackgroundWorker(
-            lambda: self._service.download_attachment_to_cache(
+            lambda: service.download_attachment_to_cache(
                 case.id, attachment.id, attachment.name
             )
         )
@@ -263,7 +281,8 @@ class OffeneDruckeDialog(QDialog):
         case_id = case.id
         self._done.setEnabled(False)
         self._status.setText("Markiere Druckauftrag als erledigt…")
-        worker = BackgroundWorker(lambda: self._service.mark_done(case_id, done=True))
+        service = self._require_service()
+        worker = BackgroundWorker(lambda: service.mark_done(case_id, done=True))
         self._action_worker = worker
         worker.signals.result.connect(lambda _result: self._mark_done_succeeded(case_id) if not self._closing else None)
         worker.signals.error.connect(self._mark_done_failed)

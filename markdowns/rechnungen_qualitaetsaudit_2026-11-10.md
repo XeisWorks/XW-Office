@@ -2497,3 +2497,11 @@ der die offenen Faelle laedt. Dateizuordnung, Lizenz-PDFs, Outlook-Entwurf und
 Fulfillment greifen nach dem Erstladen auf dieselbe Serviceinstanz zu. Ein
 blockierter Resolver bestaetigt den Qt-Heartbeat. Die Dialogsuite besteht mit
 **10 Tests**; Ruff und striktes MyPy sind gruen.
+
+## F17-Fortschreibung - OPEN-PRINTS-Service beim Erstladen (12.11.2026)
+
+`OffeneDruckeDialog` loest den Mailbox-Service jetzt im Listenworker auf und
+uebernimmt dessen Diagnosewert dort ebenfalls. Anhangsabruf, lokales Oeffnen und
+Erledigen verwenden danach dieselbe Serviceinstanz. Eine blockierte Servicefactory
+bestaetigt den Qt-Heartbeat; alle **4 OPEN-PRINTS-Dialogtests**, Ruff und striktes
+MyPy fuer das Dialogmodul bestehen.

@@ -12,6 +12,34 @@ from xw_office.services.drucke.service import OffeneDruckeService, PrintAttachme
 from xw_office.ui.modules.rechnungen.offene_drucke_dialog import OffeneDruckeDialog
 
 
+def test_mailbox_service_resolution_runs_off_ui_thread(qtbot: QtBot) -> None:
+    entered, release = Event(), Event()
+
+    class Mailbox:
+        def refresh_from_graph(self) -> list[PrintCase]:
+            return [PrintCase("a", "A", "", "", "graph_mail", "a")]
+
+        def last_flow_sync_error(self) -> str:
+            return ""
+
+    class SlowContainer:
+        def resolve(self, service_type: object) -> object:
+            assert service_type is OffeneDruckeService
+            entered.set()
+            release.wait(2)
+            return Mailbox()
+
+    dialog = OffeneDruckeDialog(SlowContainer())  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    beats: list[bool] = []
+    QTimer.singleShot(20, lambda: beats.append(True))
+    qtbot.waitUntil(entered.is_set, timeout=1000)
+    qtbot.waitUntil(lambda: bool(beats), timeout=1000)
+    assert "OPEN PRINTS" in dialog._status.text()  # noqa: SLF001
+    release.set()
+    qtbot.waitUntil(lambda: dialog._list.count() == 1, timeout=1000)  # noqa: SLF001
+
+
 def test_attachment_reply_matches_latest_case_after_rapid_selection(qtbot: QtBot) -> None:
     entered, release = Event(), Event()
     calls: list[str] = []
