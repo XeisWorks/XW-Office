@@ -86,6 +86,57 @@ def test_product_print_config_title_override_read_runs_off_ui_thread(qtbot: obje
     assert not dialog._title_override_note.isHidden()  # noqa: SLF001
 
 
+def test_product_print_catalog_resolution_keeps_qt_events_running(
+    qtbot: object,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    entered, release = Event(), Event()
+    pdf_path = tmp_path / "configured.pdf"
+    doc = fitz.open()
+    doc.new_page()
+    doc.save(pdf_path)
+    doc.close()
+
+    class CatalogStub:
+        def resolve_print_config(self, _sku: str, *, title: str = "") -> dict[str, object]:
+            return {"path": str(pdf_path), "profile_id": "noten_duplex", "resolved_title": title}
+
+        def resolve_product_title(self, _sku: str, title: str) -> str:
+            return title
+
+        def resolve_sku(self, _sku: str) -> Product:
+            return Product(id="p1", sku="XW-443", name="Configured Piece", print_file_path=str(pdf_path))
+
+    container = Container(AppConfig())
+    monkeypatch.setattr(print_dialog, "_check_printer_runtime", lambda *_args: True)
+
+    def load_catalog(_container: Container) -> CatalogStub:
+        entered.set()
+        assert release.wait(3)
+        return CatalogStub()
+
+    container.register(ProductCatalogService, load_catalog)  # type: ignore[arg-type,return-value]
+    piece = PieceBlock(
+        sku="XW-443",
+        name="Configured Piece",
+        qty_needed=1,
+        product=Product(id="p1", sku="XW-443", name="Configured Piece"),
+    )
+    beats: list[bool] = []
+    def heartbeat_and_release() -> None:
+        beats.append(True)
+        release.set()
+
+    QTimer.singleShot(10, heartbeat_and_release)
+    job = prepare_piece_pdf_print(None, container, piece=piece)  # type: ignore[arg-type]
+
+    assert job is not None
+    assert entered.is_set()
+    assert beats, "the Qt event loop must keep running during catalog resolution"
+    assert piece.print_file_path == pdf_path
+
+
 def test_selected_product_delegate_has_exactly_one_print_or_settings_action() -> None:
     """The row always carries a qty stepper; the single action button next
     to it must still be exclusively "print" xor "manage", never both."""

@@ -136,6 +136,39 @@ def _persist_product_print_config(
     resolve_piece_print_config(catalog, piece)
 
 
+def _resolve_piece_print_config(
+    container: Container,
+    piece: PieceBlock,
+) -> None:
+    catalog: ProductCatalogService = container.resolve(ProductCatalogService)
+    resolve_piece_print_config(catalog, piece)
+
+
+def _run_worker_with_ui_pump(
+    parent: QWidget | None,
+    fn: Callable[..., object],
+    *args: object,
+) -> tuple[object | None, Exception | None]:
+    """Wait for a worker result while continuing to service Qt events."""
+    worker = BackgroundWorker(fn, *args)
+    loop = QEventLoop(parent)
+    results: list[object] = []
+    failures: list[Exception] = []
+    worker.signals.result.connect(results.append)
+    worker.signals.error.connect(failures.append)
+    worker.signals.finished.connect(loop.quit)
+    parent_enabled = parent.isEnabled() if parent is not None else True
+    if parent is not None:
+        parent.setEnabled(False)
+    try:
+        worker.start()
+        loop.exec()
+    finally:
+        if parent is not None:
+            parent.setEnabled(parent_enabled)
+    return (results[0] if results else None, failures[0] if failures else None)
+
+
 def _selected_manual_pdf_pages(
     page_count: int,
     *,
@@ -928,10 +961,15 @@ def run_music_pdf_print(parent: QWidget, container: Container) -> None:
 
 
 def _configure_missing_piece_print(parent: QWidget, container: Container, piece: PieceBlock) -> bool:
-    try:
-        resolve_piece_print_config(container.resolve(ProductCatalogService), piece)
-    except KeyError:
-        pass
+    _result, failure = _run_worker_with_ui_pump(
+        parent,
+        _resolve_piece_print_config,
+        container,
+        piece,
+    )
+    if failure is not None and not isinstance(failure, KeyError):
+        logger.error("Product print config lookup failed for %s: %s", piece.sku, failure)
+        return False
     dialog = ProductPrintConfigDialog(parent, container, piece)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return False
@@ -942,32 +980,20 @@ def _configure_missing_piece_print(parent: QWidget, container: Container, piece:
     except KeyError:
         signals = None
 
-    worker = BackgroundWorker(
-        _persist_product_print_config,
-        container,
-        piece,
-        path,
-        profile_id,
-        plan,
-    )
-    loop = QEventLoop(parent)
-    failures: list[Exception] = []
-    worker.signals.error.connect(failures.append)
-    worker.signals.finished.connect(loop.quit)
-    parent_enabled = parent.isEnabled() if parent is not None else True
-    if parent is not None:
-        parent.setEnabled(False)
     try:
-        worker.start()
-        loop.exec()
+        _result, failure = _run_worker_with_ui_pump(
+            parent,
+            _persist_product_print_config,
+            container,
+            piece,
+            path,
+            profile_id,
+            plan,
+        )
     except Exception as exc:  # noqa: BLE001 - persistence failure must keep printing closed.
-        failures.append(exc)
-    finally:
-        if parent is not None:
-            parent.setEnabled(parent_enabled)
+        failure = exc
 
-    if failures:
-        failure = failures[0]
+    if failure is not None:
         logger.error("Product print config save failed for %s: %s", piece.sku, failure)
         if signals is not None:
             signals.task_error.emit("Druckkonfiguration", str(failure))
@@ -991,10 +1017,14 @@ def prepare_piece_pdf_print(
     if not _check_printer_runtime(parent, container):
         return None
 
-    try:
-        resolve_piece_print_config(container.resolve(ProductCatalogService), piece)
-    except KeyError:
-        pass
+    _result, failure = _run_worker_with_ui_pump(
+        parent,
+        _resolve_piece_print_config,
+        container,
+        piece,
+    )
+    if failure is not None and not isinstance(failure, KeyError):
+        raise failure
 
     if not piece.has_direct_print_config and not _configure_missing_piece_print(parent, container, piece):
         return None
