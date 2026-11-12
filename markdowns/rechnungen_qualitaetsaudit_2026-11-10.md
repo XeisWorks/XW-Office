@@ -2681,10 +2681,13 @@ sind ebenfalls online. Die Health-Uebersicht zaehlt 135 historische Product-Hub-
 und 7 Inventory-Worker-Fehldeployments in den letzten 72 Stunden, aber keine
 Fehler seit den aktuellen erfolgreichen Deployments. Ein ausgelesener Product-Hub-
 Fehllauf vom 11.11. scheiterte am fehlenden `stdnum`; der spaetere erfolgreiche
-Stand enthaelt die Abhaengigkeit. Keine Railway-Konfiguration oder Produktivdaten
-wurden geaendert. In den XW-Office-Deploydateien ist keine Cloudflare-Anbindung
-gefunden; die verfuegbare Cloudflare-Integration bezieht sich auf ChatGPT-Sites
-und ist fuer dieses native Rechnungsmodul nicht anwendbar.
+Stand enthaelt die Abhaengigkeit. Bei diesem damaligen Check wurden keine Railway-
+Konfigurationen oder Produktivdaten geaendert. Die Codebase enthaelt jedoch eine
+Cloudflare-R2-Anbindung in `services/product_hub/r2_storage.py`; sie wird nur von
+`ProductAssetJobService` fuer private Product-Hub-Assets genutzt. Es gibt keine
+Import-/Aufrufkante aus `ui/modules/rechnungen` oder deren Rechnungsservices, daher
+ist R2 derzeit keine Rechnungs-Schnittstelle. Der Sites-Cloudflare-Connector ist
+davon getrennt.
 
 ## F17-Fortschreibung - Nachlieferungs-Tab-Serviceaufloesungen (12.11.2026)
 
@@ -3920,3 +3923,35 @@ Railway XW-Office production wurde anschliessend read-only geprueft: `XW-Product
 und `xw-inventory-worker` laufen auf `c36275b` mit Status `SUCCESS`; es gibt keine
 gestagten Aenderungen. Beide PostgreSQL-Dienste melden ebenfalls `SUCCESS` und
 wurden bei dieser Pruefung nicht beschrieben.
+
+### G2-Fortschreibung - isolierter PITR-Backup-/Restore-Drill (12.11.2026)
+
+Die fruehere Annahme, Railway-Backups seien im Hobby-Plan nicht verfuegbar, ist
+ueberholt: Die aktuelle Railway-Dokumentation beschreibt manuelle und geplante
+Volume-Backups sowie PostgreSQL-PITR ([Backups](https://docs.railway.com/volumes/backups),
+[PITR](https://docs.railway.com/volumes/point-in-time-recovery)). Die zwei XW-Office-
+Produktions-Postgresdienste melden aktuell `enabled=false`, `bucketWired=false`;
+`pgBackRest info --output=json` liefert bei beiden `[]`. Produktions-PITR oder
+Volume-Backups wurden nicht aktiviert und die Produktionsdatenbanken blieben
+unbeschrieben. Die Railway-GraphQL-Abfrage liefert fuer beide Volume-Instanzen
+auch `volumeInstanceBackupList=[]` und `volumeInstanceBackupScheduleList=[]`.
+
+Ausschliesslich im separaten Projekt `XW-Flow-Restore-Drill` wurde PITR aktiviert.
+Der Archiver meldet gesund und zwei gueltige Full-Backup-Sets sind vorhanden;
+das erste manuelle Full-Backup `20261112-175046F` umfasste 83,7 MB (pgBackRest-
+Komprimierung). Der Railway-CLI-Aufruf zum On-Demand-Backup schlug zunaechst mit
+einem generischen GraphQL-Fehler fehl; nach dem automatischen Backup-Lock-Retry
+bestand der direkte pgBackRest-Lauf erfolgreich. Der native PITR-Restore wurde
+fuer `2026-11-12T17:53:19Z` in den neuen Service `audit-drill-restore-20261112`
+gestartet und waehlte Backup `20261112-175046F`. Railway meldet den Restore-Service
+`SUCCESS`; die Logs bestaetigen die ausgewaehlte Backup-ID, `archive recovery
+complete` und `database system is ready to accept connections`; das konfigurierte
+Recovery-Ziel war ebenfalls im Service-Log ausgewiesen.
+`pg_is_in_recovery()` liefert nach der Promotion `false`. Der Quellservice wurde
+nicht umgeschaltet.
+
+Damit sind isolierter Backup- und Restore-Pfad belegt. G2 bleibt dennoch offen:
+Produktionsdatenbanken haben keinen aktivierten Backup-/PITR-Schutz, und echte
+Zwei-App-Instanz-Recovery, Inventur, Shadow-/Drift-Bereinigung, Providerprojektionen
+und Cutover-/Rollback-Sign-off sind nicht erledigt. Produktions-PITR nicht ohne
+ausdrueckliche Freigabe aktivieren.
