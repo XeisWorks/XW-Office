@@ -13,6 +13,7 @@ import threading
 import unicodedata
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -357,6 +358,7 @@ class ProductCatalogService:
         prefer_hub: bool = False,
     ) -> None:
         self._settings_repo = settings_repo
+        self._settings_revision: datetime | None = None
         self._hub_client = hub_client
         self._prefer_hub = prefer_hub and hub_client is not None
         # In-memory cache: canonical SKU -> Product
@@ -1132,12 +1134,37 @@ class ProductCatalogService:
         self._unreleased_pdf_cache.clear()
         if self._settings_repo is None:
             return
-        raw = self._settings_repo.get_value_json("inventory.products")
+        read_versioned = getattr(self._settings_repo, "get_value_json_with_updated_at", None)
+        if callable(read_versioned):
+            raw, self._settings_revision = read_versioned("inventory.products")
+        else:
+            raw = self._settings_repo.get_value_json("inventory.products")
+            self._settings_revision = None
+        self._load_settings_products(raw)
+
+    def reload_from_settings_if_changed(self) -> bool:
+        """Refresh the shared product cache when another PC changed its SettingKV row."""
+        if self._settings_repo is None:
+            return False
+        read_versioned = getattr(self._settings_repo, "get_value_json_with_updated_at", None)
+        if not callable(read_versioned):
+            self.reload_from_settings()
+            return True
+        raw, revision = read_versioned("inventory.products")
+        if revision == self._settings_revision:
+            return False
+        self._settings_revision = revision
+        self._unreleased_pdf_cache.clear()
+        self._load_settings_products(raw)
+        return True
+
+    def _load_settings_products(self, raw: str | None) -> None:
         if not raw:
+            self._by_sku.clear()
+            self._alias_map.clear()
+            self._direct_print_config.clear()
             return
         try:
-            import json
-
             data = json.loads(raw)
         except Exception:
             return

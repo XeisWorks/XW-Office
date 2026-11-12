@@ -140,8 +140,12 @@ def _persist_product_print_config(
 def _resolve_piece_print_config(
     container: Container,
     piece: PieceBlock,
+    refresh_shared_settings: bool = True,
 ) -> None:
     catalog: ProductCatalogService = container.resolve(ProductCatalogService)
+    refresh = getattr(catalog, "reload_from_settings_if_changed", None)
+    if refresh_shared_settings and callable(refresh):
+        refresh()
     resolve_piece_print_config(catalog, piece)
 
 
@@ -150,26 +154,34 @@ def warmed_product_catalog_for_print(
     parent: QWidget | None,
     container: Container,
     pieces: list[PieceBlock],
-) -> Iterator[None]:
-    """Warm all Hub product snapshots once for a multi-piece print action."""
+) -> Iterator[bool]:
+    """Refresh shared settings and warm all Hub snapshots once per print action."""
     try:
         catalog = container.resolve(ProductCatalogService)
     except Exception as exc:  # noqa: BLE001 - legacy catalog fallback remains usable.
         logger.debug("Product print batch catalog unavailable: %s", exc)
-        yield
+        yield False
         return
 
     _result, failure = _run_worker_with_ui_pump(
         parent,
-        catalog.warm_hub_products,
+        _refresh_and_warm_product_catalog,
+        catalog,
         [piece.sku for piece in pieces],
     )
     if failure is not None:
         logger.debug("Product print batch catalog warmup failed: %s", failure)
     try:
-        yield
+        yield failure is None
     finally:
         catalog.clear_warmed_hub_products()
+
+
+def _refresh_and_warm_product_catalog(catalog: ProductCatalogService, skus: list[str]) -> None:
+    refresh = getattr(catalog, "reload_from_settings_if_changed", None)
+    if callable(refresh):
+        refresh()
+    catalog.warm_hub_products(skus)
 
 
 def _run_worker_with_ui_pump(
@@ -1040,6 +1052,7 @@ def prepare_piece_pdf_print(
     piece: PieceBlock,
     copies: int = 1,
     wait: bool = False,
+    catalog_settings_refreshed: bool = False,
 ) -> Callable[[], None] | None:
     """Validate one product print and return the blocking print job."""
     if not _check_printer_runtime(parent, container):
@@ -1050,6 +1063,7 @@ def prepare_piece_pdf_print(
         _resolve_piece_print_config,
         container,
         piece,
+        not catalog_settings_refreshed,
     )
     if failure is not None and not isinstance(failure, KeyError):
         raise failure

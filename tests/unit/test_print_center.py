@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
 import time
 from unittest.mock import MagicMock
@@ -125,6 +126,24 @@ def test_storage_is_additive_and_idempotent(sessions: sessionmaker[Session]) -> 
     provision_storage(engine)
     assert inspect(engine).has_table("article")
     assert not OwnArticle.__table__.foreign_keys
+
+
+def test_setting_kv_value_and_revision_are_read_together(sessions: sessionmaker[Session]) -> None:
+    repository = SettingKvRepository(sessions)
+    original_value, original_revision = repository.get_value_json_with_updated_at("inventory.products")
+    assert original_value == "[]"
+    assert original_revision is not None
+
+    with sessions.begin() as session:
+        setting = session.get(SettingKV, "inventory.products")
+        assert setting is not None
+        setting.value_json = '[{"sku":"REVISION-2"}]'
+        setting.updated_at = original_revision + timedelta(seconds=1)
+
+    changed_value, changed_revision = repository.get_value_json_with_updated_at("inventory.products")
+    assert changed_value == '[{"sku":"REVISION-2"}]'
+    assert changed_revision is not None
+    assert changed_revision != original_revision
 
 
 def test_print_center_settings_writer_is_limited_to_product_print_config(

@@ -2512,7 +2512,15 @@ def test_print_all_products_button_prints_displayed_quantities(qtbot: object, mo
     def fake_piece(item: PrintProductAggregate) -> PieceBlock:
         return PieceBlock(sku=str(item.sku), name=str(item.title), qty_needed=int(item.quantity))
 
-    def fake_prepare(_parent: object, _container: object, *, piece: PieceBlock, copies: int, wait: bool = False):
+    def fake_prepare(
+        _parent: object,
+        _container: object,
+        *,
+        piece: PieceBlock,
+        copies: int,
+        wait: bool = False,
+        catalog_settings_refreshed: bool = False,
+    ):
         prepared.append((piece.sku, copies, wait))
 
         def job() -> None:
@@ -2564,7 +2572,7 @@ def test_print_all_products_uses_adjusted_open_quantities(qtbot: object, monkeyp
     )
     monkeypatch.setattr(
         "xw_office.ui.modules.rechnungen.print_dialog.prepare_piece_pdf_print",
-        lambda _parent, _container, *, piece, copies, wait=False: (
+        lambda _parent, _container, *, piece, copies, wait=False, catalog_settings_refreshed=False: (
             lambda: printed.append(f"{piece.sku}:{copies}:{wait}")
         ),
     )
@@ -2706,7 +2714,7 @@ def test_print_selected_products_skips_unchecked_rows(qtbot: object, monkeypatch
     )
     monkeypatch.setattr(
         "xw_office.ui.modules.rechnungen.print_dialog.prepare_piece_pdf_print",
-        lambda _parent, _container, *, piece, copies, wait=False: (
+        lambda _parent, _container, *, piece, copies, wait=False, catalog_settings_refreshed=False: (
             lambda: printed.append(f"{piece.sku}:{copies}:{wait}")
         ),
     )
@@ -2757,7 +2765,15 @@ def test_individual_product_print_clicks_are_queued_without_blocking_each_other(
     heartbeat_timer.start()
     caplog.set_level("INFO", logger="xw_office.ui.modules.rechnungen.view")  # type: ignore[attr-defined]
 
-    def fake_prepare(_parent: object, _container: object, *, piece: PieceBlock, copies: int, wait: bool = False):
+    def fake_prepare(
+        _parent: object,
+        _container: object,
+        *,
+        piece: PieceBlock,
+        copies: int,
+        wait: bool = False,
+        catalog_settings_refreshed: bool = False,
+    ):
         def job() -> None:
             started.append(piece.sku)
             release.wait(timeout=2)
@@ -2806,7 +2822,15 @@ def test_individual_product_print_rejects_duplicate_active_sku(
     prepared: list[str] = []
     accepted: list[str] = []
 
-    def fake_prepare(_parent: object, _container: object, *, piece: PieceBlock, copies: int, wait: bool = False):
+    def fake_prepare(
+        _parent: object,
+        _container: object,
+        *,
+        piece: PieceBlock,
+        copies: int,
+        wait: bool = False,
+        catalog_settings_refreshed: bool = False,
+    ):
         prepared.append(piece.sku)
 
         def job() -> None:
@@ -2850,7 +2874,15 @@ def test_product_print_partial_failure_books_completed_copies(qtbot: object, mon
     qtbot.addWidget(view)
     view._on_printer_status(True)  # noqa: SLF001
 
-    def fake_prepare(_parent: object, _container: object, *, piece: PieceBlock, copies: int, wait: bool = False):
+    def fake_prepare(
+        _parent: object,
+        _container: object,
+        *,
+        piece: PieceBlock,
+        copies: int,
+        wait: bool = False,
+        catalog_settings_refreshed: bool = False,
+    ):
         def job() -> None:
             raise PrintPlanPartialFailure("Drucker offline", completed_copies=2, job_ids=["a", "b"])
 
@@ -3007,7 +3039,15 @@ def test_print_all_products_warns_before_reprint(qtbot: object, monkeypatch: obj
         lambda item: PieceBlock(sku=str(item.sku), name=str(item.title), qty_needed=int(item.quantity)),
     )
 
-    def fake_prepare(_parent: object, _container: object, *, piece: PieceBlock, copies: int, wait: bool = False):
+    def fake_prepare(
+        _parent: object,
+        _container: object,
+        *,
+        piece: PieceBlock,
+        copies: int,
+        wait: bool = False,
+        catalog_settings_refreshed: bool = False,
+    ):
         def job() -> None:
             print_calls.append(f"{piece.sku}:{copies}:{wait}")
 

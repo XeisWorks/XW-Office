@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import cast
 
 from xw_office.services.products.catalog import Product, ProductCatalogService
@@ -19,6 +20,34 @@ class _RepoStub:
 
     def get_value_json(self, key: str) -> str | None:
         return self._data.get(key)
+
+
+def test_catalog_reloads_shared_product_settings_when_revision_changes() -> None:
+    class VersionedRepo(_RepoStub):
+        def __init__(self, data: dict[str, str]) -> None:
+            super().__init__(data)
+            self.revision = datetime(2026, 11, 1, tzinfo=timezone.utc)
+
+        def get_value_json_with_updated_at(self, key: str) -> tuple[str | None, datetime]:
+            return self.get_value_json(key), self.revision
+
+    def product(path: str) -> str:
+        return json.dumps(
+            [{"sku": "SKU-REV", "name": "Revision test", "print_file_path": path,
+              "print_profile_id": "noten_duplex"}]
+        )
+
+    repo = VersionedRepo({"inventory.products": product("C:/old.pdf")})
+    catalog = ProductCatalogService(repo)  # type: ignore[arg-type]
+    assert catalog.resolve_print_config("SKU-REV")["path"] == "C:/old.pdf"
+    assert not catalog.reload_from_settings_if_changed()
+
+    repo._data["inventory.products"] = product("C:/new.pdf")
+    repo.revision = datetime(2026, 11, 2, tzinfo=timezone.utc)
+
+    assert catalog.reload_from_settings_if_changed()
+    assert catalog.resolve_print_config("SKU-REV")["path"] == "C:/new.pdf"
+    assert not catalog.reload_from_settings_if_changed()
 
 
 class _PartClientStub:

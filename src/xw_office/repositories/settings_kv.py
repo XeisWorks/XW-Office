@@ -1,6 +1,7 @@
 """Key-value settings in PostgreSQL."""
 from __future__ import annotations
 
+import datetime
 from contextlib import contextmanager
 from collections.abc import Callable, Generator
 
@@ -29,6 +30,14 @@ class SettingKvRepository:
         with self._scope() as session:
             row = session.get(SettingKV, key)
             return None if row is None else row.value_json
+
+    def get_value_json_with_updated_at(
+        self, key: str
+    ) -> tuple[str | None, datetime.datetime | None]:
+        """Read a setting payload and its shared revision in one database round trip."""
+        with self._scope() as session:
+            row = session.get(SettingKV, key)
+            return (None, None) if row is None else (row.value_json, row.updated_at)
 
     def get_values_json(self, keys: list[str] | tuple[str, ...]) -> dict[str, str]:
         """Read several settings in one query and one database round trip."""

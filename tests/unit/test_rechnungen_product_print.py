@@ -62,8 +62,13 @@ def test_multi_piece_print_warms_hub_catalog_once_off_ui_thread(qtbot: object) -
     container = Container(AppConfig())
     calls: list[tuple[list[str], int]] = []
     clears: list[int] = []
+    revisions: list[int] = []
 
     class CatalogStub:
+        def reload_from_settings_if_changed(self) -> bool:
+            revisions.append(get_ident())
+            return True
+
         def warm_hub_products(self, skus: list[str]) -> None:
             calls.append((skus, get_ident()))
 
@@ -76,12 +81,14 @@ def test_multi_piece_print_warms_hub_catalog_once_off_ui_thread(qtbot: object) -
         PieceBlock(sku="XW-2", name="Two", qty_needed=1),
     ]
 
-    with warmed_product_catalog_for_print(None, container, pieces):
+    with warmed_product_catalog_for_print(None, container, pieces) as catalog_settings_refreshed:
+        assert catalog_settings_refreshed
         assert not clears
 
     assert len(calls) == 1
     assert calls[0][0] == ["XW-1", "XW-2"]
     assert calls[0][1] != main_thread().ident
+    assert revisions == [calls[0][1]]
     assert len(clears) == 1
 
 

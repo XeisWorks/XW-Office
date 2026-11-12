@@ -4557,7 +4557,7 @@ class RechnungenView(QWidget):
 
         prepared_jobs: list[tuple[PieceBlock, int, Callable[[], None]]] = []
         pieces = [self._piece_block_from_open_product(item) for item in products]
-        with warmed_product_catalog_for_print(self, self._container, pieces):
+        with warmed_product_catalog_for_print(self, self._container, pieces) as catalog_settings_refreshed:
             for item, block in zip(products, pieces, strict=True):
                 # This quantity is explicitly visible and editable in the panel.
                 # Inventory hints must not recalculate or veto it at print time.
@@ -4575,7 +4575,14 @@ class RechnungenView(QWidget):
                         8000,
                     )
                     return
-                job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty, wait=True)
+                job = prepare_piece_pdf_print(
+                    self,
+                    self._container,
+                    piece=block,
+                    copies=qty,
+                    wait=True,
+                    catalog_settings_refreshed=catalog_settings_refreshed,
+                )
                 if job is None:
                     signals = self._container.resolve(AppSignals)
                     signals.status_message.emit(
@@ -5763,13 +5770,19 @@ class RechnungenView(QWidget):
             self,
             self._container,
             [block for block, _qty, _selected in selected_rows],
-        ):
+        ) as catalog_settings_refreshed:
             for block, qty, _selected_for_print in selected_rows:
                 qty = max(1, int(qty or self._default_piece_print_qty(block)))
                 if not block.has_direct_print_config:
                     skipped.append(block.sku)
                     continue
-                job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty)
+                job = prepare_piece_pdf_print(
+                    self,
+                    self._container,
+                    piece=block,
+                    copies=qty,
+                    catalog_settings_refreshed=catalog_settings_refreshed,
+                )
                 if job is None:
                     skipped.append(block.sku)
                     continue
