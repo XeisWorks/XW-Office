@@ -573,11 +573,10 @@ class CustomerAftercareTab(QWidget):
         if request is None:
             return
         dispatch_id, address, products, note = request
-        sendungen: OffeneSendungenService = self._container.resolve(OffeneSendungenService)  # type: ignore[attr-defined]
         self._run_dispatch_action(
             self._btn_delivery_show,
             "Erstelle…",
-            lambda: sendungen.generate_delivery_note_pdf(
+            lambda: self._container.resolve(OffeneSendungenService).generate_delivery_note_pdf(  # type: ignore[attr-defined]
                 dispatch_id, address_lines=address, products=products, short_note=note
             ),
             lambda path: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))),
@@ -588,9 +587,11 @@ class CustomerAftercareTab(QWidget):
         if request is None:
             return
         dispatch_id, address, products, note = request
-        sendungen: OffeneSendungenService = self._container.resolve(OffeneSendungenService)  # type: ignore[attr-defined]
 
         def job() -> Path:
+            sendungen: OffeneSendungenService = self._container.resolve(  # type: ignore[attr-defined]
+                OffeneSendungenService
+            )
             path = sendungen.generate_delivery_note_pdf(
                 dispatch_id, address_lines=address, products=products, short_note=note
             )
@@ -615,9 +616,11 @@ class CustomerAftercareTab(QWidget):
         if request is None:
             return
         dispatch_id, address, products, note = request
-        sendungen: OffeneSendungenService = self._container.resolve(OffeneSendungenService)  # type: ignore[attr-defined]
 
         def job() -> bool:
+            sendungen: OffeneSendungenService = self._container.resolve(  # type: ignore[attr-defined]
+                OffeneSendungenService
+            )
             sendungen.save_manual_fields(
                 dispatch_id, address_lines=address, products=products, manual_text=note
             )
@@ -657,9 +660,12 @@ class CustomerAftercareTab(QWidget):
         if outcome is None:
             return
         case_id = case.id
-        repo: CustomerAftercareRepository = self._container.resolve(CustomerAftercareRepository)  # type: ignore[attr-defined]
+        container = self._container
 
         def save() -> object:
+            repo: CustomerAftercareRepository = container.resolve(  # type: ignore[attr-defined]
+                CustomerAftercareRepository
+            )
             repo.replace_items(case_id, outcome.items)
             repo.update_case_details(
                 case_id,

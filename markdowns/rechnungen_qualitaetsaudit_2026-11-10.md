@@ -96,7 +96,7 @@ und Signalverdrahtungen stehen vollständig in Anhang A.
 | OPEN PRINTS | Graph/Flow-Liste -> Anhaenge -> lokalen Download oeffnen -> erledigt | F07 verhindert Uebernahme alter Anhangslisten; Laden, Download und Erledigen laufen asynchron, F17 |
 | Offene Ueberweisungen | Maildetail -> Zahlungsformular -> QR/PDF -> verschieben/Outlook erledigt | Bedeutet keine Bankueberweisung; Rechnungsauswahl und PDF-Download asynchron, F17 |
 | Digitale Lieferung | Bezahlte Lizenzfälle → fehlende PDF zuordnen → personalisieren → Sichtkontrolle → Outlook-Entwurf → manuellen Versand bestätigen → Wix-Abschluss | F04 bindet Dateien/Entwurf an denselben Fall; keine automatische Mailfreigabe |
-| Lageralarme | Badge → Liste/Ist/Schwelle/Forecast → Fixwert/Automatik → manuelle Task-Mail | F03 dauerhafte Claim-/Unklar-Semantik; F06 asynchroner Badge; Popup-I/O noch F17 |
+| Lageralarme | Badge → Liste/Ist/Schwelle/Forecast → Fixwert/Automatik → manuelle Task-Mail | F03 dauerhafte Claim-/Unklar-Semantik; F06 asynchroner Badge; Lageralarm-Detail und -Aktionen im Worker; weitere I/O-Pfade F17 |
 | Nachlieferungen / Betreuung | Review/Manager/Tab → Rollen/Mengen/Adresse/Snooze/sofort/erledigt/storniert → optional Zusatzrechnung | Klare Fallzustände, Originalbeleg und nicht verrechnete Nachlieferung erhalten; Mehrschritttransaktionen prüfen |
 | Käufernotizen | Jede Notiz lesen, Lieferschein vormerken, digital bestätigen oder Datensatz überspringen → START fortsetzen | Unvollständige Bestätigung sperrt Fortsetzen; Cancel beendet Vorprüfung |
 | Stornos & Gutschriften | Flow-Statusliste → finales Gutschrift-PDF / bestätigte Kundenmail | Erstellung erfolgt laut UI ausschließlich in Wix; kein neuer Storno-Button hinzuerfunden; F12/F17 |
@@ -2649,3 +2649,17 @@ Stand enthaelt die Abhaengigkeit. Keine Railway-Konfiguration oder Produktivdate
 wurden geaendert. In den XW-Office-Deploydateien ist keine Cloudflare-Anbindung
 gefunden; die verfuegbare Cloudflare-Integration bezieht sich auf ChatGPT-Sites
 und ist fuer dieses native Rechnungsmodul nicht anwendbar.
+
+## F17-Fortschreibung - Nachlieferungs-Tab-Serviceaufloesungen (12.11.2026)
+
+Im eingebetteten Nachlieferungs-Tab wurden `OffeneSendungenService` vor dem
+Workerstart fuer Lieferschein-Anzeige, Lieferscheindruck und Labeldruck sowie das
+`CustomerAftercareRepository` vor dem Workerstart beim Speichern einer manuellen
+Nachlieferung aufgeloest. Alle vier Aufloesungen liegen jetzt in den jeweiligen
+Aktionsworkern. Eine blockierte Servicefactory beim Anzeigen eines Lieferscheins
+belegt den weiterlaufenden Qt-Eventloop und die verzugsfreie PDF-Oeffnung nach
+Freigabe. `test_customer_aftercare_manager_dialog.py`: **16 Tests bestanden**;
+striktes MyPy fuer `customer_aftercare_tab.py` und globales Ruff sind gruen. Die
+Vollsuite besteht mit **2.277 Tests, 5 optionalen PostgreSQL-Ueberspringungen und
+1 bestehenden Starlette/httpx-Deprecation-Warnung (151,00 s)**. F17 bleibt offen,
+bis die restlichen UI-I/O- und Lifecycle-Pfade geprueft sind.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from threading import Event, get_ident
 
 from PySide6.QtCore import QTimer
@@ -290,6 +291,50 @@ def test_redelivery_tab_print_request_uses_confirmed_items_and_address(qtbot: ob
     assert tab._btn_label_print.isEnabled()  # noqa: SLF001
     assert service.read_threads
     assert all(thread_id != get_ident() for thread_id in service.read_threads)
+
+
+def test_redelivery_note_service_resolution_runs_off_ui_thread(
+    qtbot: object, monkeypatch: object, tmp_path: Path
+) -> None:
+    service = _FakeService()
+    service.case.status = "TRIGGERED"
+    service.case.dispatch_id = f"nachlieferung-{service.case_id}"
+    service.case.address_lines_json = '["Musikhaus Mueller", "Hauptstrasse 1", "1010 Wien"]'
+    service.case.note = "Kostenlose Nachlieferung"
+    generated = tmp_path / "delivery-note.pdf"
+    generated.write_bytes(b"%PDF-1.7")
+    sendungen = _FakeOffeneSendungenService()
+    sendungen.generate_delivery_note_pdf = lambda *_args, **_kwargs: generated  # type: ignore[attr-defined,method-assign]
+    entered, release = Event(), Event()
+
+    class SlowContainer(_FakeContainer):
+        def resolve(self, typ: object) -> object:
+            if typ is OffeneSendungenService:
+                entered.set()
+                release.wait(timeout=3)
+            return super().resolve(typ)
+
+    container = SlowContainer(service, sendungen)
+    opened: list[Path] = []
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.customer_aftercare_tab.QDesktopServices.openUrl",
+        lambda url: opened.append(Path(url.toLocalFile())),
+    )
+    tab = CustomerAftercareTab(container)  # type: ignore[arg-type]
+    qtbot.addWidget(tab)
+    qtbot.waitUntil(lambda: tab._items_loaded_case_id == str(service.case_id), timeout=3000)  # noqa: SLF001
+    beats: list[bool] = []
+    QTimer.singleShot(20, lambda: beats.append(True))
+
+    tab._show_delivery_note()  # noqa: SLF001
+
+    qtbot.waitUntil(entered.is_set, timeout=1000)
+    qtbot.waitUntil(lambda: bool(beats), timeout=1000)
+    assert tab._dispatch_worker is not None  # noqa: SLF001
+    assert opened == []
+    release.set()
+    qtbot.waitUntil(lambda: tab._dispatch_worker is None, timeout=2000)  # noqa: SLF001
+    assert opened == [generated]
 
 
 def test_embedded_tab_service_resolution_runs_off_ui_thread(qtbot: object) -> None:
