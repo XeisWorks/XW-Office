@@ -2529,3 +2529,11 @@ uebernimmt dessen Diagnosewert dort ebenfalls. Anhangsabruf, lokales Oeffnen und
 Erledigen verwenden danach dieselbe Serviceinstanz. Eine blockierte Servicefactory
 bestaetigt den Qt-Heartbeat; alle **4 OPEN-PRINTS-Dialogtests**, Ruff und striktes
 MyPy fuer das Dialogmodul bestehen.
+
+## F17-Fortschreibung - eingebetteter Nachlieferungs-Tab (12.11.2026)
+
+`CustomerAftercareTab` loest den Aftercare-Service jetzt beim ersten Listenabruf
+im Worker auf; Positionen und Fallaktionen verwenden danach dieselbe Instanz.
+Das beseitigt die Servicefactory aus dem Rechnungsansicht-Aufbau. Eine blockierte
+Factory bestaetigt den Qt-Heartbeat. Die gemeinsame Manager-/Tab-Suite besteht
+mit **15 Tests**; Ruff und striktes MyPy fuer den Tab sind gruen.

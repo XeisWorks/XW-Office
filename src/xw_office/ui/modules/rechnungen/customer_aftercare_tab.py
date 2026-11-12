@@ -59,7 +59,7 @@ class CustomerAftercareTab(QWidget):
         self._ui_alive = True
         self.destroyed.connect(lambda *_args: setattr(self, "_ui_alive", False))
         self._container = container
-        self._service: CustomerAftercareService = container.resolve(CustomerAftercareService)  # type: ignore[attr-defined]
+        self._service: CustomerAftercareService | None = None
         self._cases: list[CustomerAftercareCase] = []
         self._items: list[CustomerAftercareItem] = []
         self._items_loaded_case_id = ""
@@ -167,7 +167,16 @@ class CustomerAftercareTab(QWidget):
         self._refresh_button.setEnabled(False)
         self._count.setText("Lade Nachlieferungen…")
 
-        worker = BackgroundWorker(lambda: self._service.list_cases_for_filter("alle"))
+        container = self._container
+        current_service = self._service
+
+        def job() -> tuple[CustomerAftercareService, list[CustomerAftercareCase]]:
+            service: CustomerAftercareService = current_service or container.resolve(  # type: ignore[attr-defined]
+                CustomerAftercareService
+            )
+            return service, service.list_cases_for_filter("alle")
+
+        worker = BackgroundWorker(job)
         worker.signals.result.connect(
             lambda payload: self._on_cases_loaded(payload, selected_id)
             if self._ui_alive
@@ -195,14 +204,20 @@ class CustomerAftercareTab(QWidget):
     def _on_cases_loaded(self, payload: object, selected_id: str) -> None:
         if not self._ui_alive:
             return
-        if not isinstance(payload, list) or not all(
-            isinstance(case, CustomerAftercareCase) for case in payload
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            self._count.setText("Fehler: unerwartete Nachlieferungsdaten")
+            self._set_case_actions_enabled(False)
+            return
+        service, cases = payload
+        if not isinstance(cases, list) or not all(
+            isinstance(case, CustomerAftercareCase) for case in cases
         ):
             self._count.setText("Fehler: unerwartete Nachlieferungsdaten")
             logger.error("Aftercare list worker returned invalid payload: %s", type(payload).__name__)
             self._set_case_actions_enabled(False)
             return
-        self._cases = payload
+        self._service = service
+        self._cases = cases
         self._list.clear()
         selected_row = -1
         for row, case in enumerate(self._cases):
@@ -237,6 +252,12 @@ class CustomerAftercareTab(QWidget):
         worker.signals.finished.connect(
             lambda current=worker: self._forget_read_worker(current)
         )
+
+    def _require_service(self) -> CustomerAftercareService:
+        service = self._service
+        if service is None:
+            raise RuntimeError("Lieferkorrektur-Service ist noch nicht geladen")
+        return service
 
     def _forget_read_worker(self, worker: BackgroundWorker) -> None:
         if worker in self._read_workers:
@@ -348,7 +369,8 @@ class CustomerAftercareTab(QWidget):
         )
         self._update_dispatch_actions(case)
         case_id = case.id
-        worker = BackgroundWorker(lambda: self._service.get_items(case_id))
+        service = self._require_service()
+        worker = BackgroundWorker(lambda: service.get_items(case_id))
         worker.signals.result.connect(
             lambda payload, selected_case_id=str(case_id), current_seq=seq: self._on_items_loaded(
                 selected_case_id, current_seq, payload
@@ -646,7 +668,7 @@ class CustomerAftercareTab(QWidget):
                 address_source="manual",
                 shipping_mode=outcome.shipping_mode,
             )
-            return self._service.confirm_manual_redelivery(
+            return self._require_service().confirm_manual_redelivery(
                 case_id, shipping_mode=outcome.shipping_mode, note=outcome.note
             )
 
@@ -694,7 +716,7 @@ class CustomerAftercareTab(QWidget):
         case_id = case.id
         self._run_case_action(
             "Snooze wird gespeichert…",
-            lambda: self._service.snooze_case(
+            lambda: self._require_service().snooze_case(
                 case_id, mode=mode, until=until, reason=reason
             ),
         )
@@ -743,7 +765,7 @@ class CustomerAftercareTab(QWidget):
             case_id = case.id
             self._run_case_action(
                 "Nachlieferung wird ausgelöst…",
-                lambda: self._service.make_immediate(case_id),
+                lambda: self._require_service().make_immediate(case_id),
             )
 
     def _resolve(self) -> None:
@@ -752,7 +774,7 @@ class CustomerAftercareTab(QWidget):
             case_id = case.id
             self._run_case_action(
                 "Erledigung wird gespeichert…",
-                lambda: self._service.mark_resolved(case_id),
+                lambda: self._require_service().mark_resolved(case_id),
             )
 
     def _cancel(self) -> None:
@@ -761,5 +783,5 @@ class CustomerAftercareTab(QWidget):
             case_id = case.id
             self._run_case_action(
                 "Stornierung wird gespeichert…",
-                lambda: self._service.mark_cancelled(case_id),
+                lambda: self._require_service().mark_cancelled(case_id),
             )

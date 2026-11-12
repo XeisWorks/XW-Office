@@ -292,6 +292,28 @@ def test_redelivery_tab_print_request_uses_confirmed_items_and_address(qtbot: ob
     assert all(thread_id != get_ident() for thread_id in service.read_threads)
 
 
+def test_embedded_tab_service_resolution_runs_off_ui_thread(qtbot: object) -> None:
+    entered, release = Event(), Event()
+    service = _FakeService()
+
+    class SlowContainer(_FakeContainer):
+        def resolve(self, typ: object) -> object:
+            if typ is CustomerAftercareService:
+                entered.set()
+                release.wait(2)
+            return super().resolve(typ)
+
+    tab = CustomerAftercareTab(SlowContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(tab)
+    beats: list[bool] = []
+    QTimer.singleShot(20, lambda: beats.append(True))
+    qtbot.waitUntil(entered.is_set, timeout=1000)
+    qtbot.waitUntil(lambda: bool(beats), timeout=1000)
+    assert "Lade Nachlieferungen" in tab._count.text()  # noqa: SLF001
+    release.set()
+    qtbot.waitUntil(lambda: tab._items_loaded_case_id == str(service.case_id), timeout=2000)  # noqa: SLF001
+
+
 def test_aftercare_tab_case_action_keeps_event_loop_responsive(
     qtbot: object, monkeypatch: object
 ) -> None:
