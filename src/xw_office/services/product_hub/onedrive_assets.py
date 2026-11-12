@@ -2,16 +2,16 @@
 from __future__ import annotations
 
 import uuid
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
 from xw_office.models.product_hub import ProductAsset
 from xw_office.repositories.product_hub import ProductHubRepository
-from xw_office.services.product_hub.onedrive import OneDriveAssetClient
+from xw_office.services.product_hub.onedrive import OneDriveAssetClient, OneDriveItem
 
 
 class OneDriveAssetService:
-    def __init__(self, session_factory: sessionmaker, client: OneDriveAssetClient) -> None:
+    def __init__(self, session_factory: sessionmaker[Session], client: OneDriveAssetClient) -> None:
         self._session_factory, self._client = session_factory, client
 
     def attach(self, *, product_id: uuid.UUID, role: str, drive_id: str, item_id: str,
@@ -30,5 +30,5 @@ class OneDriveAssetService:
                 source_version=item.etag,
                 original_filename=item.name, size_bytes=item.size, public_share_allowed=False)
 
-    def list_children(self, item_id: str | None = None):
+    def list_children(self, item_id: str | None = None) -> list[OneDriveItem]:
         return self._client.list_children(item_id)

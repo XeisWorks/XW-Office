@@ -3354,3 +3354,12 @@ Repository, Ruff und `git diff --check` sind gruen. Die globale MyPy-Baseline
 sinkt von 69 Fehlern in 28 Dateien auf **65 Fehler in 27 Dateien**. Der
 vorherige Vollsuite-Lauf mit 2.328/5/1 umfasst die Laufzeitkorrektur fuer
 Sample-Page-Rezepte; diese reine Annotation wurde gezielt getestet.
+
+## AP08-Fortschreibung - OneDrive-Asset-Service-Grenze (12.11.2026)
+
+`OneDriveAssetService` verwendet jetzt eine typisierte SQLAlchemy-Session-Factory
+und gibt fuer die Kinderliste explizit `list[OneDriveItem]` zurueck. Die
+**3 OneDrive-Asset-Tests**, striktes MyPy und Ruff sind gruen. Die globale
+strikte MyPy-Baseline sinkt von 65 Fehlern in 27 Dateien auf **63 Fehler in 26
+Dateien**. Der letzte volle Lauf 2.328/5/1 liegt vor dieser kleinen
+Annotationsergaenzung; deren Service-Regressionen sind gezielt bestanden.
