@@ -3671,8 +3671,10 @@ Repository-Write synchron im GUI-Thread auf. Service-Aufloesung und alle
 Zurueckstellungen laufen jetzt in einem eigenen BackgroundWorker; seine
 Lebensdauer ist in Close-/Shutdown-Erkennung eingebunden und der Badge-Refresh
 erfolgt nach dem Abschluss. Der Qt-Test blockiert den Fake-Write, prueft
-Service-Aufloesung und Persistierung ausserhalb des Hauptthreads, weiterlaufenden
-Heartbeat und Shutdown-Tracking. Die vollstaendige Rechnungsansicht-Smokesuite
+Service-Aufloesung und Persistierung ausserhalb des Hauptthreads, verhindert
+einen zweiten Write beim wiederholten Ergebniscallback, bestaetigt den
+weiterlaufenden Heartbeat und wartet beim Shutdown bis zum Workerabschluss. Die
+vollstaendige Rechnungsansicht-Smokesuite
 besteht mit **106 Tests**; striktes MyPy fuer `tagesgeschaeft_view.py`, Ruff und
 `git diff --check` sind gruen. Weitere F17-I/O-Einstiege bleiben gemaess AP06 zu
 pruefen.

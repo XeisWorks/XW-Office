@@ -503,15 +503,21 @@ def test_declining_digital_license_offer_defers_cases_off_ui_thread(
         assert calls == ["invoice-1"]
         assert resolve_threads and resolve_threads[0] != main_thread_id
 
+        view._on_digital_license_candidates_ready([case])  # noqa: SLF001
+        assert calls == ["invoice-1"]
+
         heartbeat: list[bool] = []
         QTimer.singleShot(0, lambda: heartbeat.append(True))
         qtbot.waitUntil(lambda: bool(heartbeat), timeout=500)
+        view.request_shutdown()
+        assert not view.shutdown_complete()
     finally:
         release.set()
         qtbot.waitUntil(
             lambda: view._digital_license_defer_worker is None,  # noqa: SLF001
             timeout=1000,
         )
+    assert view.shutdown_complete()
 
 
 def test_draft_preview_is_non_blocking(qtbot: object) -> None:
