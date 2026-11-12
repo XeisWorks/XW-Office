@@ -61,9 +61,6 @@ class CustomerAftercareInvoiceDialog(QDialog):
         self._container = container
         self._case = case
         self._items = items
-        self._aftercare: CustomerAftercareService = container.resolve(CustomerAftercareService)
-        self._invoices: CustomerAftercareInvoiceService = container.resolve(CustomerAftercareInvoiceService)
-        self._contacts_client: ContactClient = container.resolve(ContactClient)
         self._pricing = CustomerAftercarePricingPolicy(container.config.customer_aftercare)
         self._contacts: list[ContactRecord] = []
         self._contacts_worker: BackgroundWorker | None = None
@@ -160,8 +157,11 @@ class CustomerAftercareInvoiceDialog(QDialog):
             return
         self._status.setText("Lade sevDesk-Kontakte…")
 
+        container = self._container
+
         def job() -> list[ContactRecord]:
-            return self._contacts_client.list_contacts()
+            contacts: ContactClient = container.resolve(ContactClient)
+            return contacts.list_contacts()
 
         def on_result(contacts: object) -> None:
             if self._closing:
@@ -216,7 +216,10 @@ class CustomerAftercareInvoiceDialog(QDialog):
         self._set_buttons_enabled(False)
 
         def job() -> InvoiceCreationResult:
-            return self._invoices.create_invoice(
+            invoices: CustomerAftercareInvoiceService = self._container.resolve(
+                CustomerAftercareInvoiceService
+            )
+            return invoices.create_invoice(
                 self._case, self._items, contact_id=contact_id, country_code=country_code
             )
 
@@ -253,7 +256,8 @@ class CustomerAftercareInvoiceDialog(QDialog):
         self._set_buttons_enabled(False)
 
         def job() -> None:
-            self._aftercare.mark_invoice_skipped(self._case.id)
+            aftercare: CustomerAftercareService = self._container.resolve(CustomerAftercareService)
+            aftercare.mark_invoice_skipped(self._case.id)
 
         def on_result(_result: object) -> None:
             if self._closing:

@@ -2489,6 +2489,14 @@ Ergebnis dieselbe Instanz. Ein blockierter Service-Resolver bestaetigt den
 Qt-Heartbeat. Die komplette Manager-/Tab-Regression besteht mit **14 Tests**;
 Ruff und striktes MyPy fuer den Manager sind gruen.
 
+## F17-Fortschreibung - Zusatzrechnungsdialogservice (12.11.2026)
+
+`CustomerAftercareInvoiceDialog` loest Kontakt-, Rechnungs- und Aftercare-Service
+nicht mehr im Konstruktor auf. Kontakte werden im Ladeworker gelesen; Erstellung
+und Ueberspringen loesen ihre Services jeweils im bestaetigten Aktionsworker auf.
+Ein blockierter Kontaktservice-Resolver bestaetigt den Qt-Heartbeat. Die Dialogsuite
+besteht mit **8 Tests**, Ruff und striktes MyPy sind gruen.
+
 ## F17-Fortschreibung - PLC-Statistikservice im Worker (12.11.2026)
 
 Beim Oeffnen der PLC-Statistik wurde der Repository-/Datenbankservice im Aufrufer

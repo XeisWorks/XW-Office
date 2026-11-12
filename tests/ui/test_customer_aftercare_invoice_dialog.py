@@ -107,6 +107,32 @@ def _wait_contacts_loaded(qtbot: object, dialog: CustomerAftercareInvoiceDialog)
     qtbot.waitUntil(lambda: dialog._contact_combo.count() > 0, timeout=3000)  # noqa: SLF001
 
 
+def test_contact_client_resolution_runs_off_ui_thread(qtbot: object) -> None:
+    entered, release = Event(), Event()
+    contacts = _FakeContactClient([
+        ContactRecord(id="2", name="Musikhaus Mueller", email="mueller@example.com")
+    ])
+    container = _FakeContainer(_FakeAftercareService(), _FakeInvoiceService(), contacts)
+    resolve = container.resolve
+
+    def slow_resolve(typ: object) -> object:
+        if typ is ContactClient:
+            entered.set()
+            release.wait(2)
+        return resolve(typ)
+
+    container.resolve = slow_resolve  # type: ignore[method-assign]
+    dialog = CustomerAftercareInvoiceDialog(container, _case(), _items())  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    beats: list[bool] = []
+    QTimer.singleShot(20, lambda: beats.append(True))
+    qtbot.waitUntil(entered.is_set, timeout=1000)
+    qtbot.waitUntil(lambda: bool(beats), timeout=1000)
+    assert "Lade sevDesk-Kontakte" in dialog._status.text()  # noqa: SLF001
+    release.set()
+    _wait_contacts_loaded(qtbot, dialog)
+
+
 def test_dialog_preselects_contact_matching_customer_email(qtbot: object) -> None:
     contacts = [
         ContactRecord(id="1", name="Andere Firma", email="andere@example.com"),
