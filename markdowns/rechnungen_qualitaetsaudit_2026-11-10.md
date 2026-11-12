@@ -2537,3 +2537,13 @@ im Worker auf; Positionen und Fallaktionen verwenden danach dieselbe Instanz.
 Das beseitigt die Servicefactory aus dem Rechnungsansicht-Aufbau. Eine blockierte
 Factory bestaetigt den Qt-Heartbeat. Die gemeinsame Manager-/Tab-Suite besteht
 mit **15 Tests**; Ruff und striktes MyPy fuer den Tab sind gruen.
+
+## F17-Fortschreibung - PLC-Teilerfuellungsread (12.11.2026)
+
+Der PLC-Dialog loest das gemeinsame `SettingKvRepository` jetzt im Kontextworker
+auf und liest dort den gespeicherten Teilerfuellungsstand. Der Worker liefert die
+berechneten offenen Mengen mit dem Wix-/sevDesk-Kontext; der GUI-Callback fuehrt
+keinen PostgreSQL- oder Dateizugriff mehr aus. Fuer manuelle Sendungen wird der
+Store nur bei tatsaechlicher Teilerfuellungsbuchung im Finalizer-Worker angelegt.
+Die PLC-UI-Suite besteht mit **26 Tests**; Ruff und striktes MyPy fuer den Dialog
+sind gruen.

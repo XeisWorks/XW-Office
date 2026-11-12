@@ -230,6 +230,8 @@ class _PlcDialogContext:
     items: list[WixOrderItem]
     email: str = ""
     source: str = "wix"
+    open_quantities: list[int] | None = None
+    partial_fulfillment_store: PartialFulfillmentStore | None = None
 
 
 @dataclass(frozen=True)
@@ -302,14 +304,7 @@ class PlcLabelPrintDialog(QDialog):
         self._pending_fulfillment_quantities: dict[str, int] = {}
         self._last_allocation_warnings: tuple[str, ...] = ()
         self._label_archive = PlcLabelArchive()
-        try:
-            settings_repo = container.resolve(SettingKvRepository)
-        except KeyError:
-            settings_repo = None
-        self._partial_fulfillments = PartialFulfillmentStore(
-            Path(__file__).resolve().parents[4] / "state" / "plc_partial_fulfillments.json",
-            settings_repo,
-        )
+        self._partial_fulfillments: PartialFulfillmentStore | None = None
         self._product_catalog = self._load_products()
         self._product_user_set = False
         self._address_edited = bool(address_override_lines)
@@ -598,15 +593,26 @@ class PlcLabelPrintDialog(QDialog):
         self._set_multi_parcel_tools_visible(False)
 
     def _load_context(self) -> None:
+        container = self._container
+        summary = self._summary
+
         def job() -> _PlcDialogContext:
-            order_number = self._summary.wix_order_number()
+            try:
+                settings_repo = container.resolve(SettingKvRepository)
+            except KeyError:
+                settings_repo = None
+            partial_fulfillments = PartialFulfillmentStore(
+                Path(__file__).resolve().parents[4] / "state" / "plc_partial_fulfillments.json",
+                settings_repo,
+            )
+            order_number = summary.wix_order_number()
             address_lines: list[str] = []
             items: list[WixOrderItem] = []
             weight = 0.0
             email = ""
-            ref = self._summary.order_reference.strip()
+            ref = summary.order_reference.strip()
             if ref:
-                wix: WixOrdersClient = self._container.resolve(WixOrdersClient)
+                wix: WixOrdersClient = container.resolve(WixOrdersClient)
                 if wix.has_credentials():
                     cached_method = getattr(wix, "get_cached_plc_order_context", None)
                     cached = cached_method(ref) if callable(cached_method) else None
@@ -649,16 +655,16 @@ class PlcLabelPrintDialog(QDialog):
                 # normalized work context directly and never probe Wix here.
                 source = "sevdesk"
                 try:
-                    service = self._container.resolve(InvoiceProcessingService)
+                    service = container.resolve(InvoiceProcessingService)
                 except (KeyError, TypeError):
                     service = None
                 if service is not None:
                     loader = getattr(service, "load_invoice_work_context", None)
-                    work_context = loader(self._summary, load_positions=True) if callable(loader) else None
+                    work_context = loader(summary, load_positions=True) if callable(loader) else None
                     if isinstance(work_context, InvoiceWorkContext):
                         order_number = (
-                            self._summary.invoice_number.strip()
-                            or f"SEVDESK-{self._summary.id.strip()}"
+                            summary.invoice_number.strip()
+                            or f"SEVDESK-{summary.id.strip()}"
                         )
                         address_lines = list(work_context.shipping_address_lines)
                         email = work_context.customer_email.strip()
@@ -682,6 +688,11 @@ class PlcLabelPrintDialog(QDialog):
                             max(1, int(item.qty or 1)) * float(item.unit_weight_kg or 0)
                             for item in items
                         )
+            open_quantities = self._open_quantities_for_items(
+                items,
+                order_number=order_number or summary.order_reference,
+                store=partial_fulfillments,
+            )
             return _PlcDialogContext(
                 order_number=order_number,
                 address_lines=address_lines,
@@ -689,6 +700,8 @@ class PlcLabelPrintDialog(QDialog):
                 items=items,
                 email=email,
                 source=source,
+                open_quantities=open_quantities,
+                partial_fulfillment_store=partial_fulfillments,
             )
 
         self._load_worker = BackgroundWorker(job)
@@ -701,6 +714,7 @@ class PlcLabelPrintDialog(QDialog):
             self._status.setText("Analyse unvollständig geladen")
             return
         self._context = result
+        self._partial_fulfillments = result.partial_fulfillment_store
         if result.address_lines and not self._address_edited:
             self._address_edit.blockSignals(True)
             self._address_edit.setPlainText("\n".join(result.address_lines))
@@ -715,9 +729,10 @@ class PlcLabelPrintDialog(QDialog):
             self._primary_order_number.blockSignals(False)
         self._populate_customs_table(result.items)
         self._packing_items = list(result.items)
+        all_open_quantities = result.open_quantities or []
         self._packing_open_quantities = [
             quantity
-            for item, quantity in zip(self._packing_items, self._open_quantities_for_items(self._packing_items))
+            for item, quantity in zip(self._packing_items, all_open_quantities)
             if not item.is_digital
         ]
         self._rebuild_parcel_controls()
@@ -775,13 +790,20 @@ class PlcLabelPrintDialog(QDialog):
     def _partial_fulfillment_order_key(self) -> str:
         return self._primary_order_number.text().strip() or self._summary.order_reference.strip()
 
-    def _open_quantities_for_items(self, items: list[WixOrderItem]) -> list[int]:
-        fulfilled = self._partial_fulfillments.fulfilled_quantities(self._partial_fulfillment_order_key())
+    @classmethod
+    def _open_quantities_for_items(
+        cls,
+        items: list[WixOrderItem],
+        *,
+        order_number: str,
+        store: PartialFulfillmentStore,
+    ) -> list[int]:
+        fulfilled = store.fulfilled_quantities(order_number)
         outstanding: list[int] = []
         consumed_by_key: dict[str, int] = {}
         for item in items:
             ordered = max(1, int(item.qty or 1))
-            key = self._packing_item_key(item)
+            key = cls._packing_item_key(item)
             already_consumed = consumed_by_key.get(key, 0)
             fulfilled_for_line = min(ordered, max(0, fulfilled.get(key, 0) - already_consumed))
             consumed_by_key[key] = already_consumed + fulfilled_for_line
@@ -2176,7 +2198,19 @@ class PlcLabelPrintDialog(QDialog):
                     service.mark_print_queued(shipment, label_job_id)
                     if fulfillment_order and fulfillment_quantities:
                         try:
-                            self._partial_fulfillments.add_dispatched_quantities(
+                            partial_fulfillments = self._partial_fulfillments
+                            if partial_fulfillments is None:
+                                try:
+                                    settings_repo = self._container.resolve(SettingKvRepository)
+                                except KeyError:
+                                    settings_repo = None
+                                partial_fulfillments = PartialFulfillmentStore(
+                                    Path(__file__).resolve().parents[4]
+                                    / "state"
+                                    / "plc_partial_fulfillments.json",
+                                    settings_repo,
+                                )
+                            partial_fulfillments.add_dispatched_quantities(
                                 fulfillment_order,
                                 fulfillment_quantities,
                             )

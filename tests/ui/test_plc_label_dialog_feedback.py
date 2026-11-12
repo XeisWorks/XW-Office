@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from threading import Event
+from threading import Event, get_ident
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QDialog, QHeaderView, QLabel, QMessageBox, QPushButton
@@ -24,6 +24,7 @@ from xw_office.services.plc.partial_fulfillment import PartialFulfillmentStore
 from xw_office.services.plc.polling import ShipmentAddress
 from xw_office.services.plc.service import PlcShipmentService
 from xw_office.services.plc.webservice import PlcWebserviceResult
+from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.wix.client import WixOrderItem
 from xw_office.ui.modules.rechnungen import plc_label_dialog as plc_dialog_module
 from xw_office.ui.modules.rechnungen.plc_label_dialog import (
@@ -40,6 +41,38 @@ def _container() -> Container:
     container.register(AppSignals, lambda _: AppSignals())
     register_default_services(container)
     return container
+
+
+def test_partial_fulfillment_store_resolution_runs_off_ui_thread(qtbot: object) -> None:
+    entered, release = Event(), Event()
+    ui_thread = get_ident()
+
+    class SettingsRepository:
+        def get_value_json(self, _key: str) -> None:
+            assert get_ident() != ui_thread
+            return None
+
+    def resolve_settings(_container: Container) -> SettingsRepository:
+        entered.set()
+        release.wait(2)
+        return SettingsRepository()
+
+    container = _container()
+    container.register(SettingKvRepository, resolve_settings)  # type: ignore[arg-type]
+    summary = plc_dialog_module.InvoiceSummary(id="worker-test", order_reference="20868")
+    dialog = PlcLabelPrintDialog(container, summary)
+    qtbot.addWidget(dialog)
+    beats: list[bool] = []
+    QTimer.singleShot(20, lambda: beats.append(True))
+    qtbot.waitUntil(entered.is_set, timeout=1000)
+    qtbot.waitUntil(lambda: bool(beats), timeout=1000)
+    assert "Wix-Cache wird" in dialog._status.text()  # noqa: SLF001
+    release.set()
+    qtbot.waitUntil(
+        lambda: dialog._partial_fulfillments is not None,
+        timeout=2000,
+    )  # noqa: SLF001
+    assert dialog._partial_fulfillments is not None  # noqa: SLF001
 
 
 def _shipment() -> PlcShipmentDraft:
@@ -764,7 +797,11 @@ def test_partial_allocation_can_produce_packlists_and_next_label_shows_open_quan
     next_dialog._partial_fulfillments = store  # noqa: SLF001
     next_dialog._primary_order_number.setText("21104")  # noqa: SLF001
     next_dialog._packing_items = [WixOrderItem(sku="XW-400", name="Alpenmarsch", qty=10)]  # noqa: SLF001
-    next_dialog._packing_open_quantities = next_dialog._open_quantities_for_items(next_dialog._packing_items)  # noqa: SLF001
+    next_dialog._packing_open_quantities = next_dialog._open_quantities_for_items(  # noqa: SLF001
+        next_dialog._packing_items,
+        order_number="21104",
+        store=store,
+    )
     next_dialog._package_count.setValue(2)  # noqa: SLF001
 
     assert next_dialog._packing_table.item(1, 1).text() == "10/6"  # noqa: SLF001
