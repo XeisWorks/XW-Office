@@ -90,15 +90,14 @@ def build_migration_preview(
         matched = variant_by_sku.get(sku) if sku else None
         method = "exact_sku" if matched else None
         if matched is None and sku:
-            alias = alias_by_sku.get(sku)
-            if alias is not None:
-                target = alias.variant_id or (
-                    default_variant_by_product.get(alias.product_id).variant_id
-                    if alias.product_id in default_variant_by_product
-                    else ""
+            alias_match = alias_by_sku.get(sku)
+            if alias_match is not None:
+                default_variant = default_variant_by_product.get(alias_match.product_id)
+                target = alias_match.variant_id or (
+                    default_variant.variant_id if default_variant is not None else ""
                 )
                 matched = HubVariantSnapshot(
-                    product_id=alias.product_id,
+                    product_id=alias_match.product_id,
                     variant_id=target,
                     sku=sku,
                 )

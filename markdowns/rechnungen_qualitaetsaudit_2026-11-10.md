@@ -3194,3 +3194,12 @@ Product-Hub-API-Regressions bestehen zusammen mit **53 Tests** (11 Config,
 3 Datenbank, 39 Inventory/Wix/API). Striktes MyPy fuer die geaenderten
 Dateigruppen und Ruff sind gruen. Die globale lokale MyPy-Baseline sinkt von
 130 Fehlern in 36 Dateien auf **124 Fehler in 34 Dateien**.
+
+## F20-Fortschreibung - Alias ohne eindeutige Hub-Variante (12.11.2026)
+
+Die Legacy-Migrationsvorschau behandelt einen vorhandenen SKU-Alias ohne eigene
+Variant-ID und ohne Default-Variante weiter als `unmatched`/`manual_review`.
+Der Fallback liest die Default-Variante jetzt einmalig und bildet die optionale
+Rueckgabe explizit ab. Ein neuer Regressionstest schuetzt diesen Fall; alle
+**5 Vorschautests** sowie striktes MyPy und Ruff fuer Service und Tests sind
+gruen. Die globale MyPy-Baseline bleibt bei **122 Fehlern in 33 Dateien**.

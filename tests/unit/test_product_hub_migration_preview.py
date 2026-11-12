@@ -2,8 +2,9 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from typing import cast
 
-from sqlalchemy import create_engine
+from sqlalchemy import Table, create_engine
 
 from xw_office.models.base import Base
 from xw_office.models.settings_kv import SettingKV
@@ -43,6 +44,19 @@ def test_preview_keeps_alias_match_and_title_configs_explicit() -> None:
     assert any("Title-specific" in note for note in entries[0].notes)
 
 
+def test_preview_marks_alias_without_variant_or_default_for_manual_review() -> None:
+    entries = build_migration_preview(
+        [{"sku": "OLD-250"}],
+        variants=[],
+        aliases=[HubAliasSnapshot("product-2", None, "OLD-250")],
+        print_assets=[],
+    )
+
+    assert entries[0].status == "unmatched"
+    assert entries[0].match_method == "sku_alias"
+    assert entries[0].variant_id is None
+
+
 def test_preview_does_not_choose_between_duplicate_legacy_skus() -> None:
     entries = build_migration_preview(
         [{"sku": "XW-300"}, {"sku": " xw-300 "}],
@@ -52,7 +66,10 @@ def test_preview_does_not_choose_between_duplicate_legacy_skus() -> None:
     )
 
     assert [entry.status for entry in entries] == ["ambiguous_legacy_sku", "ambiguous_legacy_sku"]
-    assert preview_payload(entries)["summary"]["by_status"] == {"ambiguous_legacy_sku": 2}
+    payload = preview_payload(entries)
+    summary = payload["summary"]
+    assert isinstance(summary, dict)
+    assert summary["by_status"] == {"ambiguous_legacy_sku": 2}
 
 
 def test_preview_script_reads_database_without_changing_legacy_setting(tmp_path: Path) -> None:
@@ -61,7 +78,8 @@ def test_preview_script_reads_database_without_changing_legacy_setting(tmp_path:
     Base.metadata.create_all(engine)
     legacy_json = json.dumps([{"sku": "XW-999", "print_file_path": "C:/missing.pdf"}])
     with engine.begin() as connection:
-        connection.execute(SettingKV.__table__.insert().values(key="inventory.products", value_json=legacy_json))
+        table = cast(Table, SettingKV.__table__)
+        connection.execute(table.insert().values(key="inventory.products", value_json=legacy_json))
 
     output = tmp_path / "preview.json"
     result = subprocess.run(
