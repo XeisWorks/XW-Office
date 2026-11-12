@@ -3152,9 +3152,11 @@ class RechnungenView(QWidget):
         self._append_mode = False
 
     def _on_load_finished(self) -> None:
-        self._overlay.hide()
         self._worker = None
-        if self._shutting_down or not self.isVisible():
+        if self._shutting_down:
+            return
+        self._overlay.hide()
+        if not self.isVisible():
             return
         if self._pending_auto_open_load and not self._search_active:
             self._pending_auto_open_load = False
@@ -6280,7 +6282,8 @@ class RechnungenView(QWidget):
 
     def _on_fulfillment_step_finished(self) -> None:
         self._fulfillment_step_worker = None
-        self._clear_detail_actions_busy()
+        if not self._shutting_down:
+            self._clear_detail_actions_busy()
 
     def _run_row_action(self, summary: InvoiceSummary, action: str) -> None:
         if action == "post":
@@ -6447,7 +6450,8 @@ class RechnungenView(QWidget):
 
     def _on_delete_draft_finished(self) -> None:
         self._delete_draft_worker = None
-        self._overlay.hide()
+        if not self._shutting_down:
+            self._overlay.hide()
 
     @staticmethod
     def _plc_archive_key(summary: InvoiceSummary) -> tuple[str, str] | None:
@@ -6789,7 +6793,8 @@ class RechnungenView(QWidget):
 
     def _on_invoice_pdf_preview_finished(self) -> None:
         self._invoice_pdf_preview_worker = None
-        self._clear_detail_actions_busy()
+        if not self._shutting_down:
+            self._clear_detail_actions_busy()
 
     def _on_open_sevdesk_invoice_clicked(self) -> None:
         summary = self._require_selected_invoice()
@@ -8024,7 +8029,8 @@ class RechnungenView(QWidget):
         )
 
     def _on_create_draft_finished(self) -> None:
-        self._overlay.hide()
+        if not self._shutting_down:
+            self._overlay.hide()
 
     def _on_draft_product_plan_ready(self, result: object) -> None:
         if self._shutting_down:
@@ -8979,6 +8985,8 @@ class RechnungenView(QWidget):
 
     def _on_product_print_finished(self) -> None:
         self._product_print_worker = None
+        if self._shutting_down:
+            return
         self._set_piece_print_controls_enabled(self._print_allowed)
         self._update_print_all_products_button()
         self._update_plc_controls()
@@ -8987,7 +8995,8 @@ class RechnungenView(QWidget):
         if handle in self._product_print_handles:
             self._product_print_handles.remove(handle)
         self._active_individual_print_keys.discard(print_key)
-        self._update_print_all_products_button()
+        if not self._shutting_down:
+            self._update_print_all_products_button()
 
     @staticmethod
     def _default_piece_print_qty(block: PieceBlock) -> int:
