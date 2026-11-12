@@ -7,7 +7,12 @@ from sqlalchemy.orm import sessionmaker
 from xw_office.models.base import Base
 from xw_office.models.product_hub_sync import OutboxEvent
 from xw_office.repositories.product_hub import ProductHubRepository
-from xw_office.services.product_hub.asset_jobs import AssetJobError, ProductAssetJobService
+from xw_office.services.product_hub.asset_jobs import (
+    AssetJobError,
+    ProductAssetJobService,
+    _recipe_page_numbers,
+    _recipe_positive_int,
+)
 from xw_office.services.product_hub.r2_storage import R2Storage
 
 
@@ -70,3 +75,15 @@ def test_private_r2_uri_cannot_escape_the_configured_bucket() -> None:
         storage.get_private_uri("r2://other-bucket/object.jpg")
     with pytest.raises(ValueError, match="Invalid private R2 object key"):
         storage.get_private_uri("r2://private-bucket/a/../object.jpg")
+
+
+@pytest.mark.parametrize("value", [[1, "2"], [True], [0], "1,2", None])
+def test_persisted_sample_page_recipe_rejects_invalid_page_lists(value: object) -> None:
+    with pytest.raises(AssetJobError, match="pages.*invalid"):
+        _recipe_page_numbers({"pages": value}, "pages")
+
+
+@pytest.mark.parametrize("value", [True, 0, -1, "1000", None])
+def test_persisted_sample_page_recipe_rejects_invalid_positive_integers(value: object) -> None:
+    with pytest.raises(AssetJobError, match="target_height_px.*invalid"):
+        _recipe_positive_int({"target_height_px": value}, "target_height_px")

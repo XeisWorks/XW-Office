@@ -3328,3 +3328,17 @@ Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung
 (157,72 s)**. Globales Ruff und `git diff --check` sind gruen. Die globale
 strikte MyPy-Baseline bleibt bei **72 Fehlern in 29 Dateien**; der geaenderte
 Projection-Service ist einzeln strict-Mypy-sauber.
+
+## AP08-Fortschreibung - Persistierte Sample-Page-Rezepte (12.11.2026)
+
+Der Product-Asset-Job-Worker validiert persistierte Rezeptfelder `pages`,
+`watermarked_pages`, `target_height_px` und `max_size_kb` jetzt zur Laufzeit,
+bevor er sie an den PDF-Renderer uebergibt. Unbekannte JSON-Typen, boolesche
+Werte, nicht positive Seiten und ungueltige Rendergrenzen werden als klarer
+`AssetJobError` abgewiesen, statt unkontrolliert in `tuple()`/`int()` oder den
+Renderer zu gelangen. **14 Asset-Job-Tests**, striktes MyPy fuer den Service
+und Ruff sind gruen. Die globale strikte MyPy-Baseline sinkt von 72/29 auf
+**69 Fehler in 28 Dateien**. Der Vollsuite-Nachweis fuer diesen letzten
+Nachtrag besteht mit **2.328 Tests, 5 Ueberspringungen und 1 bestehenden
+Starlette/httpx-Deprecation-Warnung (151,51 s)**. Globales Ruff und
+`git diff --check` sind ebenfalls gruen.

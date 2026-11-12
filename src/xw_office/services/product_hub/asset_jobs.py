@@ -35,6 +35,22 @@ def _private_source_ids(asset: ProductAsset) -> tuple[str, str]:
     return drive_id, item_id
 
 
+def _recipe_page_numbers(recipe: dict[str, object], key: str) -> tuple[int, ...]:
+    value = recipe.get(key)
+    if not isinstance(value, list) or any(
+        not isinstance(page, int) or isinstance(page, bool) or page < 1 for page in value
+    ):
+        raise AssetJobError(f"Stored sample-page recipe field {key!r} is invalid")
+    return tuple(value)
+
+
+def _recipe_positive_int(recipe: dict[str, object], key: str) -> int:
+    value = recipe.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise AssetJobError(f"Stored sample-page recipe field {key!r} is invalid")
+    return value
+
+
 class ProductAssetJobService:
     """Enqueue and run retry-safe sample-page jobs.
 
@@ -158,7 +174,7 @@ class ProductAssetJobService:
             if source is None:
                 raise AssetJobError("Source asset was deleted")
             drive_id, item_id = _private_source_ids(source)
-            recipe = dict(job.recipe)
+            recipe: dict[str, object] = dict(job.recipe)
             product_id, variant_id = job.product_id, job.variant_id
         graph = OneDriveAssetClient.from_environment()
         graph.assert_within_root(drive_id, item_id)
@@ -180,9 +196,17 @@ class ProductAssetJobService:
                 watermark_path = work_dir / "watermark.png"
                 watermark_path.write_bytes(graph.download(watermark_drive, watermark_item))
             results = SamplePageExportService().export(
-                [SamplePageJob(source_path, tuple(recipe["pages"]), tuple(recipe["watermarked_pages"]))],
-                SamplePageExportSettings(output_folder=work_dir / "out", target_height_px=int(recipe["target_height_px"]),
-                                         max_size_kb=int(recipe["max_size_kb"]), watermark_path=watermark_path),
+                [SamplePageJob(
+                    source_path,
+                    _recipe_page_numbers(recipe, "pages"),
+                    _recipe_page_numbers(recipe, "watermarked_pages"),
+                )],
+                SamplePageExportSettings(
+                    output_folder=work_dir / "out",
+                    target_height_px=_recipe_positive_int(recipe, "target_height_px"),
+                    max_size_kb=_recipe_positive_int(recipe, "max_size_kb"),
+                    watermark_path=watermark_path,
+                ),
             )
             manifest: list[dict[str, object]] = []
             for result in results:
