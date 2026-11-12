@@ -193,6 +193,7 @@ def sevdesk_get_with_retry(
 
     assert last_response is not None
     raise_for_sevdesk(last_response)
+    raise RuntimeError("sevDesk GET retry loop ended without a successful response")
 
 
 @dataclass

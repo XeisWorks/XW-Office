@@ -3063,3 +3063,12 @@ statt ueber eine Rueckgabewert-Tupel-Lambda um. Die Detailansicht behaelt ihr
 ein-/ausblendbares Verhalten; die neue Qt-Regression besteht mit **1 Test**.
 Strict MyPy und Ruff fuer das Modul sind gruen. Die globale MyPy-Baseline sinkt
 auf **144 Fehler in 41 Dateien**.
+
+## F20-Fortschreibung - sevDesk-GET-Retry-Abschlussgrenze (12.11.2026)
+
+`sevdesk_get_with_retry` weist nach dem terminalen Fehlerpfad jetzt explizit
+einen unerwarteten Schleifenaustritt ohne erfolgreiche Antwort ab. Damit ist
+der Kontrollfluss auch fuer MyPy vollstaendig; normales Erfolgs- und
+Fehlerverhalten bleibt durch **10 HTTP-Client-Tests** abgesichert. Strict
+MyPy und Ruff fuer den Client sind gruen. Die globale lokale Baseline sinkt
+auf **143 Fehler in 40 Dateien**.
