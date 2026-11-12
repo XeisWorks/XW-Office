@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from threading import Event
+from pathlib import Path
+from threading import Event, current_thread
 from PySide6.QtCore import QTimer
 from pytestqt.qtbot import QtBot
 
@@ -38,6 +39,55 @@ def test_mailbox_service_resolution_runs_off_ui_thread(qtbot: QtBot) -> None:
     assert "OPEN PRINTS" in dialog._status.text()  # noqa: SLF001
     release.set()
     qtbot.waitUntil(lambda: dialog._list.count() == 1, timeout=1000)  # noqa: SLF001
+
+
+def test_attachment_file_validation_runs_off_ui_thread(qtbot: QtBot, monkeypatch, tmp_path) -> None:
+    main_thread = current_thread()
+    target = tmp_path / "invoice.pdf"
+    target.write_bytes(b"%PDF-1.7")
+    checked_threads: list[object] = []
+    opened: list[str] = []
+    original_is_file = Path.is_file
+
+    def tracked_is_file(path: Path) -> bool:
+        if path == target:
+            checked_threads.append(current_thread())
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", tracked_is_file)
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.offene_drucke_dialog.QDesktopServices.openUrl",
+        lambda url: opened.append(url.toLocalFile()) or True,
+    )
+
+    class Mailbox:
+        def refresh_from_graph(self) -> list[PrintCase]:
+            return [PrintCase("a", "A", "", "", "graph_mail", "a")]
+
+        def last_flow_sync_error(self) -> str:
+            return ""
+
+        def list_attachments(self, _case_id: str) -> list[PrintAttachment]:
+            return [PrintAttachment("attachment", "invoice.pdf", "application/pdf", 8)]
+
+        def download_attachment_to_cache(
+            self, _case_id: str, _attachment_id: str, _filename: str
+        ) -> Path:
+            return target
+
+    container = Container(AppConfig())
+    container.register(OffeneDruckeService, lambda _: Mailbox())
+    dialog = OffeneDruckeDialog(container)
+    qtbot.addWidget(dialog)
+    qtbot.waitUntil(lambda: dialog._attachment_list.count() == 1)
+    dialog._attachment_list.setCurrentRow(0)
+    dialog._open_attachment()
+    qtbot.waitUntil(lambda: bool(opened))
+
+    assert checked_threads
+    assert all(thread is not main_thread for thread in checked_threads)
+    assert len(opened) == 1
+    assert Path(opened[0]) == target
 
 
 def test_attachment_reply_matches_latest_case_after_rapid_selection(qtbot: QtBot) -> None:

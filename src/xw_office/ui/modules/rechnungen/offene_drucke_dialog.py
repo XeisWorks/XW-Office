@@ -246,11 +246,15 @@ class OffeneDruckeDialog(QDialog):
         service = self._require_service()
         self._open_attachment_button.setEnabled(False)
         seq = self._attachment_seq
-        self._attachment_worker = BackgroundWorker(
-            lambda: service.download_attachment_to_cache(
+        def download_and_verify() -> Path:
+            path = service.download_attachment_to_cache(
                 case.id, attachment.id, attachment.name
             )
-        )
+            if not path.is_file():
+                raise FileNotFoundError(f"Anhang wurde nicht im lokalen Cache abgelegt: {path}")
+            return path
+
+        self._attachment_worker = BackgroundWorker(download_and_verify)
         worker = self._attachment_worker
         worker.signals.result.connect(self._open_local_file)
         worker.signals.error.connect(
@@ -265,7 +269,6 @@ class OffeneDruckeDialog(QDialog):
         path = value if isinstance(value, Path) else None
         if (
             path is None
-            or not path.is_file()
             or not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
         ):
             QMessageBox.warning(

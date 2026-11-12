@@ -2603,3 +2603,28 @@ voruebergehenden Fehler und prueft den erfolgreichen Retry. Die 18 Tests aus
 `print_dialog.py` sind gruen. Die Vollsuite besteht mit **2.273 Tests, 5
 uebersprungen und 1 bestehender Starlette/httpx-Deprecation-Warnung (159,92 s)**.
 F17 bleibt wegen weiterer offener UI-I/O-Pfade teilweise offen.
+
+## F17-Fortschreibung - OPEN-PRINTS-Dateipruefung im Worker (12.11.2026)
+
+Nach dem asynchronen Attachment-Download prueft `OffeneDruckeDialog` den lokalen
+Dateipfad jetzt noch im Download-Worker. Der UI-Callback startet nur den
+Windows-Datei-Handler und liest keine Dateimetadaten. Ein Regressionstest verfolgt
+den Thread von `Path.is_file()` und bestaetigt die UI-Oeffnung des heruntergeladenen
+Pfads. Alle **5 OPEN-PRINTS-Dialogtests**, Ruff und striktes MyPy fuer das
+Dialogmodul sind gruen. Die Vollsuite nach beiden F17-Druck-/OPEN-PRINTS-
+Aenderungen besteht mit **2.274 Tests, 5 uebersprungen und 1 bestehender
+Starlette/httpx-Deprecation-Warnung (158,75 s)**; globales Ruff und der
+`git diff --check` sind gruen.
+
+## Railway-Produktionsread-only-Check (12.11.2026)
+
+`XW-Office` production hat keine staged changes. Product Hub und Inventory Worker
+laufen auf `main` mit SUCCESS-Deployments vom 12.11.2026; beide PostgreSQL-Services
+sind ebenfalls online. Die Health-Uebersicht zaehlt 135 historische Product-Hub-
+und 7 Inventory-Worker-Fehldeployments in den letzten 72 Stunden, aber keine
+Fehler seit den aktuellen erfolgreichen Deployments. Ein ausgelesener Product-Hub-
+Fehllauf vom 11.11. scheiterte am fehlenden `stdnum`; der spaetere erfolgreiche
+Stand enthaelt die Abhaengigkeit. Keine Railway-Konfiguration oder Produktivdaten
+wurden geaendert. In den XW-Office-Deploydateien ist keine Cloudflare-Anbindung
+gefunden; die verfuegbare Cloudflare-Integration bezieht sich auf ChatGPT-Sites
+und ist fuer dieses native Rechnungsmodul nicht anwendbar.
