@@ -5,6 +5,7 @@ from pathlib import Path
 from pytest import MonkeyPatch
 from pytestqt.qtbot import QtBot
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QDialog, QMessageBox
 
 from xw_office.services.digital_licenses import (
@@ -50,6 +51,29 @@ class _FakeContainer:
         if service_type is DigitalLicenseService:
             return self._service
         raise KeyError(str(service_type))
+
+
+def test_service_resolution_for_initial_load_runs_off_ui_thread(qtbot: object) -> None:
+    entered = Event()
+    release = Event()
+    service = _FakeDigitalLicenseService()
+
+    class SlowContainer(_FakeContainer):
+        def resolve(self, service_type: object) -> object:
+            if service_type is DigitalLicenseService:
+                entered.set()
+                release.wait(2)
+            return super().resolve(service_type)
+
+    dialog = DigitalLicensesDialog(SlowContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    heartbeats: list[bool] = []
+    QTimer.singleShot(20, lambda: heartbeats.append(True))
+    qtbot.waitUntil(entered.is_set, timeout=1000)
+    qtbot.waitUntil(lambda: bool(heartbeats), timeout=1000)
+    assert dialog._status.text() == "Lade externe Bestellungen..."  # noqa: SLF001
+    release.set()
+    qtbot.waitUntil(lambda: dialog._list.count() == 1, timeout=1000)  # noqa: SLF001
 
 
 def test_mark_done_closes_dialog_when_queue_is_empty(qtbot: object, monkeypatch) -> None:

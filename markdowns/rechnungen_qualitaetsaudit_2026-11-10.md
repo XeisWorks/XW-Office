@@ -2489,3 +2489,11 @@ Dialogworker. Ein blockierter Servicefactory-Fake bestaetigt den Qt-Heartbeat;
 `test_plc_statistics_dialog.py` und `test_rechnungen_view_smoke.py` bestehen
 zusammen mit **96 Tests**. Ruff und striktes MyPy fuer Dialog und Rechnungsansicht
 sind gruen.
+
+## F17-Fortschreibung - Digital-Licenses-Service beim Erstladen (12.11.2026)
+
+`DigitalLicensesDialog` loest seinen Graph-/Settings-Service jetzt im Worker auf,
+der die offenen Faelle laedt. Dateizuordnung, Lizenz-PDFs, Outlook-Entwurf und
+Fulfillment greifen nach dem Erstladen auf dieselbe Serviceinstanz zu. Ein
+blockierter Resolver bestaetigt den Qt-Heartbeat. Die Dialogsuite besteht mit
+**10 Tests**; Ruff und striktes MyPy sind gruen.

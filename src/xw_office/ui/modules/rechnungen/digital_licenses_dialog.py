@@ -38,7 +38,7 @@ class DigitalLicensesDialog(QDialog):
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._container = container
-        self._service: DigitalLicenseService = container.resolve(DigitalLicenseService)
+        self._service: DigitalLicenseService | None = None
         self._cases: list[DigitalLicenseCase] = []
         self._open_case_count = 0
         self._load_worker: BackgroundWorker | None = None
@@ -126,7 +126,14 @@ class DigitalLicensesDialog(QDialog):
         if self._load_worker is not None and self._load_worker.isRunning():
             return
         self._status.setText("Lade externe Bestellungen...")
-        worker = BackgroundWorker(self._service.list_open_cases)
+        container = self._container
+        current_service = self._service
+
+        def job() -> tuple[DigitalLicenseService, list[DigitalLicenseCase]]:
+            service = current_service or container.resolve(DigitalLicenseService)
+            return service, service.list_open_cases()
+
+        worker = BackgroundWorker(job)
         self._load_worker = worker
         worker.signals.result.connect(self._on_cases_loaded)
         worker.signals.error.connect(self._on_error)
@@ -141,7 +148,13 @@ class DigitalLicensesDialog(QDialog):
     def _on_cases_loaded(self, payload: object) -> None:
         if self._closing:
             return
-        self._cases = list(payload) if isinstance(payload, list) else []
+        if not isinstance(payload, tuple) or len(payload) != 2:
+            return
+        service, cases = payload
+        if not isinstance(cases, list):
+            return
+        self._service = service
+        self._cases = cases
         self._open_case_count = len(self._cases)
         self._list.clear()
         for case in self._cases:
@@ -159,6 +172,12 @@ class DigitalLicensesDialog(QDialog):
         if 0 <= row < len(self._cases):
             return self._cases[row]
         return None
+
+    def _require_service(self) -> DigitalLicenseService:
+        service = self._service
+        if service is None:
+            raise RuntimeError("Service fuer digitale Lieferungen ist noch nicht geladen")
+        return service
 
     def _show_selected_case(self, _row: int) -> None:
         case = self._selected_case()
@@ -204,7 +223,7 @@ class DigitalLicensesDialog(QDialog):
         def save_print_path() -> None:
             if not Path(path).is_file():
                 raise FileNotFoundError("Die ausgewaehlte Druck-PDF wurde nicht gefunden.")
-            self._service.apply_print_path(missing.sku, path)
+            self._require_service().apply_print_path(missing.sku, path)
 
         self._start_draft_job(
             save_print_path,
@@ -230,7 +249,7 @@ class DigitalLicensesDialog(QDialog):
             return
         if case.state == "DRAFT_READY":
             self._run_action(
-                lambda: self._service.reopen_outlook_draft(case),
+                lambda: self._require_service().reopen_outlook_draft(case),
                 "Outlook-Entwurf wird geoeffnet...",
             )
             return
@@ -242,7 +261,7 @@ class DigitalLicensesDialog(QDialog):
             return
         self._status.setText("Personalisierte PDFs werden erstellt...")
         self._start_draft_job(
-            lambda: self._service.prepare_license_files(case),
+            lambda: self._require_service().prepare_license_files(case),
             lambda payload: self._on_files_prepared(payload, case),
         )
 
@@ -270,7 +289,7 @@ class DigitalLicensesDialog(QDialog):
             return
         self._status.setText("Outlook-Entwurf wird gespeichert...")
         self._start_draft_job(
-            lambda: self._service.create_outlook_draft(case, files),
+            lambda: self._require_service().create_outlook_draft(case, files),
             lambda payload: self._on_draft_created(payload, case),
         )
 
@@ -329,8 +348,9 @@ class DigitalLicensesDialog(QDialog):
             return
 
         def job() -> int:
-            self._service.mark_done(case)
-            return self._service.open_count()
+            service = self._require_service()
+            service.mark_done(case)
+            return service.open_count()
 
         self._run_action(job, "Markiere Versand als erledigt...", self._on_mark_done_finished)
 
