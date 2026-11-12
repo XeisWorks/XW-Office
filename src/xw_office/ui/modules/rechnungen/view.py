@@ -2633,6 +2633,8 @@ class RechnungenView(QWidget):
         return bool(self._current_sevdesk_token())
 
     def _on_load_result(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         if not isinstance(payload, tuple) or len(payload) != 4:
             logger.warning("Unexpected invoice load payload: %s", type(payload))
             return
@@ -2933,6 +2935,8 @@ class RechnungenView(QWidget):
         return self._mollie_badge_worker
 
     def _on_mollie_badge_result(self, result: object) -> None:
+        if self._shutting_down:
+            return
         if isinstance(result, dict):
             mollie = max(0, int(result.get("mollie") or 0))
             sendungen = max(0, int(result.get("sendungen") or 0))
@@ -3017,6 +3021,8 @@ class RechnungenView(QWidget):
         worker.start()
 
     def _on_inventory_alert_count(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         if not isinstance(payload, int):
             return
         count = payload
@@ -3028,6 +3034,8 @@ class RechnungenView(QWidget):
             self._btn_inventory_alert.hide()
 
     def _on_inventory_alert_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         logger.warning("Inventory alert count could not be loaded: %s", exc)
         self._btn_inventory_alert.setText("LAGERALARME (?)")
         self._btn_inventory_alert.setToolTip(f"Lageralarme konnten nicht geladen werden: {exc}")
@@ -3125,6 +3133,8 @@ class RechnungenView(QWidget):
             )
 
     def _on_load_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         logger.error("Invoice load failed: %s", exc)
         self._pending_auto_open_load = False
         if self._append_mode:
@@ -3144,7 +3154,7 @@ class RechnungenView(QWidget):
     def _on_load_finished(self) -> None:
         self._overlay.hide()
         self._worker = None
-        if not self.isVisible():
+        if self._shutting_down or not self.isVisible():
             return
         if self._pending_auto_open_load and not self._search_active:
             self._pending_auto_open_load = False
@@ -3167,6 +3177,8 @@ class RechnungenView(QWidget):
         )
 
     def _on_search_result(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         if not isinstance(payload, tuple) or len(payload) != 5:
             return
         rows_obj, summaries_obj, searched_days_obj, query_obj, seq_obj = payload
@@ -3207,6 +3219,8 @@ class RechnungenView(QWidget):
             )
 
     def _on_search_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         logger.error("Invoice search failed: %s", exc)
         self._search_banner.show_result("Suche fehlgeschlagen")
         QMessageBox.warning(
@@ -3404,6 +3418,8 @@ class RechnungenView(QWidget):
         return self._open_overview_worker
 
     def _on_open_overview_result(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         data = payload if isinstance(payload, dict) else {}
         batch = overview_payload_from_object(data.get("batch"))
         if batch is None:
@@ -3488,6 +3504,8 @@ class RechnungenView(QWidget):
         )
 
     def _on_open_overview_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         logger.warning("Open-overview digital classification failed: %s", exc)
         with_ref = int(self._open_with_ref.text() or "0") if self._open_with_ref.text().isdigit() else 0
         self._open_overview_cached_physical = 0
@@ -3615,6 +3633,8 @@ class RechnungenView(QWidget):
         worker.start()
 
     def _on_open_product_preparation_result(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         if not isinstance(payload, tuple) or len(payload) != 4:
             return
         seq, target, blocks, ready = payload
@@ -3631,6 +3651,8 @@ class RechnungenView(QWidget):
     def _on_open_product_preparation_error(
         self, exc: Exception, seq: int, target: tuple[object, ...]
     ) -> None:
+        if self._shutting_down:
+            return
         logger.warning("Open print product preparation failed: %s", exc)
         if seq != self._open_product_preparation_seq or target != self._open_product_preparation_target:
             return

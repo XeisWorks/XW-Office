@@ -781,6 +781,36 @@ def test_late_redelivery_result_is_ignored_during_shutdown(
     assert opened == []
 
 
+def test_late_invoice_list_and_badge_callbacks_are_ignored_during_shutdown(
+    qtbot: QtBot,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    view = RechnungenView(_build_container())
+    qtbot.addWidget(view)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda _parent, _title, message: warnings.append(str(message)),
+    )
+
+    view._shutting_down = True  # noqa: SLF001
+    view._on_load_error(RuntimeError("late list failure"))  # noqa: SLF001
+    view._on_search_error(RuntimeError("late search failure"))  # noqa: SLF001
+    view._on_inventory_alert_error(RuntimeError("late badge failure"))  # noqa: SLF001
+    view._on_mollie_badge_result(  # noqa: SLF001
+        {"mollie": 4, "sendungen": 3, "drucke": 2, "digital_licenses": 1}
+    )
+    view._on_inventory_alert_count(9)  # noqa: SLF001
+
+    assert warnings == []
+    assert view._mollie_alert_count == 0  # noqa: SLF001
+    assert view._sendungen_alert_count == 0  # noqa: SLF001
+    assert view._drucke_alert_count == 0  # noqa: SLF001
+    assert view._digital_licenses_alert_count == 0  # noqa: SLF001
+    assert view._btn_inventory_alert.isHidden()  # noqa: SLF001
+
+
 def test_start_hold_table_toggle_persists_without_blocking_the_ui(
     qtbot: QtBot, monkeypatch: MonkeyPatch,
 ) -> None:

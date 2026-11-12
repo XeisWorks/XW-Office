@@ -2750,8 +2750,13 @@ Rechnungsansicht-Shutdowns noch den Dialog oeffnen; auch spaete Erfolgs- und
 Fehlermeldungen waren moeglich. Die vier Ergebnis-/Fehler-Callbacks kehren bei
 aktivem Shutdown jetzt ohne UI-Aktion zurueck. Eine blockierte Worker-Regression
 bestaetigt, dass `prepare_shutdown()` nicht wartet und nach Freigabe des Workers
-kein Dialog erscheint. Der Rechnungsansicht-Smoke-Satz besteht mit **100 Tests**;
-Ruff fuer die geaenderten Dateien und striktes MyPy fuer alle 27 Rechnungs-UI-
-Dateien sind gruen. Die Vollsuite besteht mit **2.283 Tests, 5 optionalen
-PostgreSQL-Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-
-Warnung (151,90 s)**. F18 bleibt fuer weitere spaete Callback-/Close-Pfade offen.
+kein Dialog erscheint. Das Audit erfasste zusaetzlich spaete Rechnungslisten-,
+Such-, Badge- und offene Produktuebersicht-Callbacks: sie verwerfen jetzt
+Ergebnisse und Fehler nach Shutdown; der Rechnungslisten-Worker startet nach
+Shutdown keine automatische Folgeseite. Eine Regression prueft, dass nach
+Shutdown keine Warnungen, Badgeaenderungen oder Counts auftreten. Der
+Rechnungsansicht-Smoke-Satz besteht mit **101 Tests**; globales Ruff und
+striktes MyPy fuer alle 27 Rechnungs-UI-Dateien sind gruen. Die Vollsuite
+besteht mit **2.284 Tests, 5 optionalen PostgreSQL-Ueberspringungen und 1
+bestehenden Starlette/httpx-Deprecation-Warnung (158,55 s)**. F18 bleibt fuer
+weitere spaete Callback-/Close-Pfade offen.
