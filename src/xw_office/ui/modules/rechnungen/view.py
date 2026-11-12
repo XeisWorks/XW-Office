@@ -4478,6 +4478,8 @@ class RechnungenView(QWidget):
         self._run_output_worker.start()
 
     def _on_print_run_output_result(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         data = payload if isinstance(payload, dict) else {}
         requested = max(0, int(data.get("requested") or 0))
         printed = max(0, int(data.get("printed") or 0))
@@ -4499,6 +4501,8 @@ class RechnungenView(QWidget):
             )
 
     def _on_print_run_output_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         QMessageBox.warning(
             self,
             "Sammeldruck",
@@ -6240,6 +6244,8 @@ class RechnungenView(QWidget):
         self._fulfillment_step_worker.start()
 
     def _on_fulfillment_step_result(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         data = payload if isinstance(payload, dict) else {}
         invoice_id = str(data.get("invoice_id") or "").strip()
         invoice = str(data.get("invoice") or "—")
@@ -6252,6 +6258,8 @@ class RechnungenView(QWidget):
         )
 
     def _on_fulfillment_step_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         QMessageBox.warning(
             self,
             "Fulfillment-Fehler",
@@ -6408,6 +6416,8 @@ class RechnungenView(QWidget):
         self._delete_draft_worker.start()
 
     def _on_delete_draft_result(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         data = payload if isinstance(payload, dict) else {}
         label = str(data.get("label") or "Entwurf").strip() or "Entwurf"
         signals: AppSignals = self._container.resolve(AppSignals)
@@ -6415,6 +6425,8 @@ class RechnungenView(QWidget):
         self._reload_first_page()
 
     def _on_delete_draft_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         QMessageBox.warning(
             self,
             "Rechnungsentwurf löschen",
@@ -6743,6 +6755,8 @@ class RechnungenView(QWidget):
         self._invoice_pdf_preview_worker.start()
 
     def _on_invoice_pdf_preview_result(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         data = payload if isinstance(payload, dict) else {}
         path = str(data.get("path") or "").strip()
         if not path or not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
@@ -6753,6 +6767,8 @@ class RechnungenView(QWidget):
             )
 
     def _on_invoice_pdf_preview_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         QMessageBox.warning(
             self,
             "Rechnungs-PDF ansehen",
@@ -6832,6 +6848,8 @@ class RechnungenView(QWidget):
         self._customer_mail_worker.start()
 
     def _on_customer_mail_ready(self, summary: InvoiceSummary, payload: object) -> None:
+        if self._shutting_down:
+            return
         data = payload if isinstance(payload, dict) else {}
         email = self._clean_email_value(data.get("email"))
         if not email:
@@ -6855,6 +6873,8 @@ class RechnungenView(QWidget):
         )
 
     def _on_customer_mail_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         QMessageBox.warning(self, "Kunden-Mail", f"Mail konnte nicht vorbereitet werden:\n\n{exc}")
 
     def _open_customer_mail_outlook(self, email: str, subject: str) -> bool:
@@ -7849,6 +7869,8 @@ class RechnungenView(QWidget):
         self._update_plc_controls()
 
     def _on_direct_label_print_result(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         data = payload if isinstance(payload, dict) else {}
         invoice_id = str(data.get("invoice_id") or "").strip()
         invoice = str(data.get("invoice") or "---")
@@ -7857,6 +7879,8 @@ class RechnungenView(QWidget):
         signals.status_message.emit(f"Label fuer Rechnung {invoice} wurde gesendet.", 5000)
 
     def _on_direct_label_print_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         QMessageBox.warning(
             self,
             "Labeldruck",
@@ -7864,6 +7888,8 @@ class RechnungenView(QWidget):
         )
 
     def _on_direct_invoice_print_result(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         data = payload if isinstance(payload, dict) else {}
         invoice_id = str(data.get("invoice_id") or "").strip()
         invoice = str(data.get("invoice") or "---")
@@ -7872,6 +7898,8 @@ class RechnungenView(QWidget):
         signals.status_message.emit(f"Rechnung {invoice} wurde an den Drucker gesendet.", 5000)
 
     def _on_direct_invoice_print_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         QMessageBox.warning(
             self,
             "Rechnungsdruck",
@@ -7879,6 +7907,8 @@ class RechnungenView(QWidget):
         )
 
     def _on_send_invoice_result(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         data = payload if isinstance(payload, dict) else {}
         invoice_id = str(data.get("invoice_id") or "").strip()
         invoice = str(data.get("invoice") or "---")
@@ -7891,6 +7921,8 @@ class RechnungenView(QWidget):
         )
 
     def _on_send_invoice_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         QMessageBox.warning(
             self,
             "Rechnung senden",
@@ -7930,6 +7962,8 @@ class RechnungenView(QWidget):
         self._draft_product_worker.start()
 
     def _on_create_draft_result(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         data = payload if isinstance(payload, dict) else {}
         raw_draft = data.get("draft")
         draft_payload = raw_draft if isinstance(raw_draft, dict) else data
@@ -7966,6 +8000,8 @@ class RechnungenView(QWidget):
         self._reload_first_page()
 
     def _on_create_draft_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         self._overlay.hide()
         QMessageBox.warning(
             self,
@@ -8910,6 +8946,8 @@ class RechnungenView(QWidget):
             signals.status_message.emit(f"{sku}: Druckauftrag {qty}x bestaetigt; Bestand aktualisiert.", 5000)
 
     def _on_product_print_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         QMessageBox.critical(
             self,
             "Produktdruck fehlgeschlagen",

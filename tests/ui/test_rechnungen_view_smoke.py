@@ -812,6 +812,58 @@ def test_late_invoice_list_and_badge_callbacks_are_ignored_during_shutdown(
     assert view._btn_inventory_alert.isHidden()  # noqa: SLF001
 
 
+def test_late_pdf_mail_and_delete_callbacks_do_not_open_ui_on_shutdown(
+    qtbot: QtBot,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    dialogs: list[str] = []
+    opened_urls: list[object] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda _parent, title, _message: dialogs.append(str(title)),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda _parent, title, _message: dialogs.append(str(title)),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda _parent, title, _message: dialogs.append(str(title)),
+    )
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.QDesktopServices.openUrl",
+        lambda url: opened_urls.append(url) or True,
+    )
+
+    view._shutting_down = True  # noqa: SLF001
+    view._on_invoice_pdf_preview_result({"path": "late-preview.pdf"})  # noqa: SLF001
+    view._on_invoice_pdf_preview_error(RuntimeError("late PDF failure"))  # noqa: SLF001
+    view._on_customer_mail_ready(invoice_service._draft, {"email": ""})  # noqa: SLF001
+    view._on_customer_mail_error(RuntimeError("late mail failure"))  # noqa: SLF001
+    view._on_delete_draft_result({"label": "late draft"})  # noqa: SLF001
+    view._on_delete_draft_error(RuntimeError("late delete failure"))  # noqa: SLF001
+    view._on_print_run_output_result(  # noqa: SLF001
+        {"requested": 1, "printed": 0, "failures": [{"error": "late print"}]}
+    )
+    view._on_print_run_output_error(RuntimeError("late print failure"))  # noqa: SLF001
+    view._on_fulfillment_step_result({"invoice": "RE-LATE"})  # noqa: SLF001
+    view._on_fulfillment_step_error(RuntimeError("late fulfillment failure"))  # noqa: SLF001
+    view._on_direct_label_print_error(RuntimeError("late label failure"))  # noqa: SLF001
+    view._on_direct_invoice_print_error(RuntimeError("late invoice failure"))  # noqa: SLF001
+    view._on_send_invoice_error(RuntimeError("late send failure"))  # noqa: SLF001
+    view._on_create_draft_error(RuntimeError("late draft failure"))  # noqa: SLF001
+    view._on_product_print_error(RuntimeError("late product print failure"))  # noqa: SLF001
+
+    assert dialogs == []
+    assert opened_urls == []
+
+
 def test_start_hold_table_toggle_persists_without_blocking_the_ui(
     qtbot: QtBot, monkeypatch: MonkeyPatch,
 ) -> None:

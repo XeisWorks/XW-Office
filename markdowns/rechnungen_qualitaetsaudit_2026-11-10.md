@@ -2755,11 +2755,14 @@ Such-, Badge- und offene Produktuebersicht-Callbacks: sie verwerfen jetzt
 Ergebnisse und Fehler nach Shutdown; der Rechnungslisten-Worker startet nach
 Shutdown keine automatische Folgeseite. Eine Regression prueft, dass nach
 Shutdown keine Warnungen, Badgeaenderungen oder Counts auftreten. Der
-Rechnungsansicht-Smoke-Satz besteht mit **101 Tests**; globales Ruff und
-striktes MyPy fuer alle 27 Rechnungs-UI-Dateien sind gruen. Die Vollsuite
-besteht mit **2.284 Tests, 5 optionalen PostgreSQL-Ueberspringungen und 1
-bestehenden Starlette/httpx-Deprecation-Warnung (158,55 s)**. F18 bleibt fuer
-weitere spaete Callback-/Close-Pfade offen.
+Rechnungsansicht-Smoke-Satz prueft zusaetzlich PDF-Vorschau, Kunden-Mail,
+Entwurfloeschung, Sammel-/Einzeldruck, Fulfillment und Entwurfsfehler: nach
+Shutdown erscheinen keine Dialoge und externe PDF-Oeffnungen werden verworfen.
+Der Smoke-Satz besteht mit **103 Tests**; globales Ruff und striktes MyPy fuer
+alle 27 Rechnungs-UI-Dateien sind gruen. Die Vollsuite besteht mit **2.286
+Tests, 5 optionalen PostgreSQL-Ueberspringungen und 1 bestehenden
+Starlette/httpx-Deprecation-Warnung (152,46 s)**. F18 bleibt fuer weitere
+spaete Callback-/Close-Pfade offen.
 
 ## F25-Fortschreibung - vorbereitete Rechnungszeilen
 
