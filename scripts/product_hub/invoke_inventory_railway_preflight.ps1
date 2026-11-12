@@ -126,12 +126,39 @@ if ($IncludeExactMappingSummary) {
     if (-not $workerService) {
         throw "Der optionale Exact-Mapping-Preflight benötigt den Service 'xw-inventory-worker'."
     }
-    $mappingSummary = Invoke-RailwayCapture `
-        -Arguments @(
-            "run", "--project", $ProjectId, "--service", $workerService.id, "--environment", $EnvironmentName, "--",
-            $PythonExecutable, "scripts/product_hub/preview_exact_inventory_mappings.py", "--summary"
-        ) `
-        -CapturePath $mappingSummaryPath
+    # railway run executes locally with the selected service's variables.  The
+    # worker's DATABASE_URL is private-only and therefore cannot be resolved by
+    # this runner.  Combine the worker's sevDesk token with Postgres' public URL
+    # in process memory, then run the read-only preview locally.  Secret values
+    # never enter logs, arguments, snapshots or the returned summary.
+    $workerVariablesJson = & railway variable list --project $ProjectId --service $workerService.id --environment $EnvironmentName --json 2>$null | Out-String
+    $workerVariables = ConvertFrom-Json -InputObject $workerVariablesJson
+    $postgresVariablesJson = & railway variable list --project $ProjectId --service $postgresService.id --environment $EnvironmentName --json 2>$null | Out-String
+    $postgresVariables = ConvertFrom-Json -InputObject $postgresVariablesJson
+    $mappingDatabaseUrl = [string]$postgresVariables.DATABASE_PUBLIC_URL
+    if ([string]::IsNullOrWhiteSpace($mappingDatabaseUrl)) {
+        $mappingDatabaseUrl = [string]$postgresVariables.DATABASE_URL
+    }
+    $mappingSevdeskToken = [string]$workerVariables.SEVDESK_API_TOKEN
+    if ([string]::IsNullOrWhiteSpace($mappingDatabaseUrl) -or [string]::IsNullOrWhiteSpace($mappingSevdeskToken)) {
+        throw "Exact-Mapping-Preflight benÃ¶tigt eine Postgres-Public-URL und SEVDESK_API_TOKEN."
+    }
+    $previousDatabaseUrl = $env:DATABASE_URL
+    $previousSevdeskToken = $env:SEVDESK_API_TOKEN
+    try {
+        $env:DATABASE_URL = $mappingDatabaseUrl
+        $env:SEVDESK_API_TOKEN = $mappingSevdeskToken
+        $mappingOutput = & $PythonExecutable "scripts/product_hub/preview_exact_inventory_mappings.py" "--summary" 2>&1
+        $mappingExitCode = $LASTEXITCODE
+    }
+    finally {
+        if ($null -eq $previousDatabaseUrl) { Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue }
+        else { $env:DATABASE_URL = $previousDatabaseUrl }
+        if ($null -eq $previousSevdeskToken) { Remove-Item Env:SEVDESK_API_TOKEN -ErrorAction SilentlyContinue }
+        else { $env:SEVDESK_API_TOKEN = $previousSevdeskToken }
+    }
+    $mappingOutput | Set-Content -LiteralPath $mappingSummaryPath -Encoding UTF8
+    $mappingSummary = [pscustomobject]@{ ExitCode = $mappingExitCode; Output = ($mappingOutput -join [Environment]::NewLine) }
 }
 
 $summary = [pscustomobject]@{

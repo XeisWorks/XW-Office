@@ -1560,7 +1560,7 @@ Readiness ist `eligible=true`, DB-Readiness bleibt vor Inventur erwartungsgemä�
 
 Der neue Exact-SKU-Preflight `scripts/product_hub/preview_exact_inventory_mappings.py`
 wurde im Railway-Worker read-only ausgeführt: 382 physische Produkte, 505 Varianten,
-528 sevDesk-Parts und 240 eindeutige 1:1-Kandidaten. Die Kandidaten werden nur als
+528 sevDesk-Parts und 231 eindeutige 1:1-Kandidaten. Die Kandidaten werden nur als
 JSON-Vorschlag ausgegeben; es gibt bewusst keinen automatischen Schreibpfad, weil
 unter den Daten auch Versand-/Serviceartikel liegen und die Artikelart vor einer
 Zuordnung bestätigt werden muss. Der kompakte Betriebsaufruf ist:
@@ -1585,6 +1585,12 @@ Payloads. Es wurden keine Bestands- oder Providerdaten geschrieben.
 
 Der kombinierte Railway-Betriebszugriff inklusive Exact-SKU-ZÃ¤hler wird mit
 `invoke_inventory_railway_preflight.ps1 -IncludeExactMappingSummary` ausgefÃ¼hrt.
+
+Der Exact-Mapping-Teil verwendet dabei die öffentliche Postgres-URL plus den
+Railway-gesetzten sevDesk-Token nur im Prozessspeicher. Damit wird die private
+Worker-Domain nicht vom lokalen Runner aufgelöst; Secretwerte werden weder geloggt
+noch in Dateien geschrieben. Der verifizierte read-only Lauf am 01:16 CET fand
+231 Kandidaten (374 live/aktive physische Produkte, 492 Varianten, 528 Parts).
 
 Der Railway-Preflight auf `main`/`d9e421b` ist erneut erfolgreich: Product Hub
 Deployment `2841582d-afab-4663-af81-1a389a8f8b21` und Worker Deployment

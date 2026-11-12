@@ -186,7 +186,7 @@ Sync-Konflikte. Provider-/Graph-/Wix-Grundkonfiguration und der Worker-Marker si
 - Für die Mapping-Bereinigung kann danach read-only der Exact-SKU-Preflight im
   Worker ausgeführt werden:
   `python scripts/product_hub/preview_exact_inventory_mappings.py --summary`.
-  Der zuletzt verifizierte Lauf fand 240 eindeutige Kandidaten; wegen unklarer
+  Der zuletzt verifizierte Lauf fand 231 eindeutige Kandidaten; wegen unklarer
   Artikelarten (u. a. Versand-/Serviceartikel) werden sie nicht automatisch angewandt.
 
 ## Read-only-Folgepruefung (12. November 2026, 00:11 CET)
@@ -262,11 +262,14 @@ Master/Shadow blieben `false`; es wurden keine Buchungs- oder Providerdaten gesc
 
 Der kombinierte read-only Zugriff inklusive Exact-SKU-Zaehler ist:
 `powershell -ExecutionPolicy Bypass -File .\scripts\product_hub\invoke_inventory_railway_preflight.ps1 -IncludeExactMappingSummary`.
+Der Exact-SKU-Teil nutzt dabei die Postgres-Public-URL und den sevDesk-Token nur
+im Prozessspeicher, damit die private Worker-Domain auf dem lokalen Runner kein
+falsches Betriebsfehlerbild erzeugt.
 
 Der aktuelle Stand auf Commit `d9e421b` ist erfolgreich deployt:
 Product Hub `2841582d-afab-4663-af81-1a389a8f8b21`, Worker
 `41d96250-a187-432f-a781-be4b35797dad`, Healthcheck HTTP 200. Der Preflight endet
 mit Runtime-Readiness Exit 0 und DB-Readiness Exit 2. Der Quellen-Audit bleibt bei
 594 Mapping-Blockern, 565 fehlenden Quellmengen und 29 Legacy-/Hub-Drifts.
-Der Exact-SKU-Preflight fand 240 1:1-Kandidaten, schreibt aber bewusst nichts;
+Der Exact-SKU-Preflight fand 231 1:1-Kandidaten, schreibt aber bewusst nichts;
 Artikelarten und Zuordnung müssen vor einer Anwendung bestätigt werden.
