@@ -53,7 +53,7 @@ from xw_office.services.invoice_processing.buyer_notes import BuyerNoteCase, Buy
 from xw_office.services.b2b_credit import B2bCreditService
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
 from xw_office.services.customer_aftercare.service import CustomerAftercareService
-from xw_office.services.digital_licenses import DigitalLicenseService
+from xw_office.services.digital_licenses import DigitalLicenseCase, DigitalLicenseService
 from xw_office.services.sendungen.service import OffeneSendungenService
 from xw_office.services.drucke.service import OffeneDruckeService
 from xw_office.ui.modules.rechnungen.customer_aftercare_review_dialog import (
@@ -340,6 +340,7 @@ class TagesgeschaeftView(QWidget):
         self._start_product_worker: BackgroundWorker | None = None
         self._start_exec_worker: BackgroundWorker | None = None
         self._digital_license_offer_worker: BackgroundWorker | None = None
+        self._digital_license_defer_worker: BackgroundWorker | None = None
         self._reprint_worker: BackgroundWorker | None = None
         self._reprint_exec_worker: BackgroundWorker | None = None
         self._b2b_credit_check_worker: BackgroundWorker | None = None
@@ -413,6 +414,7 @@ class TagesgeschaeftView(QWidget):
                 self._start_product_worker,
                 self._start_exec_worker,
                 self._digital_license_offer_worker,
+                self._digital_license_defer_worker,
                 self._reprint_worker,
                 self._reprint_exec_worker,
             )
@@ -451,6 +453,7 @@ class TagesgeschaeftView(QWidget):
                 self._start_product_worker,
                 self._start_exec_worker,
                 self._digital_license_offer_worker,
+                self._digital_license_defer_worker,
                 self._reprint_worker,
                 self._reprint_exec_worker,
                 self._b2b_credit_check_worker,
@@ -1802,7 +1805,13 @@ class TagesgeschaeftView(QWidget):
         worker.start()
 
     def _on_digital_license_candidates_ready(self, payload: object) -> None:
-        cases = list(payload) if isinstance(payload, list) else []
+        if self._shutdown_requested:
+            return
+        cases = (
+            [case for case in payload if isinstance(case, DigitalLicenseCase)]
+            if isinstance(payload, list)
+            else []
+        )
         if not cases or self._rechnungen_view is None:
             return
         count = len(cases)
@@ -1814,17 +1823,42 @@ class TagesgeschaeftView(QWidget):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
-        service: DigitalLicenseService = self._container.resolve(DigitalLicenseService)
         if answer != QMessageBox.StandardButton.Yes:
-            for case in cases:
-                try:
-                    service.defer(case)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Deferring digital-license case failed: %s", exc)
-            self._refresh_badges()
+            if (
+                self._digital_license_defer_worker is not None
+                and self._digital_license_defer_worker.isRunning()
+            ):
+                return
+            deferred_cases = tuple(cases)
+
+            def job() -> None:
+                service: DigitalLicenseService = self._container.resolve(DigitalLicenseService)
+                for case in deferred_cases:
+                    try:
+                        service.defer(case)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Deferring digital-license case failed: %s", exc)
+
+            worker = BackgroundWorker(job)
+            worker.signals.error.connect(
+                lambda exc: logger.warning("Digital-license deferral failed: %s", exc)
+            )
+            worker.signals.finished.connect(
+                lambda current=worker: self._on_digital_license_defer_finished(current)
+            )
+            self._digital_license_defer_worker = worker
+            worker.start()
+            return
+        if self._rechnungen_view is None:
             return
         self._rechnungen_view.open_digital_licenses_dialog()
         self._refresh_badges()
+
+    def _on_digital_license_defer_finished(self, worker: BackgroundWorker) -> None:
+        if self._digital_license_defer_worker is worker:
+            self._digital_license_defer_worker = None
+        if not self._shutdown_requested:
+            self._refresh_badges()
 
     def _on_start_preflight_error(self, exc: Exception) -> None:
         self._set_start_running(False)

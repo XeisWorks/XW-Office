@@ -27,7 +27,7 @@ from xw_office.services.customer_aftercare.redelivery import (
     RedeliveryContext,
 )
 from xw_office.services.daily_business.service import DailyBusinessService
-from xw_office.services.digital_licenses import DigitalLicenseService
+from xw_office.services.digital_licenses import DigitalLicenseCase, DigitalLicenseService
 from xw_office.services.draft_invoice.service import DraftInvoiceService, ProductPreflightPlan
 from xw_office.services.inventory.service import StartDecision, StartMode, StartPreflight
 from xw_office.services.invoice_processing.context import InvoiceWorkContext, InvoiceWorkPosition
@@ -452,6 +452,66 @@ def test_start_product_preflight_continues_only_after_unreleased_commit(
     callback = completion[0]
     callback(True, "")  # type: ignore[operator]
     assert continued == [plan]
+
+
+def test_declining_digital_license_offer_defers_cases_off_ui_thread(
+    qtbot: QtBot, monkeypatch: MonkeyPatch,
+) -> None:
+    entered, release = Event(), Event()
+    main_thread_id = get_ident()
+    calls: list[str] = []
+    resolve_threads: list[int] = []
+
+    class SlowDigitalLicenseService:
+        def defer(self, case: DigitalLicenseCase) -> None:
+            assert get_ident() != main_thread_id
+            calls.append(case.invoice_id)
+            entered.set()
+            assert release.wait(3)
+
+    container = _build_container()
+
+    def resolve_service(_container: Container) -> SlowDigitalLicenseService:
+        resolve_threads.append(get_ident())
+        return SlowDigitalLicenseService()
+
+    container.register(DigitalLicenseService, resolve_service)  # type: ignore[arg-type,return-value]
+    view = TagesgeschaeftView(container)
+    qtbot.addWidget(view)
+    view._rechnungen_view = types.SimpleNamespace()  # type: ignore[assignment]  # noqa: SLF001
+    monkeypatch.setattr(view, "_refresh_badges", lambda: None)  # noqa: SLF001
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QMessageBox.StandardButton.No,
+    )
+    case = DigitalLicenseCase(
+        invoice_id="invoice-1",
+        invoice_number="XW-1001",
+        order_reference="order-1",
+        customer_name="Test",
+        customer_email="test@example.invalid",
+        lines=[],
+    )
+
+    try:
+        view._on_digital_license_candidates_ready([case])  # noqa: SLF001
+        qtbot.waitUntil(entered.is_set, timeout=1000)
+        worker = view._digital_license_defer_worker  # noqa: SLF001
+        assert worker is not None and worker.isRunning()
+        assert worker in view._shutdown_workers()  # noqa: SLF001
+        assert calls == ["invoice-1"]
+        assert resolve_threads and resolve_threads[0] != main_thread_id
+
+        heartbeat: list[bool] = []
+        QTimer.singleShot(0, lambda: heartbeat.append(True))
+        qtbot.waitUntil(lambda: bool(heartbeat), timeout=500)
+    finally:
+        release.set()
+        qtbot.waitUntil(
+            lambda: view._digital_license_defer_worker is None,  # noqa: SLF001
+            timeout=1000,
+        )
 
 
 def test_draft_preview_is_non_blocking(qtbot: object) -> None:

@@ -3662,3 +3662,17 @@ Die PDF-Regressionen bestehen mit **2 Tests**; striktes MyPy fuer das Modul,
 Ruff und `git diff --check` sind gruen. Die globale MyPy-Baseline sinkt von
 **39 Fehlern in 19 Dateien** auf **32 Fehler in 18 Dateien** (498 gepruefte
 Module).
+
+## AP06/F17-Fortschreibung - Digital-Lizenz-Zurueckstellung nach START (12.11.2026)
+
+Wenn nach START die manuelle digitale Lieferung abgelehnt wurde, rief der
+Ergebniscallback `DigitalLicenseService.defer()` samt durablem Fulfillment-
+Repository-Write synchron im GUI-Thread auf. Service-Aufloesung und alle
+Zurueckstellungen laufen jetzt in einem eigenen BackgroundWorker; seine
+Lebensdauer ist in Close-/Shutdown-Erkennung eingebunden und der Badge-Refresh
+erfolgt nach dem Abschluss. Der Qt-Test blockiert den Fake-Write, prueft
+Service-Aufloesung und Persistierung ausserhalb des Hauptthreads, weiterlaufenden
+Heartbeat und Shutdown-Tracking. Die vollstaendige Rechnungsansicht-Smokesuite
+besteht mit **106 Tests**; striktes MyPy fuer `tagesgeschaeft_view.py`, Ruff und
+`git diff --check` sind gruen. Weitere F17-I/O-Einstiege bleiben gemaess AP06 zu
+pruefen.
