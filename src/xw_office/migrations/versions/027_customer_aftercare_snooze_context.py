@@ -6,6 +6,8 @@ Revises: 026_customer_aftercare_redelivery
 
 from __future__ import annotations
 
+from typing import Any
+
 import sqlalchemy as sa
 from alembic import op
 
@@ -15,7 +17,7 @@ branch_labels = None
 depends_on = None
 
 
-_COLUMNS = {
+_COLUMNS: dict[str, sa.Column[Any]] = {
     "source_invoice_date": sa.Column(
         "source_invoice_date", sa.String(32), nullable=False, server_default=""
     ),

@@ -5,6 +5,8 @@ Revises: 025_expense_pipeline_tenant_purpose_rules
 """
 from __future__ import annotations
 
+from typing import Any
+
 import sqlalchemy as sa
 from alembic import op
 
@@ -14,7 +16,7 @@ branch_labels = None
 depends_on = None
 
 
-_CASE_COLUMNS = {
+_CASE_COLUMNS: dict[str, sa.Column[Any]] = {
     "sevdesk_contact_id": sa.Column("sevdesk_contact_id", sa.String(64), nullable=False, server_default=""),
     "source_invoice_id": sa.Column("source_invoice_id", sa.String(64), nullable=False, server_default=""),
     "source_invoice_number": sa.Column("source_invoice_number", sa.String(64), nullable=False, server_default=""),
@@ -29,7 +31,7 @@ _CASE_COLUMNS = {
     "delivery_note_printed_at": sa.Column("delivery_note_printed_at", sa.DateTime(timezone=True), nullable=True),
 }
 
-_ITEM_COLUMNS = {
+_ITEM_COLUMNS: dict[str, sa.Column[Any]] = {
     "source_kind": sa.Column("source_kind", sa.String(32), nullable=False, server_default=""),
     "source_item_id": sa.Column("source_item_id", sa.String(128), nullable=False, server_default=""),
     "parent_sku": sa.Column("parent_sku", sa.String(64), nullable=False, server_default=""),
@@ -40,7 +42,7 @@ _ITEM_COLUMNS = {
 }
 
 
-def _add_missing_columns(table: str, columns: dict[str, sa.Column]) -> None:
+def _add_missing_columns(table: str, columns: dict[str, sa.Column[Any]]) -> None:
     inspector = sa.inspect(op.get_bind())
     existing = {item["name"] for item in inspector.get_columns(table)}
     for name, column in columns.items():
