@@ -153,7 +153,6 @@ from xw_office.ui.modules.rechnungen.plc_label_dialog import (
     queue_packing_lists,
 )
 from xw_office.ui.modules.rechnungen.plc_statistics_dialog import PlcStatisticsDialog
-from xw_office.services.plc.statistics import PlcStatisticsService
 from xw_office.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 from xw_office.ui.dialogs.unreleased_title_dialog import (
     UnreleasedProductEditDialog,
@@ -5644,7 +5643,7 @@ class RechnungenView(QWidget):
         PlcLabelPrintDialog(self._container, None, self).exec()
 
     def _on_plc_statistics_clicked(self) -> None:
-        PlcStatisticsDialog(self._container.resolve(PlcStatisticsService), self).exec()
+        PlcStatisticsDialog(self._container, self).exec()
 
     def _on_print_plc_selected(self) -> None:
         self._run_selected_row_action("post")

@@ -2480,3 +2480,12 @@ Empfaengernamen zurueck; Detail- und Schreibaktionen verwenden danach dieselbe
 Instanz. Eine blockierte Servicefactory bestaetigt den Qt-Heartbeat. Die vollstaendige
 `test_offene_sendungen_dialog.py`-Suite besteht mit **12 Tests**; Ruff und striktes
 MyPy fuer das Dialogmodul sind gruen.
+
+## F17-Fortschreibung - PLC-Statistikservice im Worker (12.11.2026)
+
+Beim Oeffnen der PLC-Statistik wurde der Repository-/Datenbankservice im Aufrufer
+aufgeloest. Die Aufloesung geschieht jetzt zusammen mit dem Statistikladen im
+Dialogworker. Ein blockierter Servicefactory-Fake bestaetigt den Qt-Heartbeat;
+`test_plc_statistics_dialog.py` und `test_rechnungen_view_smoke.py` bestehen
+zusammen mit **96 Tests**. Ruff und striktes MyPy fuer Dialog und Rechnungsansicht
+sind gruen.

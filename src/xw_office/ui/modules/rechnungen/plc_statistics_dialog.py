@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from xw_office.core.container import Container
 from xw_office.core.worker import BackgroundWorker
 from xw_office.services.plc.statistics import PlcPeriodStatistics, PlcStatisticsService
 
@@ -97,9 +98,9 @@ class _StatisticsPage(QWidget):
 
 
 class PlcStatisticsDialog(QDialog):
-    def __init__(self, service: PlcStatisticsService, parent: QWidget | None = None) -> None:
+    def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._service = service
+        self._container = container
         self._worker: BackgroundWorker | None = None
         self._pages: dict[str, _StatisticsPage] = {}
         self.setWindowTitle("PLC-Übersicht")
@@ -139,7 +140,13 @@ class PlcStatisticsDialog(QDialog):
             return
         self._refresh.setEnabled(False)
         self._status.setText("Lade PLC-Statistik …")
-        self._worker = BackgroundWorker(self._service.load)
+        container = self._container
+
+        def job() -> tuple[PlcPeriodStatistics, ...]:
+            service: PlcStatisticsService = container.resolve(PlcStatisticsService)
+            return service.load()
+
+        self._worker = BackgroundWorker(job)
         self._worker.signals.result.connect(self._on_loaded)
         self._worker.signals.error.connect(self._on_error)
         self._worker.signals.finished.connect(self._on_finished)
