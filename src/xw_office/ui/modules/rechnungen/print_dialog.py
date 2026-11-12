@@ -12,6 +12,7 @@ from shiboken6 import isValid
 from PySide6.QtCore import (
     QAbstractItemModel,
     QAbstractTableModel,
+    QEventLoop,
     QModelIndex,
     QPersistentModelIndex,
     QTimer,
@@ -99,6 +100,40 @@ def _resolve_pdf_open_target(raw_path: str, open_folder: bool) -> _PdfOpenTarget
     target = path.parent if open_folder else path
     exists = target.exists() if open_folder else target.is_file()
     return _PdfOpenTargetResult(str(target), exists, open_folder)
+
+
+def _persist_product_print_config(
+    container: Container,
+    piece: PieceBlock,
+    path: str,
+    profile_id: str,
+    plan: list[dict[str, str]],
+) -> None:
+    """Persist and reload a confirmed product print config off the UI thread."""
+    inventory: InventoryService = container.resolve(InventoryService)
+    # XW-010 is a generic container SKU. Its print plan belongs to the
+    # individual canonical title; overwriting the SKU default would make
+    # the last configured work look like the default for every work.
+    if piece.is_unreleased and str(piece.name or "").strip():
+        inventory.save_product_print_config(
+            sku=piece.sku,
+            name=piece.name,
+            print_file_path=path,
+            print_profile_id=profile_id,
+            print_plan=plan,
+            title_specific_only=True,
+        )
+    else:
+        inventory.save_product_print_config(
+            sku=piece.sku,
+            name=piece.name,
+            print_file_path=path,
+            print_profile_id=profile_id,
+            print_plan=plan,
+        )
+    catalog: ProductCatalogService = container.resolve(ProductCatalogService)
+    catalog.reload_from_settings()
+    resolve_piece_print_config(catalog, piece)
 
 
 def _selected_manual_pdf_pages(
@@ -870,40 +905,40 @@ def _configure_missing_piece_print(parent: QWidget, container: Container, piece:
         return False
     path, profile_id, plan = dialog.values()
 
-    inv: InventoryService = container.resolve(InventoryService)
     try:
         signals: AppSignals | None = container.resolve(AppSignals)
     except KeyError:
         signals = None
 
+    worker = BackgroundWorker(
+        _persist_product_print_config,
+        container,
+        piece,
+        path,
+        profile_id,
+        plan,
+    )
+    loop = QEventLoop(parent)
+    failures: list[Exception] = []
+    worker.signals.error.connect(failures.append)
+    worker.signals.finished.connect(loop.quit)
+    parent_enabled = parent.isEnabled() if parent is not None else True
+    if parent is not None:
+        parent.setEnabled(False)
     try:
-        # XW-010 is a generic container SKU. Its print plan belongs to the
-        # individual canonical title; overwriting the SKU default would make
-        # the last configured work look like the default for every work.
-        if piece.is_unreleased and str(piece.name or "").strip():
-            inv.save_product_print_config(
-                sku=piece.sku,
-                name=piece.name,
-                print_file_path=path,
-                print_profile_id=profile_id,
-                print_plan=plan,
-                title_specific_only=True,
-            )
-        else:
-            inv.save_product_print_config(
-                sku=piece.sku,
-                name=piece.name,
-                print_file_path=path,
-                print_profile_id=profile_id,
-                print_plan=plan,
-            )
-        catalog = container.resolve(ProductCatalogService)
-        catalog.reload_from_settings()
-        resolve_piece_print_config(catalog, piece)
+        worker.start()
+        loop.exec()
     except Exception as exc:  # noqa: BLE001 - persistence failure must keep printing closed.
-        logger.error("Product print config save failed for %s: %s", piece.sku, exc)
+        failures.append(exc)
+    finally:
+        if parent is not None:
+            parent.setEnabled(parent_enabled)
+
+    if failures:
+        failure = failures[0]
+        logger.error("Product print config save failed for %s: %s", piece.sku, failure)
         if signals is not None:
-            signals.task_error.emit("Druckkonfiguration", str(exc))
+            signals.task_error.emit("Druckkonfiguration", str(failure))
             signals.status_message.emit(f"Druckkonfiguration konnte nicht gespeichert werden: {piece.sku}", 12000)
         return False
     if signals is not None:

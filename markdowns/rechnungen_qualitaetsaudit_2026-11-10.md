@@ -2590,15 +2590,16 @@ ein Profil des aktuellen `main`-Stands nach normalem Neustart fehlt. F25 bleibt
 TEILWEISE, bis die Phasenmessung fuer den aktuellen Stand bestaetigt, dass 50
 vorbereitete Zeilen und der Druckpfad das Ziel einhalten.
 
-### Konkreter Restpunkt F17 - Druckkonfiguration beim ersten Produktdruck
+### F17-Fortschreibung - Produktdruck-Konfiguration beim ersten Druck
 
-`print_dialog.py::_configure_missing_piece_print` zeigt zuerst die
-Konfigurationsmaske, speichert die bestaetigten Werte danach aber synchron ueber
-`InventoryService.save_product_print_config` und `SettingKvRepository` in
-PostgreSQL. Der Aufruf liegt auf den UI-Pfaden fuer Einzelprodukt, offene
-Printprodukte und deren Sammeldruck. Das ist eine noch nicht umgesetzte
-F17-Optimierung: Bestaetigen muss den Save-Worker starten; Druck bzw. UI-Erfolg
-folgen erst nach bestaetigtem Commit, Fehler lassen Druck und sichtbaren
-Konfigurationscache unveraendert. Akzeptanz: blockierter DB-Fake mit Qt-Heartbeat,
-Fehler-/Retry-Test und Ablaufregressionen fuer Einzel-, Sammel- und
-Unreleased-Produktkonfiguration. F17 bleibt deshalb TEILWEISE.
+`print_dialog.py::_configure_missing_piece_print` speichert bestaetigte
+Produktdruck-Konfiguration jetzt in einem `BackgroundWorker`; Settings-Commit,
+Katalog-Neuladen und Teileaufloesung laufen ausserhalb des UI-Threads. Der
+aufrufende Einzel- oder Sammeldruck setzt erst nach Rueckkehr aus dem laufenden
+Qt-Eventloop fort und bleibt bei Speicherfehlern geschlossen. Ein Regressionstest
+haelt den Settings-Write an, bestaetigt Qt-Heartbeats, erzwingt einen
+voruebergehenden Fehler und prueft den erfolgreichen Retry. Die 18 Tests aus
+`test_rechnungen_product_print.py`, Ruff und striktes MyPy fuer
+`print_dialog.py` sind gruen. Die Vollsuite besteht mit **2.273 Tests, 5
+uebersprungen und 1 bestehender Starlette/httpx-Deprecation-Warnung (159,92 s)**.
+F17 bleibt wegen weiterer offener UI-I/O-Pfade teilweise offen.

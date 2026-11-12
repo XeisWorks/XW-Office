@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from threading import Event
+import time
 
 import fitz
 from PySide6.QtCore import QRect, QTimer, Qt
@@ -10,7 +11,6 @@ from PySide6.QtWidgets import QComboBox, QStyleOptionViewItem
 from xw_office.core.config import AppConfig, PrintingSection
 from xw_office.core.container import Container
 from xw_office.core.types import PrinterStatus
-from xw_office.services.background_jobs import BackgroundJobManager
 from xw_office.services.inventory import InventoryService
 from xw_office.services.products.catalog import Product
 from xw_office.services.products.catalog import ProductCatalogService
@@ -180,7 +180,7 @@ def test_invalid_pdf_is_reported_by_worker_job_before_queue_submission(monkeypat
     assert queued == []
 
 
-def test_prepare_piece_pdf_print_prompts_for_missing_print_config(monkeypatch, tmp_path) -> None:
+def test_prepare_piece_pdf_print_prompts_for_missing_print_config(monkeypatch, qtbot, tmp_path) -> None:
     pdf_path = tmp_path / "piece.pdf"
     doc = fitz.open()
     doc.new_page(width=595, height=842)
@@ -198,9 +198,15 @@ def test_prepare_piece_pdf_print_prompts_for_missing_print_config(monkeypatch, t
     container.register(PrintQueueService, lambda _container: queue)  # type: ignore[return-value]
 
     saved: dict[str, object] = {}
+    save_attempts = 0
 
     class InventoryStub:
         def save_product_print_config(self, **kwargs: object) -> object:
+            nonlocal save_attempts
+            save_attempts += 1
+            if save_attempts == 1:
+                raise RuntimeError("transient settings failure")
+            time.sleep(0.04)
             saved.update(kwargs)
             return object()
 
@@ -223,10 +229,6 @@ def test_prepare_piece_pdf_print_prompts_for_missing_print_config(monkeypatch, t
         def reload_from_settings(self) -> None:
             saved["reloaded"] = True
 
-    class BackgroundJobsMustNotBeUsed:
-        def submit_callable(self, **_kwargs: object) -> None:
-            raise AssertionError("Print config persistence must finish before the dialog reports success")
-
     class DialogStub:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             return None
@@ -243,7 +245,6 @@ def test_prepare_piece_pdf_print_prompts_for_missing_print_config(monkeypatch, t
     monkeypatch.setattr("xw_office.ui.modules.rechnungen.print_dialog.ProductPrintConfigDialog", DialogStub)
     container.register(InventoryService, lambda _container: InventoryStub())  # type: ignore[return-value]
     container.register(ProductCatalogService, lambda _container: CatalogStub())  # type: ignore[return-value]
-    container.register(BackgroundJobManager, lambda _container: BackgroundJobsMustNotBeUsed())  # type: ignore[return-value]
 
     def fake_print_pdf_by_plan(
         pdf_path_arg: str,
@@ -270,9 +271,21 @@ def test_prepare_piece_pdf_print_prompts_for_missing_print_config(monkeypatch, t
 
     monkeypatch.setattr("xw_office.ui.modules.rechnungen.print_dialog.print_pdf_by_plan", fake_print_pdf_by_plan)
 
-    job = prepare_piece_pdf_print(None, container, piece=piece, copies=2)  # type: ignore[arg-type]
+    heartbeats: list[int] = []
+    heartbeat = QTimer()
+    heartbeat.timeout.connect(lambda: heartbeats.append(1))
+    heartbeat.start(1)
 
+    try:
+        failed_job = prepare_piece_pdf_print(None, container, piece=piece, copies=2)  # type: ignore[arg-type]
+        job = prepare_piece_pdf_print(None, container, piece=piece, copies=2)  # type: ignore[arg-type]
+    finally:
+        heartbeat.stop()
+
+    assert failed_job is None
     assert job is not None
+    assert heartbeats, "Qt event loop must remain responsive while the settings commit runs"
+    assert save_attempts == 2
     assert saved["sku"] == "XW-4553"
     assert saved["print_file_path"] == str(pdf_path)
     assert saved["print_profile_id"] == "noten_duplex"
