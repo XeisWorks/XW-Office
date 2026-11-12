@@ -86,7 +86,8 @@ class WixDataClient:
             payload = self._response_json(response, f'Collection "{collection_id}" lesen')
         raw_items = payload.get("dataItems")
         items = [item for item in raw_items if isinstance(item, dict)] if isinstance(raw_items, list) else []
-        paging = payload.get("pagingMetadata") if isinstance(payload.get("pagingMetadata"), dict) else {}
+        raw_paging = payload.get("pagingMetadata")
+        paging = raw_paging if isinstance(raw_paging, dict) else {}
         count = int(paging.get("count") or len(items))
         if count >= limit:
             raise FilenameGeneratorError(

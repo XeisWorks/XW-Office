@@ -2883,16 +2883,18 @@ Der globale MyPy-Stand sank auf **193 Fehler in 51 Dateien**.
 
 Im lokalen Windows-PySide6-venv: Vollsuite **2.302 bestanden, 5 optionale
 PostgreSQL-Tests uebersprungen, 1 bestehende Starlette/httpx-Deprecation-
-Warnung (147,87 s)**; globales Ruff `ruff check .` mit **All checks passed**.
-Dieser Lauf enthaelt die Qt-Tabellen-, Unreleased-Dialog- und aktuellen
-Inventory-/Wix-Bulk-Typkorrekturen. GitHub-CI `43189075628` fuer Commit
+Warnung (147,39 s)**; globales Ruff `ruff check .` mit **All checks passed**.
+Dieser Lauf enthaelt die Qt-Tabellen-, Unreleased-Dialog-, Inventory-,
+Wix-Bulk-, Wix-CMS-Paging- und PDF-Mapper-Typkorrekturen. GitHub-CI
+`43189075628` fuer Commit
 `05db7b3` ist erfolgreich: **2.302 bestanden, 5 uebersprungen, 1 Warnung
 (795,98 s)**. Der weiche Hosted-MyPy-Schritt meldete **192 Fehler in 53
 Dateien**; das Job-Ergebnis blieb wegen `continue-on-error` erfolgreich. Lokal
-fand der globale MyPy-Lauf zuletzt **175 Fehler in 47 Dateien**; die Ursache
+fand der globale MyPy-Lauf zuletzt **172 Fehler in 45 Dateien**; die Ursache
 der unterschiedlichen lokalen/Hosted-Baselines ist nicht isoliert. Die in
 diesem Arbeitsabschnitt bereinigten Wix-, Transfer-/Graph-, PDF-Layout-,
-Tabellenmodell-, Unreleased-Dialog-, Inventory- und Product-Field-Bulk-Dateien
+Tabellenmodell-, Unreleased-Dialog-, Inventory-, Product-Field-Bulk-, Wix-Data-
+und PDF-Mapper-Dateien
 haben jeweils null Fehler. Die globale Typbereinigung und Controller-Extraktion
 bleiben F20-offen.
 
@@ -2930,6 +2932,17 @@ konkretes `UpdateResult` typisiert. START-Bestandskorrektur und Wix-Bulk-
 Service-Tests bestehen mit **30 Tests**; beide Dateien sind im gezielten MyPy
 und Ruff fehlerfrei. Lokal sank der globale MyPy-Stand auf **175 Fehler in 47
 Dateien**.
+
+## F20-Fortschreibung - Wix-CMS-Paging und PDF-Mapper
+
+`WixDataClient.query_all_items` prueft optionale `pagingMetadata`-Daten jetzt
+nach einer einzigen Feldabfrage, damit eine fehlende/null Metadatenstruktur
+sicher auf die Anzahl der geladenen Elemente zurueckfaellt. Eine Fake-HTTP-
+Regression prueft die Antwort ohne Paging-Objekt. `PdfBulkMapper` typisiert
+seine SKU-Map nun generisch, ohne Laufzeitlogik zu aendern. CMS- und PDF-Mapper-
+Regressionen bestehen mit **4 Tests**; beide Produktionsdateien sind im
+gezielten MyPy und Ruff fehlerfrei. Lokal sank der globale MyPy-Stand weiter
+auf **172 Fehler in 45 Dateien**.
 
 ## Wix- und Railway-Deployment-Readback (12.11.2026)
 

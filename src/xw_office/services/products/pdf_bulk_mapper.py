@@ -248,7 +248,7 @@ class PdfBulkMapper:
         """Yield (sku, name, is_digital) tuples from catalog."""
         out: list[tuple[str, str, bool]] = []
         # ProductCatalogService exposes _by_sku dict
-        by_sku: dict = getattr(catalog, "_by_sku", {})
+        by_sku: dict[str, object] = getattr(catalog, "_by_sku", {})
         for sku, product in by_sku.items():
             name = getattr(product, "name", "") or sku
             is_digital = bool(getattr(product, "is_digital", False))
@@ -261,5 +261,5 @@ class PdfBulkMapper:
 
     @staticmethod
     def _get_product(catalog: object, sku: str) -> object | None:
-        by_sku: dict = getattr(catalog, "_by_sku", {})
+        by_sku: dict[str, object] = getattr(catalog, "_by_sku", {})
         return by_sku.get(sku)
