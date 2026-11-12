@@ -193,7 +193,7 @@ class OffeneSendungenDialog(QDialog):
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._container = container
-        self._service: OffeneSendungenService = container.resolve(OffeneSendungenService)
+        self._service: OffeneSendungenService | None = None
         self._cases: list[SendungCase] = []
         self._open_case_count = 0
         self._load_worker: BackgroundWorker | None = None
@@ -440,17 +440,21 @@ class OffeneSendungenDialog(QDialog):
             self._list.clear()
             self._clear_detail("Lade offene Sendungen...")
 
-        def job() -> tuple[list[SendungCase], dict[str, str]]:
+        container = self._container
+        current_service = self._service
+
+        def job() -> tuple[OffeneSendungenService, list[SendungCase], dict[str, str]]:
+            service = current_service or container.resolve(OffeneSendungenService)
             if refresh:
-                self._service.refresh_from_graph(
+                service.refresh_from_graph(
                     lookback_days=20,
                     max_items=150,
                     allow_interactive_auth=not silent,
                 )
-            cases = self._service.load_open_cases()
-            names_loader = getattr(self._service, "load_cached_recipient_names", None)
+            cases = service.load_open_cases()
+            names_loader = getattr(service, "load_cached_recipient_names", None)
             names = names_loader(cases) if callable(names_loader) else {}
-            return cases, names if isinstance(names, dict) else {}
+            return service, cases, names if isinstance(names, dict) else {}
 
         self._load_worker = BackgroundWorker(job)
         self._load_worker.signals.result.connect(
@@ -474,8 +478,9 @@ class OffeneSendungenDialog(QDialog):
             return
         if seq != self._load_seq:
             return
-        if isinstance(result, tuple) and len(result) == 2:
-            cases, names = result
+        if isinstance(result, tuple) and len(result) == 3:
+            service, cases, names = result
+            self._service = service
         else:
             cases, names = result, {}
         self._cases = list(cases) if isinstance(cases, list) else []
@@ -549,6 +554,12 @@ class OffeneSendungenDialog(QDialog):
             return None
         return self._cases[idx]
 
+    def _require_service(self) -> OffeneSendungenService:
+        service = self._service
+        if service is None:
+            raise RuntimeError("Sendungsservice ist noch nicht geladen")
+        return service
+
     def _on_case_selected(self, _row: int) -> None:
         case = self._current_case()
         if case is None:
@@ -573,8 +584,9 @@ class OffeneSendungenDialog(QDialog):
         self._set_detail_loading("Analysiere Mailverlauf..." if force else "Lade Details...")
 
         def job() -> tuple[str, SendungExtraction, dict[str, object]]:
-            extraction = self._service.extract_case_details(case_id, force=force)
-            manual = self._service.load_manual_fields(case_id)
+            service = self._require_service()
+            extraction = service.extract_case_details(case_id, force=force)
+            manual = service.load_manual_fields(case_id)
             return case_id, extraction, manual
 
         worker = BackgroundWorker(job)
@@ -787,7 +799,7 @@ class OffeneSendungenDialog(QDialog):
         manual_text = self._manual_text.toPlainText()
 
         def job() -> int:
-            self._service.save_manual_fields(
+            self._require_service().save_manual_fields(
                 case_id,
                 address_lines=lines,
                 products=products,
@@ -817,7 +829,7 @@ class OffeneSendungenDialog(QDialog):
         case_id, address, products, short_note, _summary = request
 
         def job() -> Path:
-            return self._service.generate_delivery_note_pdf(
+            return self._require_service().generate_delivery_note_pdf(
                 case_id,
                 address_lines=address,
                 products=products,
@@ -842,13 +854,14 @@ class OffeneSendungenDialog(QDialog):
         case_id, address, products, short_note, _summary = request
 
         def job() -> Path:
-            path = self._service.generate_delivery_note_pdf(
+            service = self._require_service()
+            path = service.generate_delivery_note_pdf(
                 case_id,
                 address_lines=address,
                 products=products,
                 short_note=short_note,
             )
-            self._service.print_delivery_note(
+            service.print_delivery_note(
                 path,
                 printing=self._container.config.printing,
                 print_queue=self._container.resolve(PrintQueueService),
@@ -894,14 +907,15 @@ class OffeneSendungenDialog(QDialog):
         manual_text = self._manual_text.toPlainText()
 
         def job() -> int:
-            self._service.save_manual_fields(
+            self._require_service().save_manual_fields(
                 case_id,
                 address_lines=address,
                 products=products,
                 manual_text=manual_text,
             )
-            self._service.mark_done(case_id, done=True)
-            return self._service.open_count()
+            service = self._require_service()
+            service.mark_done(case_id, done=True)
+            return service.open_count()
 
         self._start_action(
             self._btn_done,

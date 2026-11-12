@@ -5,7 +5,7 @@ from pathlib import Path
 from threading import Event
 from time import sleep
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QDialog, QTabWidget
 
 from xw_office.core.config import AppConfig, PrintingSection
@@ -121,6 +121,32 @@ def test_dialog_constructor_does_not_refresh_graph_synchronously(qtbot: object) 
     qtbot.addWidget(dialog)
 
     assert service.refresh_called == 0
+
+
+def test_service_resolution_for_initial_load_runs_off_ui_thread(qtbot: object) -> None:
+    entered = Event()
+    release = Event()
+    service = _FakeSendungenService()
+
+    class SlowContainer(_FakeContainer):
+        def resolve(self, typ: object) -> object:
+            if typ is OffeneSendungenService:
+                entered.set()
+                release.wait(2)
+            return super().resolve(typ)
+
+    dialog = OffeneSendungenDialog(SlowContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    heartbeats: list[bool] = []
+    QTimer.singleShot(20, lambda: heartbeats.append(True))
+    qtbot.waitUntil(entered.is_set, timeout=1000)
+    qtbot.waitUntil(lambda: bool(heartbeats), timeout=1000)
+    assert dialog._status.text() == "Lade offene Sendungen..."  # noqa: SLF001
+    release.set()
+    qtbot.waitUntil(
+        lambda: dialog._status.text() == "1 offene Sendungen",
+        timeout=2000,
+    )
 
 
 def test_dialog_has_separate_open_shipments_and_redelivery_tabs(qtbot: object) -> None:

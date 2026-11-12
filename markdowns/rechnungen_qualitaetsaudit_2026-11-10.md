@@ -2471,3 +2471,12 @@ der die Artikelliste laedt. Der Dialog wird sichtbar und der Eventloop bleibt
 reaktionsfaehig, auch wenn die Servicefactory blockiert. Die Serviceinstanz wird
 nach dem Laden fuer die bewusste Payment-Link-Aktion wiederverwendet. Zwei
 Qt-Dialogtests, Ruff und striktes MyPy fuer das Dialogmodul bestanden.
+
+## F17-Fortschreibung - Sendungsservice beim Erstladen (12.11.2026)
+
+`OffeneSendungenDialog` erzeugt seinen Graph-/Settings-Service nun ebenfalls erst
+im initialen Listen-Worker. Der Worker gibt die Serviceinstanz mit Liste und
+Empfaengernamen zurueck; Detail- und Schreibaktionen verwenden danach dieselbe
+Instanz. Eine blockierte Servicefactory bestaetigt den Qt-Heartbeat. Die vollstaendige
+`test_offene_sendungen_dialog.py`-Suite besteht mit **12 Tests**; Ruff und striktes
+MyPy fuer das Dialogmodul sind gruen.
