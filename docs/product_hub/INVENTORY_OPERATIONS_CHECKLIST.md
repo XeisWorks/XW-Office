@@ -258,6 +258,13 @@ Runtime-Readiness ist `eligible=true`; DB-Readiness bleibt `eligible=false`.
 594 Quellen-Auditprobleme, 29 Bestandsabweichungen und 710 offene Sync-Konflikte.
 Master/Shadow blieben `false`; es wurden keine Buchungs- oder Providerdaten geschrieben.
 
+## Aktueller Volltest nach PLC-Fix (12. November 2026, 01:45 CET)
+
+Auf `main`/`e0d0906` ist der Volltest mit **2273 passed, 5 skipped** und Ruff
+ohne Befund abgeschlossen. Der reine Dokumentations-Deploy `e0d0906` wartet bei
+Railway noch auf den Buildslot; Product Hub und Worker auf `d88d8b6` sind SUCCESS,
+`/health` ist HTTP 200.
+
 ## Post-Deploy-Verifikation (12. November 2026, 01:36 CET)
 
 Product Hub und `xw-inventory-worker` sind auf Commit `d88d8b6` SUCCESS deployed;

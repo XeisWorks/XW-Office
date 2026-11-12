@@ -1581,6 +1581,13 @@ Runtime-Readiness `eligible=true` (Exit 0), DB-Readiness erwartungsgemäß
 726 Sync-Konflikte (davon 710 offen), 432 Outbox-Ereignisse und 263 archivierte
 Payloads. Es wurden keine Bestands- oder Providerdaten geschrieben.
 
+### Aktueller Volltest nach PLC-Fix (12. November 2026, 01:45 CET)
+
+Auf `main`/`e0d0906` ist der aktuelle Volltest mit **2273 passed, 5 skipped**
+und Ruff ohne Befund abgeschlossen. Der vorherige Code-Deploy `d88d8b6` bleibt
+auf Product Hub und Worker SUCCESS; der reine Dokumentations-Deploy `e0d0906`
+ist bei Railway noch im Buildslot. `/health` liefert weiterhin HTTP 200.
+
 ### Post-Deploy-Verifikation (12. November 2026, 01:36 CET)
 
 Product Hub und `xw-inventory-worker` sind auf Commit `d88d8b6` SUCCESS deployed;
