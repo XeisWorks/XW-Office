@@ -3829,3 +3829,21 @@ GitHub Actions Run `43254690232` auf Commit `56d2e37` besteht vollstaendig: Inst
 Die idempotente Bestands-/Claim-Orchestrierung des einzelnen Rechnungs-Produktdrucks liegt jetzt in `ui/modules/rechnungen/product_print_controller.py` statt als lokale Geschaeftslogik in `RechnungenView`. Der View-Worker uebergibt Druckfunktion, Rechnungskontext und die aufgeloesten Services. Der Controller behaelt die bisherigen Zustandsregeln: ein nicht erworbener Claim blockiert den Spool, bestaetigte Teilerfolge werden gebucht, ein Fehler vor dem Spool schliesst den Claim als `failed`, ein unklarer Ausgang oder fehlender sevDesk-Part bleibt `unknown`, und ein Buchungsfehler verhindert den Erfolgsstatus. Der PDF-Vorbereitungsfehler ist fuer die bestehende Importgrenze weiter aus `print_dialog` exportiert.
 
 Neue Regressionen decken Partialdruck, fehlende Claims, Vorbereitungsfehler, unklare Druckfehler, fehlende Part-Zuordnung und Ledgerfehler ab. Die fokussierte Rechnungs-/Drucksuite besteht mit **138 Tests**; striktes MyPy der drei geaenderten Produktionsmodule, globales Ruff und `git diff --check` sind gruen. Die globale Typpruefung besteht mit **0 Fehlern in 499 Quelldateien**. Die lokale Vollsuite besteht mit **2.372 Tests, 5 optionalen PostgreSQL-Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung (154,05 s)**. Hosted-CI fuer den neuen Produktionsstand steht nach dem Push aus. AP08/F20 bleibt offen, da die geplante Extraktion weiterer klar abgegrenzter Verantwortlichkeiten der grossen Views noch nicht abgeschlossen ist.
+
+### Sammeldruck auf denselben Controller vereinheitlicht
+
+Auch `PRINT SELECTED PRODUCTS` und der Sammel-Notendruck delegieren jetzt an
+denselben Controller. Dadurch buchen beide Wege bestaetigte Teilmengen nach
+`PrintPlanPartialFailure`, markieren nur die tatsaechlich gedruckte Menge und
+setzen die Verarbeitung unabhaengiger Folgeprodukte fort; Claim-, PDF- und
+Bestandsfehler bleiben je SKU sichtbar. Eine neue Regression prueft Teilmenge,
+Folgeprodukt und getrennte Mengenbuchungen.
+
+Die fokussierte Rechnungs-/Drucksuite besteht mit **139 Tests**, die Vollsuite
+mit **2.373 bestanden, 5 optionalen PostgreSQL-Ueberspringungen und 1
+bestehenden Starlette/httpx-Deprecation-Warnung (163,41 s)**. Globales MyPy
+meldet **0 Fehler in 499 Quelldateien**, globale Ruff und `git diff --check` sind
+gruen. Hosted-Windows-CI fuer den Sammeldruck-Refactor steht nach dem Push aus.
+Die manuelle Produktdruck-Abnahme bleibt ausstehend und ist weiterhin Teil des
+G1/G2-Gates; AP08/F20 bleibt fuer weitere klar abgegrenzte Controller-Arbeit
+offen.

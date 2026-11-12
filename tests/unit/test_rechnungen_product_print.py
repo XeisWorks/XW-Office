@@ -1211,6 +1211,39 @@ def test_invoice_product_print_controller_books_partial_success() -> None:
     }
 
 
+def test_invoice_product_print_controller_batch_books_partial_sets_and_continues() -> None:
+    engine = _PrintControllerEngine()
+    controller = InvoiceProductPrintController(
+        cast(PrintDecisionEngine, engine), cast(InventoryService, object())
+    )
+    first_piece = _print_controller_piece()
+    second_piece = PieceBlock(
+        sku="XW-SECOND",
+        name="Second product",
+        qty_needed=1,
+        product=Product(
+            id="product-2",
+            sku="XW-SECOND",
+            name="Second product",
+            sevdesk_part_id="part-2",
+        ),
+    )
+
+    def partial_job() -> None:
+        raise PrintPlanPartialFailure("Drucker offline", completed_copies=2, job_ids=["job-1"])
+
+    result = controller.execute_many(
+        [(first_piece, 3, partial_job), (second_piece, 1, lambda: None)],
+        invoice_ref="RE-BATCH",
+    )
+
+    assert result.printed == ("XW-CONTROLLER (2x)", "XW-SECOND (1x)")
+    assert result.warnings == ("XW-CONTROLLER: Drucker offline",)
+    assert not result.claim_warnings
+    assert [entry[1] for entry in engine.recorded] == [2, 1]
+    assert engine.finished == [("succeeded", ""), ("succeeded", "")]
+
+
 @pytest.mark.parametrize(
     ("print_error", "expected_state"),
     [

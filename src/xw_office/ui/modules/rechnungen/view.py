@@ -4557,7 +4557,7 @@ class RechnungenView(QWidget):
                 return
 
         from xw_office.ui.modules.rechnungen.product_print_controller import (
-            ProductPdfPreparationError,
+            InvoiceProductPrintController,
         )
         from xw_office.ui.modules.rechnungen.print_dialog import (
             _configure_missing_piece_print,
@@ -4614,50 +4614,15 @@ class RechnungenView(QWidget):
         )
 
         def worker_job() -> dict[str, object]:
-            printed: list[str] = []
-            warnings: list[str] = []
-            claim_warnings: list[str] = []
             engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
             inventory: InventoryService = self._container.resolve(InventoryService)
-            for block, qty, job in prepared_jobs:
-                claim = engine.acquire_product_print_claim(block)
-                if not claim.acquired:
-                    claim_warnings.append(f"{block.sku}: Claim {claim.state}")
-                    continue
-                try:
-                    job()
-                except Exception as exc:
-                    if isinstance(exc, ProductPdfPreparationError):
-                        engine.finish_product_print_claim(claim, "failed", error=str(exc))
-                        status = "PDF konnte vor dem Druck nicht vorbereitet werden"
-                    else:
-                        engine.finish_product_print_claim(claim, "unknown", error=str(exc))
-                        status = "Druckergebnis unklar"
-                    warnings.append(f"{block.sku}: {status}: {exc}")
-                    continue
-                printed.append(f"{block.sku} ({qty}x)")
-                if block.product is None or not str(block.product.sevdesk_part_id or "").strip():
-                    engine.finish_product_print_claim(
-                        claim, "unknown", error="Druck bestaetigt, sevDesk-Part fehlt"
-                    )
-                    warnings.append(f"{block.sku}: kein sevDesk-Part fuer Bestandsbuchung hinterlegt")
-                    continue
-                try:
-                    engine.record_confirmed_print(
-                        block, qty, inventory, operation_id=claim.operation_id
-                    )
-                except Exception as exc:
-                    engine.finish_product_print_claim(claim, "unknown", error=str(exc))
-                    logger.warning("Stock update after PRINT SELECTED PRODUCTS failed for %s: %s", block.sku, exc)
-                    warnings.append(f"{block.sku}: {exc}")
-                    continue
-                engine.finish_product_print_claim(claim, "succeeded")
+            batch = InvoiceProductPrintController(engine, inventory).execute_many(prepared_jobs)
             return {
-                "sku": f"{len(printed)} Produkt(e)",
+                "sku": f"{len(batch.printed)} Produkt(e)",
                 "quantity": total_copies,
-                "stock_warning": "\n".join(warnings),
-                "claim_warning": "; ".join(claim_warnings),
-                "printed": ", ".join(printed),
+                "stock_warning": "\n".join(batch.warnings),
+                "claim_warning": "; ".join(batch.claim_warnings),
+                "printed": ", ".join(batch.printed),
                 "print_all_key": products_key,
             }
 
@@ -5744,7 +5709,7 @@ class RechnungenView(QWidget):
         if self._product_print_worker is not None and self._product_print_worker.isRunning():
             return
         from xw_office.ui.modules.rechnungen.product_print_controller import (
-            ProductPdfPreparationError,
+            InvoiceProductPrintController,
         )
         from xw_office.ui.modules.rechnungen.print_dialog import (
             prepare_piece_pdf_print,
@@ -5797,47 +5762,18 @@ class RechnungenView(QWidget):
         )
 
         def worker_job() -> dict[str, object]:
-            warnings: list[str] = []
-            printed: list[str] = []
-            claim_warnings: list[str] = []
             engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
             inventory: InventoryService = self._container.resolve(InventoryService)
-            for block, qty, job in selected_jobs:
-                claim = engine.acquire_product_print_claim(block)
-                if not claim.acquired:
-                    claim_warnings.append(f"{block.sku}: Claim {claim.state}")
-                    continue
-                try:
-                    job()
-                    printed.append(f"{block.sku} ({qty}x)")
-                    if block.product is None or not str(block.product.sevdesk_part_id or "").strip():
-                        engine.finish_product_print_claim(
-                            claim, "unknown", error="Druck bestaetigt, sevDesk-Part fehlt"
-                        )
-                        warnings.append(f"{block.sku}: kein sevDesk-Part fuer Bestandsbuchung hinterlegt")
-                        continue
-                    engine.record_confirmed_print(
-                        block,
-                        qty,
-                        inventory,
-                        operation_id=claim.operation_id,
-                        invoice_ref=invoice_ref,
-                    )
-                except Exception as exc:
-                    if isinstance(exc, ProductPdfPreparationError):
-                        engine.finish_product_print_claim(claim, "failed", error=str(exc))
-                    else:
-                        engine.finish_product_print_claim(claim, "unknown", error=str(exc))
-                    logger.warning("Stock update after batch product print failed: %s", exc)
-                    warnings.append(f"{block.sku}: {exc}")
-                    continue
-                engine.finish_product_print_claim(claim, "succeeded")
+            batch = InvoiceProductPrintController(engine, inventory).execute_many(
+                selected_jobs,
+                invoice_ref=invoice_ref,
+            )
             return {
-                "sku": f"{len(printed)} Produkt(e)",
+                "sku": f"{len(batch.printed)} Produkt(e)",
                 "quantity": total_copies,
-                "stock_warning": "\n".join(warnings),
-                "claim_warning": "; ".join(claim_warnings),
-                "printed": ", ".join(printed),
+                "stock_warning": "\n".join(batch.warnings),
+                "claim_warning": "; ".join(batch.claim_warnings),
+                "printed": ", ".join(batch.printed),
                 "skipped": ", ".join(skipped),
             }
 

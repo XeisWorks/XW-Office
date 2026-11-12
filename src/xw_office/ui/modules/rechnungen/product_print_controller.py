@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from xw_office.services.inventory import InventoryService
 from xw_office.services.products.print_decision import PieceBlock, PrintDecisionEngine
@@ -15,12 +16,68 @@ class ProductPdfPreparationError(RuntimeError):
     """A product PDF failed validation before a printer job was submitted."""
 
 
+@dataclass(frozen=True)
+class ProductPrintBatchResult:
+    printed: tuple[str, ...]
+    warnings: tuple[str, ...]
+    claim_warnings: tuple[str, ...]
+
+
 class InvoiceProductPrintController:
     """Coordinate the print claim, physical dispatch and confirmed stock write."""
 
     def __init__(self, engine: PrintDecisionEngine, inventory: InventoryService) -> None:
         self._engine = engine
         self._inventory = inventory
+
+    def execute_many(
+        self,
+        jobs: list[tuple[PieceBlock, int, Callable[[], None]]],
+        *,
+        invoice_ref: str = "",
+    ) -> ProductPrintBatchResult:
+        """Run each independent print claim and retain confirmed partial sets."""
+        printed: list[str] = []
+        warnings: list[str] = []
+        claim_warnings: list[str] = []
+        for piece, requested_quantity, print_job in jobs:
+            try:
+                result = self.execute(
+                    piece,
+                    requested_quantity,
+                    invoice_ref=invoice_ref,
+                    print_job=print_job,
+                )
+            except Exception as exc:
+                if isinstance(exc, ProductPdfPreparationError):
+                    status = "PDF konnte vor dem Druck nicht vorbereitet werden"
+                elif isinstance(exc, PrintPlanPartialFailure) and exc.completed_copies <= 0:
+                    status = "Keine Kopie wurde gedruckt"
+                else:
+                    status = "Druckergebnis unklar"
+                logger.warning("Batch product print failed for %s: %s", piece.sku, exc)
+                warnings.append(f"{piece.sku}: {status}: {exc}")
+                continue
+
+            claim_warning = str(result.get("claim_warning") or "").strip()
+            if claim_warning:
+                claim_warnings.append(f"{piece.sku}: {claim_warning}")
+                continue
+
+            raw_quantity = result.get("quantity")
+            completed = raw_quantity if isinstance(raw_quantity, int) else 0
+            if completed > 0:
+                printed.append(f"{piece.sku} ({completed}x)")
+            for warning_key in ("stock_warning", "print_warning"):
+                warning = str(result.get(warning_key) or "").strip()
+                if warning:
+                    warnings.append(f"{piece.sku}: {warning}")
+
+        return ProductPrintBatchResult(
+            printed=tuple(printed),
+            warnings=tuple(warnings),
+            claim_warnings=tuple(claim_warnings),
+        )
 
     def execute(
         self,
