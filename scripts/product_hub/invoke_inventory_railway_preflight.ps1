@@ -8,6 +8,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# PowerShell 7 can promote a non-zero native exit code to a terminating
+# exception when this preference is enabled.  The preflight intentionally
+# accepts DB-readiness exit code 2 before the physical inventory, so keep
+# native Railway exit codes data that we inspect explicitly below.
+if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+    $PSNativeCommandUseErrorActionPreference = $false
+}
 
 if (-not (Get-Command railway -ErrorAction SilentlyContinue)) {
     throw "Railway CLI wurde nicht gefunden. Bitte 'railway login' und die CLI-Installation prüfen."
@@ -39,13 +46,21 @@ function Invoke-RailwayCapture {
     )
 
     $previousErrorActionPreference = $ErrorActionPreference
+    $previousNativeCommandPreference = $null
     $ErrorActionPreference = "Continue"
+    if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+        $previousNativeCommandPreference = $PSNativeCommandUseErrorActionPreference
+        $PSNativeCommandUseErrorActionPreference = $false
+    }
     try {
         $output = & railway @Arguments 2>&1
         $exitCode = $LASTEXITCODE
     }
     finally {
         $ErrorActionPreference = $previousErrorActionPreference
+        if ($null -ne $previousNativeCommandPreference) {
+            $PSNativeCommandUseErrorActionPreference = $previousNativeCommandPreference
+        }
     }
     $output | Set-Content -LiteralPath $CapturePath -Encoding UTF8
     return [pscustomobject]@{
@@ -131,9 +146,31 @@ if ($IncludeExactMappingSummary) {
     # this runner.  Combine the worker's sevDesk token with Postgres' public URL
     # in process memory, then run the read-only preview locally.  Secret values
     # never enter logs, arguments, snapshots or the returned summary.
-    $workerVariablesJson = & railway variable list --project $ProjectId --service $workerService.id --environment $EnvironmentName --json 2>$null | Out-String
+    $previousErrorActionPreference = $ErrorActionPreference
+    $previousNativeCommandPreference = $null
+    $ErrorActionPreference = "Continue"
+    if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+        $previousNativeCommandPreference = $PSNativeCommandUseErrorActionPreference
+        $PSNativeCommandUseErrorActionPreference = $false
+    }
+    try {
+        # Keep the variable payload in memory only.  Do not redirect it to a
+        # report file because this response contains secrets.
+        $workerVariablesJson = & railway variable list --project $ProjectId --service $workerService.id --environment $EnvironmentName --json | Out-String
+        $workerVariablesExitCode = $LASTEXITCODE
+        $postgresVariablesJson = & railway variable list --project $ProjectId --service $postgresService.id --environment $EnvironmentName --json | Out-String
+        $postgresVariablesExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        if ($null -ne $previousNativeCommandPreference) {
+            $PSNativeCommandUseErrorActionPreference = $previousNativeCommandPreference
+        }
+    }
+    if ($workerVariablesExitCode -ne 0 -or $postgresVariablesExitCode -ne 0) {
+        throw "Railway-Variablen konnten fuer den Exact-Mapping-Preflight nicht gelesen werden."
+    }
     $workerVariables = ConvertFrom-Json -InputObject $workerVariablesJson
-    $postgresVariablesJson = & railway variable list --project $ProjectId --service $postgresService.id --environment $EnvironmentName --json 2>$null | Out-String
     $postgresVariables = ConvertFrom-Json -InputObject $postgresVariablesJson
     $mappingDatabaseUrl = [string]$postgresVariables.DATABASE_PUBLIC_URL
     if ([string]::IsNullOrWhiteSpace($mappingDatabaseUrl)) {
