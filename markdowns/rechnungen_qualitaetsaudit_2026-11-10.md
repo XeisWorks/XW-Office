@@ -3907,3 +3907,8 @@ oder den Inventur-/Backup-/Shadow-/Cutover-Ablauf.
 GitHub Actions Windows-Run [`43267418365`](https://github.com/XeisWorks/XW-Office/actions/runs/43267418365)
 auf Commit `5cd3e58` ist vollstaendig gruen: Install, Ruff und MyPy bestanden;
 **2.373 bestanden, 7 uebersprungen, 1 bestehende Warnung (624,44 s)**.
+
+Das Zugangspasswort der nichtproduktiven Restore-Drill-PostgreSQL wurde danach
+vorsorglich rotiert und die Verbindung mit der neuen Railway-Konfiguration per
+`SELECT 1` bestaetigt. Der SSH-Tunnel ist geschlossen; Produktivdienste und
+Produktivdaten waren davon nicht betroffen.
