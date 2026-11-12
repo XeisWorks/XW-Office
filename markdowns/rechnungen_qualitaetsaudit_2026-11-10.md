@@ -2686,3 +2686,17 @@ gruen. Die Vollsuite besteht mit **2.278 Tests, 5 optionalen PostgreSQL-
 Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung
 (156,03 s)**; globales Ruff und `git diff --check` sind ebenfalls gruen. F17
 bleibt bis zur Pruefung der uebrigen UI-I/O- und Lifecycle-Pfade offen.
+
+## F17-Fortschreibung - kalte Produktkatalog-Aufloesung im START-Panel
+
+Auch der Kaltpfad beim Anzeigen von START-Produktdetails ist jetzt abgesichert:
+`_on_stuecke_loaded` verwendet nur eine bereits aufgeloeste Kataloginstanz im
+GUI-Thread. Fehlt sie oder ist der Unreleased-Katalog noch nicht geladen,
+uebernimmt ein sequenzgesicherter Worker sowohl `Container.resolve()` als auch
+den ersten Settings-/Datei-Read. Ein blockierter Fake prueft Worker-Thread,
+laufenden Qt-Heartbeat und spaetere Darstellung. Die Rechnungsansicht-Smoke-Suite
+besteht mit **96 Tests**, striktes MyPy fuer alle 27 Rechnungs-UI-Dateien und
+globales Ruff sind gruen. Die Vollsuite besteht mit **2.279 Tests, 5 optionalen
+PostgreSQL-Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-Warnung
+(150,87 s)**. F17 bleibt bis zum Abschluss der uebrigen UI-I/O- und
+Lifecycle-Pruefung offen.

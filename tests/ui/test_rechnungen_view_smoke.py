@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from threading import Event, Timer
+from threading import Event, Timer, get_ident
 import types
 from pathlib import Path
 
@@ -135,6 +135,42 @@ def test_unreleased_catalog_disk_and_settings_read_runs_off_ui_thread(
         release.set()
 
     qtbot.waitUntil(lambda: view._current_piece_blocks == [piece], timeout=3000)  # noqa: SLF001
+    assert catalog.unreleased_products_loaded is True
+
+
+def test_cold_product_catalog_resolution_runs_off_ui_thread(
+    qtbot: QtBot,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    container = _build_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    container.reset()
+    main_thread_id = get_ident()
+    original_resolve = container.resolve
+    entered, release, heartbeat = Event(), Event(), Event()
+
+    def checked_resolve(service_type: type[object]) -> object:
+        if service_type is ProductCatalogService and container.get_if_resolved(ProductCatalogService) is None:
+            entered.set()
+            assert get_ident() != main_thread_id
+            assert release.wait(3)
+        return original_resolve(service_type)
+
+    monkeypatch.setattr(container, "resolve", checked_resolve)
+    piece = PieceBlock(sku="SKU-COLD", name="Titel", qty_needed=1)
+    view._on_stuecke_loaded([piece])  # noqa: SLF001
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=2000)
+        QTimer.singleShot(0, heartbeat.set)
+        qtbot.waitUntil(heartbeat.is_set, timeout=1000)
+        assert view._piece_model.rowCount() == 0  # noqa: SLF001
+    finally:
+        release.set()
+
+    qtbot.waitUntil(lambda: view._current_piece_blocks == [piece], timeout=3000)  # noqa: SLF001
+    catalog = container.get_if_resolved(ProductCatalogService)
+    assert catalog is not None
     assert catalog.unreleased_products_loaded is True
 
 

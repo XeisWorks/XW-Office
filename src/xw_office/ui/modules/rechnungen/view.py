@@ -8533,13 +8533,8 @@ class RechnungenView(QWidget):
         if requested_ref and requested_ref != current_ref:
             return
         if not catalog_warmed:
-            try:
-                catalog_to_warm: ProductCatalogService | None = self._container.resolve(
-                    ProductCatalogService
-                )
-            except KeyError:
-                catalog_to_warm = None
-            if catalog_to_warm is not None and not catalog_to_warm.unreleased_products_loaded:
+            catalog_to_warm = self._container.get_if_resolved(ProductCatalogService)
+            if catalog_to_warm is None or not catalog_to_warm.unreleased_products_loaded:
                 self._piece_config_seq += 1
                 config_seq = self._piece_config_seq
                 if self._piece_config_worker is not None and self._piece_config_worker.isRunning():
@@ -8549,7 +8544,13 @@ class RechnungenView(QWidget):
                 self._gb_stuecke.show()
 
                 def warm_catalog() -> object:
-                    return catalog_to_warm.list_unreleased_products()
+                    try:
+                        catalog: ProductCatalogService = self._container.resolve(
+                            ProductCatalogService
+                        )
+                    except KeyError:
+                        return None
+                    return catalog.list_unreleased_products()
 
                 worker = BackgroundWorker(warm_catalog)
                 worker.signals.result.connect(
