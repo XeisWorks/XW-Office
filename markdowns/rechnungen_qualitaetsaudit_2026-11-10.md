@@ -2732,3 +2732,13 @@ vor dem Druckdialog. Die Rechnungsansicht-Smoke-Suite besteht mit **99 Tests**,
 Ruff global und striktes MyPy fuer alle 27 Rechnungs-UI-Dateien sind gruen. Die
 Vollsuite besteht mit **2.282 Tests, 5 optionalen PostgreSQL-Ueberspringungen
 und 1 bestehenden Starlette/httpx-Deprecation-Warnung (150,15 s)**.
+
+## F18-Fortschreibung - START-Verlauf-Worker beim Schliessen
+
+Der Persistenzworker fuer START-Verlaeufe ist Teil des Rechnungsansicht-
+Shutdown-Snapshots. Eine Regression haelt den ersten SettingKV-Write an, reiht
+einen neueren Lauf ein, fordert das Schliessen an und bestaetigt, dass die
+GUI-Methode sofort zurueckkehrt, der Shutdown-Zustand bis zum Ende beider Writes
+offen bleibt und danach der neueste Lauf gespeichert ist. Der fokussierte
+Test `test_start_history_settings_write_runs_off_ui_thread_and_keeps_latest_run`
+besteht; F18 bleibt wegen der restlichen spaeten Callback-/Close-Pfade offen.

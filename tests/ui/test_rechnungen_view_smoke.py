@@ -2143,6 +2143,8 @@ def test_start_history_settings_write_runs_off_ui_thread_and_keeps_latest_run(
         qtbot.waitUntil(heartbeat.is_set, timeout=1000)
         view.mark_print_products_last_run(invoice_print_ids=["second-run"])
         assert invoice_service.last_start_overview == {}
+        assert view.prepare_shutdown() is False
+        assert view.shutdown_complete() is False
     finally:
         release_first.set()
         timer.stop()
@@ -2150,7 +2152,8 @@ def test_start_history_settings_write_runs_off_ui_thread_and_keeps_latest_run(
     qtbot.waitUntil(
         lambda: view._print_history_worker is None  # noqa: SLF001
         and invoice_service.last_start_overview.get("runs", [{}])[0].get("invoice_print_ids")
-        == ["second-run"],
+        == ["second-run"]
+        and view.shutdown_complete(),
         timeout=3000,
     )
     assert [payload["runs"][0]["invoice_print_ids"] for payload in written] == [
