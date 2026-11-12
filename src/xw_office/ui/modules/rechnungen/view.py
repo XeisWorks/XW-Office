@@ -4556,8 +4556,10 @@ class RechnungenView(QWidget):
             if answer != QMessageBox.StandardButton.Yes:
                 return
 
-        from xw_office.ui.modules.rechnungen.print_dialog import (
+        from xw_office.ui.modules.rechnungen.product_print_controller import (
             ProductPdfPreparationError,
+        )
+        from xw_office.ui.modules.rechnungen.print_dialog import (
             _configure_missing_piece_print,
             prepare_piece_pdf_print,
             warmed_product_catalog_for_print,
@@ -5741,8 +5743,10 @@ class RechnungenView(QWidget):
             return
         if self._product_print_worker is not None and self._product_print_worker.isRunning():
             return
-        from xw_office.ui.modules.rechnungen.print_dialog import (
+        from xw_office.ui.modules.rechnungen.product_print_controller import (
             ProductPdfPreparationError,
+        )
+        from xw_office.ui.modules.rechnungen.print_dialog import (
             prepare_piece_pdf_print,
             warmed_product_catalog_for_print,
         )
@@ -8745,11 +8749,7 @@ class RechnungenView(QWidget):
     ) -> None:
         if not self._print_allowed:
             return
-        from xw_office.ui.modules.rechnungen.print_dialog import (
-            ProductPdfPreparationError,
-            prepare_piece_pdf_print,
-        )
-        from xw_office.services.printing.planned_pdf_printer import PrintPlanPartialFailure
+        from xw_office.ui.modules.rechnungen.print_dialog import prepare_piece_pdf_print
 
         print_key = str(
             (block.product.sevdesk_part_id if block.product is not None else "")
@@ -8798,67 +8798,16 @@ class RechnungenView(QWidget):
         def worker_job() -> dict[str, object]:
             engine: PrintDecisionEngine = self._container.resolve(PrintDecisionEngine)
             inventory: InventoryService = self._container.resolve(InventoryService)
-            claim = engine.acquire_product_print_claim(block)
-            if not claim.acquired:
-                return {
-                    "sku": block.sku,
-                    "quantity": 0,
-                    "claim_warning": (
-                        f"Druck ist durch einen {claim.state}-Claim gesperrt. "
-                        "Bei unklarem Druckergebnis erst den physischen Lauf abgleichen."
-                    ),
-                }
-            completed = qty
-            print_warning = ""
-            try:
-                job()
-            except PrintPlanPartialFailure as exc:
-                # A failure partway through a multi-copy plan must not
-                # discard the sets that already printed successfully — book
-                # what was confirmed and report the shortfall separately.
-                completed = exc.completed_copies
-                print_warning = str(exc)
-                if completed <= 0:
-                    engine.finish_product_print_claim(
-                        claim, "failed", error="Kein Exemplar wurde gedruckt"
-                    )
-                    raise
-            except ProductPdfPreparationError as exc:
-                engine.finish_product_print_claim(claim, "failed", error=str(exc))
-                raise
-            except Exception as exc:
-                engine.finish_product_print_claim(claim, "unknown", error=str(exc))
-                raise
-            if block.product is None or not str(block.product.sevdesk_part_id or "").strip():
-                engine.finish_product_print_claim(
-                    claim, "unknown", error="Druck bestaetigt, aber kein sevDesk-Part zugeordnet"
-                )
-                return {
-                    "sku": block.sku,
-                    "quantity": completed,
-                    "stock_warning": "kein sevDesk-Part fuer Bestandsbuchung hinterlegt",
-                    "print_warning": print_warning,
-                }
-            try:
-                engine.record_confirmed_print(
-                    block,
-                    completed,
-                    inventory,
-                    operation_id=claim.operation_id,
-                    invoice_ref=invoice_ref,
-                )
-            except Exception as exc:
-                engine.finish_product_print_claim(claim, "unknown", error=str(exc))
-                logger.warning("Stock update after product print failed: %s", exc)
-                return {"sku": block.sku, "quantity": completed, "stock_warning": str(exc), "print_warning": print_warning}
-            engine.finish_product_print_claim(claim, "succeeded")
-            return {
-                "sku": block.sku,
-                "quantity": completed,
-                "stock_warning": "",
-                "local_warning": "",
-                "print_warning": print_warning,
-            }
+            from xw_office.ui.modules.rechnungen.product_print_controller import (
+                InvoiceProductPrintController,
+            )
+
+            return InvoiceProductPrintController(engine, inventory).execute(
+                block,
+                qty,
+                invoice_ref=invoice_ref,
+                print_job=job,
+            )
 
         handle: JobHandle
 

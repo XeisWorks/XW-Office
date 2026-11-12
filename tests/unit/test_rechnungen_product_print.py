@@ -4,8 +4,10 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, get_ident, main_thread
 import time
+from typing import cast
 
 import fitz
+import pytest
 from PySide6.QtCore import QRect, QTimer, Qt
 from PySide6.QtWidgets import QComboBox, QStyleOptionViewItem
 
@@ -16,14 +18,19 @@ from xw_office.services.inventory import InventoryService
 from xw_office.services.products.catalog import Product
 from xw_office.services.products.catalog import ProductCatalogService
 from xw_office.services.products.print_decision import PieceBlock
+from xw_office.services.products.print_decision import PrintDecisionEngine
+from xw_office.services.printing.planned_pdf_printer import PrintPlanPartialFailure
+from xw_office.services.invoice_processing.operation_claims import OperationClaim
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.printer_status.service import PrinterStatusService, PrinterStatusSnapshot
 from xw_office.ui.modules.rechnungen import print_dialog
 from xw_office.ui.modules.rechnungen.print_dialog import (
+    ProductPdfPreparationError,
     ProductPrintConfigDialog,
     prepare_piece_pdf_print,
     warmed_product_catalog_for_print,
 )
+from xw_office.ui.modules.rechnungen.product_print_controller import InvoiceProductPrintController
 from xw_office.ui.modules.rechnungen.view import _PieceDelegate
 
 
@@ -1105,3 +1112,164 @@ def test_product_pdf_inspection_ignores_result_after_dialog_close(qtbot: object,
     qtbot.waitUntil(lambda: not worker.isRunning(), timeout=3000)  # type: ignore[attr-defined]
 
     assert dialog._page_count is None  # noqa: SLF001
+
+
+class _PrintControllerEngine:
+    def __init__(self, *, acquired: bool = True, record_error: Exception | None = None) -> None:
+        self.claim = OperationClaim(
+            invoice_id="part-1",
+            operation="physical_product_print",
+            operation_id="claim-1",
+            state="running",
+            acquired=acquired,
+        )
+        self.record_error = record_error
+        self.finished: list[tuple[str, str]] = []
+        self.recorded: list[tuple[str, int, str, str]] = []
+
+    def acquire_product_print_claim(self, _piece: PieceBlock) -> OperationClaim:
+        return self.claim
+
+    def finish_product_print_claim(
+        self, _claim: OperationClaim, state: str, *, error: str = ""
+    ) -> bool:
+        self.finished.append((state, error))
+        return True
+
+    def record_confirmed_print(
+        self,
+        _piece: PieceBlock,
+        quantity: int,
+        _inventory: InventoryService,
+        *,
+        operation_id: str,
+        invoice_ref: str = "",
+    ) -> int:
+        self.recorded.append((self.claim.invoice_id, quantity, operation_id, invoice_ref))
+        if self.record_error is not None:
+            raise self.record_error
+        return quantity
+
+
+def _print_controller_piece(*, sevdesk_part_id: str = "part-1") -> PieceBlock:
+    return PieceBlock(
+        sku="XW-CONTROLLER",
+        name="Controller test",
+        qty_needed=3,
+        product=Product(
+            id="product-1",
+            sku="XW-CONTROLLER",
+            name="Controller test",
+            sevdesk_part_id=sevdesk_part_id,
+        ),
+    )
+
+
+def _run_print_controller(
+    engine: _PrintControllerEngine,
+    piece: PieceBlock,
+    print_job,
+    *,
+    quantity: int = 3,
+) -> dict[str, object]:
+    controller = InvoiceProductPrintController(
+        cast(PrintDecisionEngine, engine), cast(InventoryService, object())
+    )
+    return controller.execute(
+        piece,
+        quantity,
+        invoice_ref="RE-TEST",
+        print_job=print_job,
+    )
+
+
+def test_invoice_product_print_controller_books_partial_success() -> None:
+    engine = _PrintControllerEngine()
+    dispatched: list[bool] = []
+
+    def fail_after_confirmed_copies() -> None:
+        dispatched.append(True)
+        raise PrintPlanPartialFailure(
+            "Drucker offline", completed_copies=2, job_ids=["job-1"]
+        )
+
+    result = _run_print_controller(
+        engine,
+        _print_controller_piece(),
+        fail_after_confirmed_copies,
+    )
+
+    assert dispatched == [True]
+    assert engine.recorded == [("part-1", 2, "claim-1", "RE-TEST")]
+    assert engine.finished == [("succeeded", "")]
+    assert result == {
+        "sku": "XW-CONTROLLER",
+        "quantity": 2,
+        "stock_warning": "",
+        "local_warning": "",
+        "print_warning": "Drucker offline",
+    }
+
+
+@pytest.mark.parametrize(
+    ("print_error", "expected_state"),
+    [
+        (ProductPdfPreparationError("PDF fehlt"), "failed"),
+        (RuntimeError("Druckerstatus unklar"), "unknown"),
+        (PrintPlanPartialFailure("keine Kopie bestaetigt", completed_copies=0, job_ids=[]), "failed"),
+    ],
+)
+def test_invoice_product_print_controller_preserves_claim_error_state(
+    print_error: Exception,
+    expected_state: str,
+) -> None:
+    engine = _PrintControllerEngine()
+
+    def fail_print() -> None:
+        raise print_error
+
+    with pytest.raises(type(print_error), match=str(print_error)):
+        _run_print_controller(engine, _print_controller_piece(), fail_print)
+
+    expected_error = (
+        "Kein Exemplar wurde gedruckt"
+        if isinstance(print_error, PrintPlanPartialFailure)
+        else str(print_error)
+    )
+    assert engine.finished == [(expected_state, expected_error)]
+    assert not engine.recorded
+
+
+def test_invoice_product_print_controller_keeps_unknown_when_part_is_missing() -> None:
+    engine = _PrintControllerEngine()
+    result = _run_print_controller(
+        engine,
+        _print_controller_piece(sevdesk_part_id=""),
+        lambda: None,
+    )
+
+    assert not engine.recorded
+    assert engine.finished == [("unknown", "Druck bestaetigt, aber kein sevDesk-Part zugeordnet")]
+    assert result["stock_warning"] == "kein sevDesk-Part fuer Bestandsbuchung hinterlegt"
+
+
+def test_invoice_product_print_controller_stops_when_claim_is_not_acquired() -> None:
+    engine = _PrintControllerEngine(acquired=False)
+    dispatched: list[bool] = []
+    result = _run_print_controller(
+        engine,
+        _print_controller_piece(),
+        lambda: dispatched.append(True),
+    )
+
+    assert not dispatched
+    assert not engine.finished
+    assert result["claim_warning"]
+
+
+def test_invoice_product_print_controller_keeps_claim_unknown_if_stock_write_fails() -> None:
+    engine = _PrintControllerEngine(record_error=RuntimeError("Ledger unavailable"))
+    result = _run_print_controller(engine, _print_controller_piece(), lambda: None)
+
+    assert engine.finished == [("unknown", "Ledger unavailable")]
+    assert result["stock_warning"] == "Ledger unavailable"

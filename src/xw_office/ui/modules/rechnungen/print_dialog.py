@@ -51,15 +51,15 @@ from xw_office.services.printing.print_jobs import PdfPrintJob, PrintJobKind
 from xw_office.services.printing.print_queue import PrintQueueService
 from xw_office.services.printing.planned_pdf_printer import page_indices_from_range_text, print_pdf_by_plan
 from xw_office.services.printer_status.service import PrinterStatusService
+from xw_office.ui.modules.rechnungen.product_print_controller import (
+    ProductPdfPreparationError as ProductPdfPreparationError,
+)
 
 if TYPE_CHECKING:
     from xw_office.core.container import Container
 
 logger = logging.getLogger(__name__)
 
-
-class ProductPdfPreparationError(RuntimeError):
-    """A product PDF failed validation before a printer job was submitted."""
 
 _PRODUCT_PRINT_PROFILE_IDS = {
     "noten_simplex",
