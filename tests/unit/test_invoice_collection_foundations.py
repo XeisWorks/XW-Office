@@ -9,6 +9,7 @@ import fitz
 import pytest
 
 from xw_office.services.invoice_collection.connectors.manual_import import ManualImportConnector
+from xw_office.services.invoice_collection.auth import secrets as secrets_module
 from xw_office.services.invoice_collection.auth.secrets import KeyringSecretStore
 from xw_office.services.invoice_collection.connections import ConnectionRepository
 from xw_office.services.invoice_collection.domain import (
@@ -154,6 +155,20 @@ def test_keyring_secret_store_uses_secret_ref_without_plaintext_file() -> None:
     assert FakeKeyring.values == {
         ("xw-office/invoice-collection", "provider/connection/token"): "secret-value"
     }
+
+
+def test_keyring_secret_store_explains_missing_optional_dependency(monkeypatch) -> None:
+    def missing_keyring(module_name: str) -> object:
+        assert module_name == "keyring"
+        raise ImportError("keyring package is not installed")
+
+    monkeypatch.setattr(secrets_module, "import_module", missing_keyring)
+
+    with pytest.raises(InvoiceCollectionError) as error:
+        KeyringSecretStore()
+
+    assert error.value.code == InvoiceErrorCode.CONFIGURATION_ERROR
+    assert "keyring" in str(error.value).casefold()
 
 
 def test_pdf_inspection_rejects_html_with_pdf_extension(tmp_path: Path) -> None:
