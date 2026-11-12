@@ -3517,6 +3517,8 @@ class RechnungenView(QWidget):
 
     def _on_open_overview_finished(self) -> None:
         self._open_overview_worker = None
+        if self._shutting_down:
+            return
         if self._pending_open_overview_rows:
             self._submit_side_job(
                 coalesce_key="open-overview",
@@ -3665,6 +3667,8 @@ class RechnungenView(QWidget):
 
     def _on_open_product_preparation_finished(self) -> None:
         self._open_product_preparation_worker = None
+        if self._shutting_down:
+            return
         pending = self._open_product_preparation_pending
         self._open_product_preparation_pending = None
         if pending is not None:
@@ -4512,6 +4516,8 @@ class RechnungenView(QWidget):
     def _on_print_run_output_finished(self) -> None:
         self._run_output_worker = None
         self._run_output_active_request = None
+        if self._shutting_down:
+            return
         self._start_next_run_output_print()
 
     @staticmethod
@@ -5427,6 +5433,8 @@ class RechnungenView(QWidget):
         return self._hint_worker
 
     def _on_hint_prefetch_result(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         data = payload if isinstance(payload, dict) else {}
         seq = int(data.get("seq") or 0)
         if seq != self._hint_seq:
@@ -5441,11 +5449,15 @@ class RechnungenView(QWidget):
         self._apply_hint_patch_to_visible_rows(ref, patch)
 
     def _on_hint_prefetch_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         logger.warning("Invoice hint prefetch failed: %s", exc)
 
     def _on_hint_prefetch_finished(self) -> None:
         self._hint_worker = None
         self._hint_inflight_ref = ""
+        if self._shutting_down:
+            return
         self._start_next_hint_prefetch()
 
     def _apply_hint_patch_to_visible_rows(self, reference: str, patch: dict[str, object]) -> None:
@@ -7131,6 +7143,8 @@ class RechnungenView(QWidget):
             self._stuecke_worker = None
 
     def _on_sevdesk_context_loaded(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         data = payload if isinstance(payload, dict) else {}
         if int(data.get("context_seq") or 0) != self._sevdesk_context_seq:
             return
@@ -8013,6 +8027,8 @@ class RechnungenView(QWidget):
         self._overlay.hide()
 
     def _on_draft_product_plan_ready(self, result: object) -> None:
+        if self._shutting_down:
+            return
         plan = result if isinstance(result, ProductPreflightPlan) else ProductPreflightPlan(issues=[], part_categories=[])
         decisions = self._run_product_preflight_dialogs(plan)
         self._overlay.show_with_message("Rechnungsentwurf wird erstellt…")
@@ -8063,7 +8079,7 @@ class RechnungenView(QWidget):
         worker = self._draft_preview_worker
         worker.signals.result.connect(lambda payload: self._on_draft_preview_result(dlg, payload))
         worker.signals.error.connect(
-            lambda exc: dlg.set_preview_result(f"Vorschau fehlgeschlagen:\n{exc}", ok=False)
+            lambda exc: self._on_draft_preview_error(dlg, exc)
         )
         worker.signals.finished.connect(
             lambda current=worker: self._on_draft_preview_finished(current)
@@ -8075,6 +8091,8 @@ class RechnungenView(QWidget):
             self._draft_preview_worker = None
 
     def _on_draft_preview_result(self, dlg: _DraftInvoiceDialog, payload: object) -> None:
+        if self._shutting_down:
+            return
         if not isinstance(payload, tuple) or len(payload) != 2:
             dlg.set_preview_result("Keine gueltige Vorschau erhalten.", ok=False)
             return
@@ -8113,6 +8131,11 @@ class RechnungenView(QWidget):
 
         can_create = bool(preview.get("can_create"))
         dlg.set_preview_result("\n".join(lines), ok=can_create)
+
+    def _on_draft_preview_error(self, dlg: _DraftInvoiceDialog, exc: Exception) -> None:
+        if self._shutting_down:
+            return
+        dlg.set_preview_result(f"Vorschau fehlgeschlagen:\n{exc}", ok=False)
 
     def _reset_stuecke(self) -> None:
         self._piece_config_seq += 1

@@ -864,6 +864,51 @@ def test_late_pdf_mail_and_delete_callbacks_do_not_open_ui_on_shutdown(
     assert opened_urls == []
 
 
+def test_shutdown_finished_callbacks_do_not_start_followup_work(
+    qtbot: QtBot,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    view = RechnungenView(_build_container())
+    qtbot.addWidget(view)
+    view._shutting_down = True  # noqa: SLF001
+    started: list[str] = []
+    monkeypatch.setattr(view, "_submit_side_job", lambda **_kwargs: started.append("overview"))
+    monkeypatch.setattr(
+        view,
+        "_ensure_open_product_preparation",
+        lambda _overview: started.append("product-preparation"),
+    )
+    monkeypatch.setattr(view, "_start_next_run_output_print", lambda: started.append("run-print"))
+    monkeypatch.setattr(view, "_start_next_hint_prefetch", lambda: started.append("hint-prefetch"))
+    view._pending_open_overview_rows = [InvoiceSummary.model_validate({"id": "1"})]  # noqa: SLF001
+    view._open_product_preparation_pending = object()  # noqa: SLF001
+    view._run_output_pending_requests.append(object())  # type: ignore[arg-type]  # noqa: SLF001
+    view._hint_draft_queue = ["20844"]  # noqa: SLF001
+
+    class Signal:
+        def connect(self, _callback: object) -> None:
+            pass
+
+    class FakeWorker:
+        def __init__(self, _job: object) -> None:
+            self.signals = types.SimpleNamespace(result=Signal(), error=Signal(), finished=Signal())
+
+        def start(self) -> None:
+            started.append("draft-create")
+
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.view.BackgroundWorker", FakeWorker)
+
+    view._on_open_overview_finished()  # noqa: SLF001
+    view._on_open_product_preparation_finished()  # noqa: SLF001
+    view._on_print_run_output_finished()  # noqa: SLF001
+    view._on_hint_prefetch_finished()  # noqa: SLF001
+    view._on_draft_product_plan_ready(  # noqa: SLF001
+        ProductPreflightPlan(issues=[], part_categories=[])
+    )
+
+    assert started == []
+
+
 def test_start_hold_table_toggle_persists_without_blocking_the_ui(
     qtbot: QtBot, monkeypatch: MonkeyPatch,
 ) -> None:
