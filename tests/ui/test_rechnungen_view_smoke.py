@@ -2740,6 +2740,7 @@ def test_print_selected_products_skips_unchecked_rows(qtbot: object, monkeypatch
 def test_individual_product_print_clicks_are_queued_without_blocking_each_other(
     qtbot: object,
     monkeypatch: object,
+    caplog: object,
 ) -> None:
     container, _invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)
@@ -2747,6 +2748,12 @@ def test_individual_product_print_clicks_are_queued_without_blocking_each_other(
     release = Event()
     started: list[str] = []
     accepted: list[str] = []
+    heartbeat_times: list[float] = []
+    heartbeat_timer = QTimer(view)
+    heartbeat_timer.setInterval(10)
+    heartbeat_timer.timeout.connect(lambda: heartbeat_times.append(perf_counter()))
+    heartbeat_timer.start()
+    caplog.set_level("INFO", logger="xw_office.ui.modules.rechnungen.view")  # type: ignore[attr-defined]
 
     def fake_prepare(_parent: object, _container: object, *, piece: PieceBlock, copies: int, wait: bool = False):
         def job() -> None:
@@ -2757,6 +2764,8 @@ def test_individual_product_print_clicks_are_queued_without_blocking_each_other(
 
     monkeypatch.setattr("xw_office.ui.modules.rechnungen.print_dialog.prepare_piece_pdf_print", fake_prepare)
     view._on_printer_status(True)  # noqa: SLF001
+    release_timer = Timer(0.4, release.set)
+    release_timer.start()
 
     view._on_product_print_clicked(  # noqa: SLF001
         PieceBlock(sku="XW-FIRST", name="Erstes Produkt", qty_needed=1),
@@ -2772,9 +2781,16 @@ def test_individual_product_print_clicks_are_queued_without_blocking_each_other(
     assert accepted == ["XW-FIRST", "XW-SECOND"]
     assert len(view._product_print_handles) == 2  # noqa: SLF001
     qtbot.waitUntil(lambda: started == ["XW-FIRST"], timeout=1000)
-    release.set()
     qtbot.waitUntil(lambda: not view._product_print_handles, timeout=2000)  # noqa: SLF001
+    release_timer.cancel()
+    heartbeat_timer.stop()
     assert started == ["XW-FIRST", "XW-SECOND"]
+    assert len(heartbeat_times) >= 20
+    max_gap_seconds = max(
+        current - previous for previous, current in zip(heartbeat_times, heartbeat_times[1:])
+    )
+    assert max_gap_seconds < 0.250
+    assert "Product print phase=prepare sku=XW-FIRST" in caplog.text  # type: ignore[attr-defined]
 
 
 def test_individual_product_print_rejects_duplicate_active_sku(

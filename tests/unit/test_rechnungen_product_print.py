@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from threading import Event
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, get_ident, main_thread
 import time
 
 import fitz
@@ -135,6 +136,77 @@ def test_product_print_catalog_resolution_keeps_qt_events_running(
     assert entered.is_set()
     assert beats, "the Qt event loop must keep running during catalog resolution"
     assert piece.print_file_path == pdf_path
+
+
+def test_product_print_fake_dispatch_keeps_qt_heartbeat_below_250ms(
+    qtbot: object,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    pdf_path = tmp_path / "fake-dispatch.pdf"
+    doc = fitz.open()
+    doc.new_page()
+    doc.save(pdf_path)
+    doc.close()
+    release_dispatch = Event()
+    dispatch_started = Event()
+    dispatch_thread_ids: list[int] = []
+
+    class CatalogStub:
+        def resolve_print_config(self, _sku: str, *, title: str = "") -> dict[str, object]:
+            return {"path": str(pdf_path), "profile_id": "noten_simplex", "resolved_title": title}
+
+        def resolve_product_title(self, _sku: str, title: str) -> str:
+            return title
+
+        def resolve_sku(self, _sku: str) -> Product:
+            return Product(id="p1", sku="XW-FAKE", name="Fake dispatch", print_file_path=str(pdf_path))
+
+    class QueueStub:
+        pass
+
+    container = Container(AppConfig())
+    container.register(ProductCatalogService, lambda _: CatalogStub())  # type: ignore[arg-type,return-value]
+    container.register(PrintQueueService, lambda _: QueueStub())  # type: ignore[arg-type,return-value]
+    monkeypatch.setattr(print_dialog, "_check_printer_runtime", lambda *_args: True)
+
+    def fake_print_pdf_by_plan(*_args: object, **kwargs: object) -> None:
+        assert kwargs["wait"] is True
+        dispatch_thread_ids.append(get_ident())
+        dispatch_started.set()
+        assert release_dispatch.wait(timeout=2)
+
+    monkeypatch.setattr(print_dialog, "print_pdf_by_plan", fake_print_pdf_by_plan)
+    piece = PieceBlock(
+        sku="XW-FAKE",
+        name="Fake dispatch",
+        qty_needed=1,
+        product=Product(id="p1", sku="XW-FAKE", name="Fake dispatch", print_file_path=str(pdf_path)),
+    )
+    heartbeat_times: list[float] = []
+    timer = QTimer()
+    timer.setInterval(10)
+    timer.timeout.connect(lambda: heartbeat_times.append(time.perf_counter()))
+    timer.start()
+
+    job = prepare_piece_pdf_print(None, container, piece=piece, wait=True)  # type: ignore[arg-type]
+    assert job is not None
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(job)
+        QTimer.singleShot(400, release_dispatch.set)
+        qtbot.waitUntil(  # type: ignore[attr-defined]
+            lambda: dispatch_started.is_set() and future.done(), timeout=2000
+        )
+        future.result()
+    timer.stop()
+
+    assert dispatch_thread_ids
+    assert dispatch_thread_ids[0] != main_thread().ident
+    assert len(heartbeat_times) >= 10
+    max_gap_seconds = max(
+        current - previous for previous, current in zip(heartbeat_times, heartbeat_times[1:])
+    )
+    assert max_gap_seconds < 0.250
 
 
 def test_selected_product_delegate_has_exactly_one_print_or_settings_action() -> None:

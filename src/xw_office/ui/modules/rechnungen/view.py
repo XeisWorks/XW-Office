@@ -8828,11 +8828,23 @@ class RechnungenView(QWidget):
             return
         self._active_individual_print_keys.add(print_key)
         qty = max(1, int(quantity or self._default_piece_print_qty(block)))
+        prepare_started_at = time.perf_counter()
         try:
             job = prepare_piece_pdf_print(self, self._container, piece=block, copies=qty, wait=True)
         except Exception:
+            logger.info(
+                "Product print phase=prepare sku=%s elapsed_ms=%d outcome=error",
+                block.sku,
+                int((time.perf_counter() - prepare_started_at) * 1000),
+            )
             self._active_individual_print_keys.discard(print_key)
             raise
+        logger.info(
+            "Product print phase=prepare sku=%s elapsed_ms=%d outcome=%s",
+            block.sku,
+            int((time.perf_counter() - prepare_started_at) * 1000),
+            "ready" if job is not None else "cancelled_or_unavailable",
+        )
         if job is None:
             self._active_individual_print_keys.discard(print_key)
             return
