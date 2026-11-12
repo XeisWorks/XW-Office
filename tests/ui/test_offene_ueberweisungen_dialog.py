@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
-from threading import Event
+from threading import Event, current_thread
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QDesktopServices
@@ -291,6 +291,14 @@ def test_show_invoice_download_does_not_block_event_loop(qtbot: object, monkeypa
     service = _FakeTransferService()
     entered, release = Event(), Event()
     opened: list[str] = []
+    main_thread = current_thread()
+    file_check_threads: list[object] = []
+    original_is_file = Path.is_file
+
+    def tracked_is_file(path: Path) -> bool:
+        if path.suffix == ".pdf":
+            file_check_threads.append(current_thread())
+        return original_is_file(path)
 
     def blocked_download(case_id: str, attachment_id: str) -> bytes:
         assert (case_id, attachment_id) == ("m1", "a1")
@@ -300,6 +308,7 @@ def test_show_invoice_download_does_not_block_event_loop(qtbot: object, monkeypa
 
     monkeypatch.setattr(service, "download_attachment_bytes", blocked_download)
     monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url.toLocalFile()) or True)
+    monkeypatch.setattr(Path, "is_file", tracked_is_file)
     dialog = OffeneUeberweisungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
     qtbot.addWidget(dialog)
     try:
@@ -315,3 +324,5 @@ def test_show_invoice_download_does_not_block_event_loop(qtbot: object, monkeypa
         qtbot.waitUntil(lambda: dialog._action_worker is None, timeout=3000)  # noqa: SLF001
     assert len(opened) == 1
     assert Path(opened[0]).read_bytes() == b"%PDF-1.7 test"
+    assert file_check_threads
+    assert all(thread is not main_thread for thread in file_check_threads)

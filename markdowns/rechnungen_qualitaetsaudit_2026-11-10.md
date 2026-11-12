@@ -2616,6 +2616,16 @@ Aenderungen besteht mit **2.274 Tests, 5 uebersprungen und 1 bestehender
 Starlette/httpx-Deprecation-Warnung (158,75 s)**; globales Ruff und der
 `git diff --check` sind gruen.
 
+## F17-Fortschreibung - Ueberweisungs-PDF-Dateipruefung im Worker (12.11.2026)
+
+`OffeneUeberweisungenDialog` schreibt die heruntergeladene Rechnungs-PDF und
+prueft deren Vorhandensein jetzt vollstaendig im Aktionsworker. Der UI-Callback
+startet danach nur den Windows-Datei-Handler. Ein Regressionstest blockiert den
+Netzwerkabruf, bestaetigt den Qt-Heartbeat und verfolgt `Path.is_file()` als
+Worker-Aufruf. Die 9 Dialogtests, Ruff und striktes MyPy fuer das Dialogmodul sind
+gruen. Die Vollsuite nach beiden Dateipruefungen besteht mit **2.274 Tests, 5
+uebersprungen und 1 bestehender Starlette/httpx-Deprecation-Warnung (149,06 s)**.
+
 ## Railway-Produktionsread-only-Check (12.11.2026)
 
 `XW-Office` production hat keine staged changes. Product Hub und Inventory Worker

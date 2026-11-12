@@ -468,11 +468,14 @@ class OffeneUeberweisungenDialog(QDialog):
             except Exception:
                 path.unlink(missing_ok=True)
                 raise
+            if not path.is_file():
+                path.unlink(missing_ok=True)
+                raise FileNotFoundError(f"Rechnungs-PDF wurde nicht geschrieben: {path}")
             return path
 
         def open_invoice(payload: object) -> None:
             path = payload if isinstance(payload, Path) else None
-            if path is None or not path.is_file() or not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            if path is None or not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
                 QMessageBox.warning(self, "Rechnung", "PDF konnte nicht geoeffnet werden.")
 
         self._start_action(self._btn_show_invoice, "Lade Rechnung...", job, open_invoice)
