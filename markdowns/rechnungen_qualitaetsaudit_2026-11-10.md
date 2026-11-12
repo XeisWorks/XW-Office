@@ -14,7 +14,7 @@ zwischen diesen Bausteinen: Fallidentität bei asynchronen Antworten, dauerhafte
 Beanspruchen externer Schreibaktionen, unvollständige Positionsdaten sowie
 Transaktionsgrenzen zwischen Lagerbewegung, Buchungsmarke und Legacy-Bestand.
 
-**27 Code-/Testbefunde: 19 ERLEDIGT, 6 OFFEN, 2 BLOCKIERT. Keine bestaetigte P0-Stoerung.**
+**27 Code-/Testbefunde: 19 ERLEDIGT, 7 OFFEN, 1 BLOCKIERT. Keine bestaetigte P0-Stoerung.**
 Zwei zusaetzliche Betriebsabnahmen sind BLOCKIERT durch benoetigte Testbelege,
 Hardware und eine isolierte PostgreSQL-Betriebsumgebung; sie sind nicht als
 zusaetzliche Softwarefehler gezaehlt. OFFEN bedeutet eine konkrete, abgrenzbare
