@@ -3274,3 +3274,15 @@ Install, Ruff und Pytest bestanden; die Hosted-Suite meldet **2.315 bestanden,
 5 uebersprungen, 1 bestehende fitz-Warnung (667,03 s)**. Der weiche Hosted-MyPy-
 Schritt meldet 131 Fehler in 37 Dateien. Dieser CI-Stand enthaelt die lokale
 Wix-Konflikt-API-Typgrenze noch nicht; deren CI-Nachweis folgt nach dem Commit.
+## AP08-Fortschreibung - Cover-Template-Rendergrenze (12.11.2026)
+
+`cover_templates.py` typisiert die Pillow-Image-/ImageDraw-Grenzen, den
+Template-Open-Rueckgabewert und FreeType-Fonts jetzt explizit. Numerische
+Textgroessen werden vor dem Rechnen eingegrenzt und Boxkoordinaten als feste
+Vierertupel aufgebaut. Die Renderlogik fuer gueltige Spezifikationen bleibt
+unveraendert. Alle **10 Cover-Template-Tests** bestehen; gezieltes striktes MyPy,
+globales Ruff und `git diff --check` sind gruen. Die lokale Vollsuite besteht
+mit **2.316 bestanden, 5 uebersprungen, 1 bestehende
+Starlette/httpx-Deprecation-Warnung (153,95 s)**. Die globale strikte MyPy-
+Baseline sinkt weiter von 102 Fehlern in 32 Dateien auf **85 Fehler in 31
+Dateien**. AP08 bleibt offen.

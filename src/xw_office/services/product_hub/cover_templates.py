@@ -12,8 +12,12 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import TYPE_CHECKING
 
 import yaml
+
+if TYPE_CHECKING:
+    from PIL import Image, ImageDraw, ImageFont
 
 from xw_office.services.product_hub.onedrive import OneDriveAssetClient, OneDriveItem
 
@@ -201,7 +205,7 @@ class CoverTemplateService:
         )
         return CoverFontReadiness(tuple(sorted(available)), missing)
 
-    def _open_template(self, template_id: str):
+    def _open_template(self, template_id: str) -> tuple[Image.Image, CoverTemplate]:
         from PIL import Image, ImageOps, UnidentifiedImageError
 
         template = next((item for item in self.list_templates() if item.item_id == template_id), None)
@@ -247,21 +251,29 @@ class CoverTemplateService:
             raise CoverConfigurationError(f"Cover export blocked: missing font {', '.join(missing)}")
         return paths
 
-    def _draw_fitted(self, draw: object, image: object, key: str, value: str, font_paths: dict[str, Path]) -> None:
+    def _draw_fitted(
+        self,
+        draw: ImageDraw.ImageDraw,
+        image: Image.Image,
+        key: str,
+        value: str,
+        font_paths: dict[str, Path],
+    ) -> None:
         style = self._spec.styles[key]
         box = self._spec.boxes[key]
         text = str(style.get("text") or value or "").strip()
         if not text:
             return
         family = str(style["family"]).casefold()
-        base_size = float(style["size_pt"]) * 96 / 72 * image.height / 1000
+        base_size = _number(style.get("size_pt"), 12.0) * 96 / 72 * image.height / 1000
         x, y, width, height = (round(box[0] * image.width), round(box[1] * image.height),
                                round(box[2] * image.width), round(box[3] * image.height))
         if key == "title":
             lines = _title_lines(text, draw, font_paths[family], base_size, width, height, style)
             proposed = style.get("proposed_size_pt_by_lines")
             if isinstance(proposed, dict):
-                base_size = float(proposed.get(len(lines), style["size_pt"])) * 96 / 72 * image.height / 1000
+                line_size = _number(proposed.get(len(lines)), _number(style.get("size_pt"), 12.0))
+                base_size = line_size * 96 / 72 * image.height / 1000
         else:
             lines = [text.upper() if style.get("small_caps") else text]
             if style.get("small_caps"):
@@ -333,7 +345,12 @@ def _load_spec(path: Path) -> CoverRenderSpec:
             or raw_box[0] + raw_box[2] > 1 or raw_box[1] + raw_box[3] > 1
         ):
             raise CoverConfigurationError(f"COVER_SPEC has an invalid {key} box")
-        boxes[key] = tuple(float(value) for value in raw_box)
+        boxes[key] = (
+            float(raw_box[0]),
+            float(raw_box[1]),
+            float(raw_box[2]),
+            float(raw_box[3]),
+        )
     normalized_styles: dict[str, dict[str, object]] = {}
     for key in required_boxes:
         style = styles.get(key)
@@ -366,7 +383,15 @@ def _configured_folder_id(
     raise CoverConfigurationError(f"{item_id_variable} or {path_variable} must be configured")
 
 
-def _fit_font(draw: object, lines: list[str], font_path: Path, start_size: float, max_width: int, max_height: int, min_size: int):
+def _fit_font(
+    draw: ImageDraw.ImageDraw,
+    lines: list[str],
+    font_path: Path,
+    start_size: float,
+    max_width: int,
+    max_height: int,
+    min_size: int,
+) -> ImageFont.FreeTypeFont:
     from PIL import ImageFont
 
     for size in range(max(round(start_size), min_size), min_size - 1, -1):
@@ -377,7 +402,15 @@ def _fit_font(draw: object, lines: list[str], font_path: Path, start_size: float
     return ImageFont.truetype(str(font_path), size=min_size)
 
 
-def _title_lines(text: str, draw: object, font_path: Path, base_size: float, width: int, height: int, style: dict[str, object]) -> list[str]:
+def _title_lines(
+    text: str,
+    draw: ImageDraw.ImageDraw,
+    font_path: Path,
+    base_size: float,
+    width: int,
+    height: int,
+    style: dict[str, object],
+) -> list[str]:
     manual = [line.strip() for line in text.splitlines() if line.strip()]
     if len(manual) > 1:
         if len(manual) > 3:
@@ -390,12 +423,30 @@ def _title_lines(text: str, draw: object, font_path: Path, base_size: float, wid
     proposed = style.get("proposed_size_pt_by_lines")
     for count in range(1, 4):
         candidates = _wrap_words(words, count)
-        size_pt = float(proposed.get(count, style["size_pt"])) if isinstance(proposed, dict) else float(style["size_pt"])
-        font = _fit_font(draw, candidates, font_path, size_pt * 96 / 72, width, height, max(8, round(float(style.get("minimum_size_pt_proposed", 18)) * 96 / 72)))
+        default_size = _number(style.get("size_pt"), base_size)
+        size_pt = (
+            _number(proposed.get(count), default_size)
+            if isinstance(proposed, dict)
+            else default_size
+        )
+        minimum_size = _number(style.get("minimum_size_pt_proposed"), 18.0)
+        font = _fit_font(
+            draw,
+            candidates,
+            font_path,
+            size_pt * 96 / 72,
+            width,
+            height,
+            max(8, round(minimum_size * 96 / 72)),
+        )
         bbox = draw.multiline_textbbox((0, 0), "\n".join(candidates), font=font, spacing=max(1, round(font.size * 0.08)), align="center")
         if bbox[2] - bbox[0] <= width and bbox[3] - bbox[1] <= height:
             return candidates
     raise CoverConfigurationError("Title does not fit in three cover lines")
+
+
+def _number(value: object, default: float) -> float:
+    return float(value) if isinstance(value, (int, float)) else default
 
 
 def _wrap_words(words: list[str], count: int) -> list[str]:
