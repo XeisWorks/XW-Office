@@ -2742,3 +2742,16 @@ GUI-Methode sofort zurueckkehrt, der Shutdown-Zustand bis zum Ende beider Writes
 offen bleibt und danach der neueste Lauf gespeichert ist. Der fokussierte
 Test `test_start_history_settings_write_runs_off_ui_thread_and_keeps_latest_run`
 besteht; F18 bleibt wegen der restlichen spaeten Callback-/Close-Pfade offen.
+
+## F18-Fortschreibung - Nachlieferungsdialog nach Shutdown unterdruecken
+
+Ein verspätetes Ergebnis der Nachlieferungsvorbereitung konnte nach Beginn des
+Rechnungsansicht-Shutdowns noch den Dialog oeffnen; auch spaete Erfolgs- und
+Fehlermeldungen waren moeglich. Die vier Ergebnis-/Fehler-Callbacks kehren bei
+aktivem Shutdown jetzt ohne UI-Aktion zurueck. Eine blockierte Worker-Regression
+bestaetigt, dass `prepare_shutdown()` nicht wartet und nach Freigabe des Workers
+kein Dialog erscheint. Der Rechnungsansicht-Smoke-Satz besteht mit **100 Tests**;
+Ruff fuer die geaenderten Dateien und striktes MyPy fuer alle 27 Rechnungs-UI-
+Dateien sind gruen. Die Vollsuite besteht mit **2.283 Tests, 5 optionalen
+PostgreSQL-Ueberspringungen und 1 bestehenden Starlette/httpx-Deprecation-
+Warnung (151,90 s)**. F18 bleibt fuer weitere spaete Callback-/Close-Pfade offen.

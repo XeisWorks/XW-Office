@@ -5,6 +5,7 @@ from decimal import Decimal
 from threading import Event, Timer, get_ident
 import types
 from pathlib import Path
+from uuid import uuid4
 
 from PySide6.QtCore import QPoint, Qt, QTimer
 from pytest import MonkeyPatch
@@ -18,6 +19,12 @@ from xw_office.core.signals import AppSignals
 from xw_office.core.types import ModuleKey
 from xw_office.core.worker import BackgroundWorker
 from xw_office.services.b2b_credit import B2bCreditService
+from xw_office.models.customer_aftercare import CustomerAftercareCase
+from xw_office.repositories.customer_aftercare import CustomerAftercareReservation
+from xw_office.services.customer_aftercare.redelivery import (
+    CustomerAftercareRedeliveryService,
+    RedeliveryContext,
+)
 from xw_office.services.daily_business.service import DailyBusinessService
 from xw_office.services.digital_licenses import DigitalLicenseService
 from xw_office.services.draft_invoice.service import DraftInvoiceService, ProductPreflightPlan
@@ -728,6 +735,50 @@ def test_rechnungen_shutdown_tracks_redelivery_workers(qtbot: object) -> None:
 
     assert prepare_worker in view._shutdown_workers()  # noqa: SLF001
     assert apply_worker in view._shutdown_workers()  # noqa: SLF001
+
+
+def test_late_redelivery_result_is_ignored_during_shutdown(
+    qtbot: QtBot,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    entered, release = Event(), Event()
+    case = CustomerAftercareCase(id=uuid4(), source_message_id="shutdown-redelivery")
+    context = RedeliveryContext(
+        reservation=CustomerAftercareReservation(state="created", case=case),
+        case=case,
+        items=(),
+        address_lines=(),
+        address_source="",
+        wix_contact_id="",
+        sevdesk_contact_id="",
+        customer_email="",
+    )
+
+    class SlowRedelivery:
+        def prepare_from_invoice(self, _summary: InvoiceSummary) -> RedeliveryContext:
+            entered.set()
+            assert release.wait(3)
+            return context
+
+    container.register(CustomerAftercareRedeliveryService, lambda _: SlowRedelivery())  # type: ignore[arg-type,return-value]
+    opened: list[bool] = []
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.RedeliveryDialog.exec",
+        lambda _dialog: (opened.append(True), QDialog.DialogCode.Rejected)[1],
+    )
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    view._open_redelivery_popup(invoice_service._draft)  # noqa: SLF001
+
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=2000)
+        assert view.prepare_shutdown() is False
+    finally:
+        release.set()
+
+    qtbot.waitUntil(view.shutdown_complete, timeout=3000)
+    assert opened == []
 
 
 def test_start_hold_table_toggle_persists_without_blocking_the_ui(

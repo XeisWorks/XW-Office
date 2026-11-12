@@ -6278,6 +6278,8 @@ class RechnungenView(QWidget):
         worker.start()
 
     def _show_redelivery_dialog(self, payload: object) -> None:
+        if self._shutting_down:
+            return
         self._clear_detail_actions_busy()
         if not isinstance(payload, RedeliveryContext):
             return
@@ -6294,6 +6296,8 @@ class RechnungenView(QWidget):
             self._apply_redelivery_outcome(payload, outcome)
 
     def _on_redelivery_prepare_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         self._clear_detail_actions_busy()
         QMessageBox.warning(self, "Nachlieferung", f"Rechnungskontext konnte nicht geladen werden:\n\n{exc}")
 
@@ -6329,6 +6333,8 @@ class RechnungenView(QWidget):
         worker.start()
 
     def _on_redelivery_applied(self) -> None:
+        if self._shutting_down:
+            return
         self._clear_detail_actions_busy()
         QMessageBox.information(
             self,
@@ -6337,6 +6343,8 @@ class RechnungenView(QWidget):
         )
 
     def _on_redelivery_apply_error(self, exc: Exception) -> None:
+        if self._shutting_down:
+            return
         self._clear_detail_actions_busy()
         QMessageBox.warning(self, "Nachlieferung", f"Speichern fehlgeschlagen:\n\n{exc}")
 
