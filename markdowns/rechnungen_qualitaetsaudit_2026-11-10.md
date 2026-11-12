@@ -2454,3 +2454,12 @@ ersten Laden und bestätigt, dass der Qt-Heartbeat während der Dialogerstellung
 weiterläuft. `test_inventory_alerts_dialog.py`: **3 bestanden**; Ruff und striktes
 MyPy für das Dialogmodul bestanden. F17 bleibt teilweise offen, bis die übrigen
 statischen UI-I/O- und Callback-Pfade vollständig nachgeprüft sind.
+
+## F17-Fortschreibung - Ueberweisungsservice beim Erstladen (12.11.2026)
+
+`OffeneUeberweisungenDialog` erzeugt seinen Graph-/Settings-Service jetzt im
+initialen Listen-Worker statt synchron im Konstruktor. Nach erfolgreichem Laden
+bleibt dieselbe Serviceinstanz fuer Details und Aktionen erhalten. Ein blockierter
+Fake fuer `container.resolve()` bestaetigt den Qt-Heartbeat waehrend des Erstladens.
+`test_offene_ueberweisungen_dialog.py`: **9 bestanden**; Ruff und striktes MyPy
+fuer das Dialogmodul bestanden. Weitere F17-Pfade bleiben zu auditieren.

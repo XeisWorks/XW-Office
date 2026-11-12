@@ -47,7 +47,7 @@ class OffeneUeberweisungenDialog(QDialog):
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._container = container
-        self._service: OffeneUeberweisungenService = container.resolve(OffeneUeberweisungenService)
+        self._service: OffeneUeberweisungenService | None = None
         self._cases: list[TransferCase] = []
         self._attachments: list[TransferAttachment] = []
         self._selected_attachment_id: str | None = None
@@ -194,6 +194,12 @@ class OffeneUeberweisungenDialog(QDialog):
     def open_count(self) -> int:
         return len(self._cases)
 
+    def _require_service(self) -> OffeneUeberweisungenService:
+        service = self._service
+        if service is None:
+            raise RuntimeError("Ueberweisungsservice ist noch nicht geladen")
+        return service
+
     def _load_cases(self, *, refresh: bool) -> None:
         if self._load_worker is not None and self._load_worker.isRunning():
             return
@@ -205,10 +211,14 @@ class OffeneUeberweisungenDialog(QDialog):
         self._list.clear()
         self._clear_detail("Lade offene Ueberweisungen...")
 
-        def job() -> list[TransferCase]:
+        container = self._container
+        current_service = self._service
+
+        def job() -> tuple[OffeneUeberweisungenService, list[TransferCase]]:
+            service = current_service or container.resolve(OffeneUeberweisungenService)
             if refresh:
-                self._service.refresh_from_graph(lookback_days=60, max_items=180)
-            return self._service.load_open_cases()
+                service.refresh_from_graph(lookback_days=60, max_items=180)
+            return service, service.load_open_cases()
 
         self._load_worker = BackgroundWorker(job)
         self._load_worker.signals.result.connect(lambda result, token=seq: self._on_cases_loaded(token, result))
@@ -221,7 +231,13 @@ class OffeneUeberweisungenDialog(QDialog):
             return
         if seq != self._load_seq:
             return
-        self._cases = list(result) if isinstance(result, list) else []
+        if not isinstance(result, tuple) or len(result) != 2:
+            return
+        service, cases = result
+        if not isinstance(cases, list):
+            return
+        self._service = service
+        self._cases = cases
         self._list.clear()
         for case in self._cases:
             marker = ""
@@ -309,9 +325,10 @@ class OffeneUeberweisungenDialog(QDialog):
         case_id = case.id
 
         def job() -> tuple[str, list[object], TransferPaymentData]:
-            attachments = self._service.list_pdf_attachments(case_id)
+            service = self._require_service()
+            attachments = service.list_pdf_attachments(case_id)
             attachment_id = attachments[0].id if attachments else None
-            payment = self._service.extract_payment_data(case_id, attachment_id=attachment_id)
+            payment = service.extract_payment_data(case_id, attachment_id=attachment_id)
             return case_id, list(attachments), payment
 
         self._detail_worker = BackgroundWorker(job)
@@ -413,7 +430,7 @@ class OffeneUeberweisungenDialog(QDialog):
         case_id = case.id
 
         def job() -> str:
-            return self._service.summarize_case(case_id)
+            return self._require_service().summarize_case(case_id)
 
         self._start_action(
             self._btn_summary,
@@ -442,7 +459,7 @@ class OffeneUeberweisungenDialog(QDialog):
         attachment_id = chosen.id
 
         def job() -> Path:
-            data = self._service.download_attachment_bytes(case_id, attachment_id)
+            data = self._require_service().download_attachment_bytes(case_id, attachment_id)
             descriptor, filename = tempfile.mkstemp(prefix="xw-transfer-", suffix=".pdf")
             os.close(descriptor)
             path = Path(filename)
@@ -468,8 +485,9 @@ class OffeneUeberweisungenDialog(QDialog):
         case_id = case.id
 
         def job() -> tuple[Path, TransferPaymentData]:
-            self._service.save_manual_payment(case_id, payment)
-            return self._service.generate_qr(case_id, payment), payment
+            service = self._require_service()
+            service.save_manual_payment(case_id, payment)
+            return service.generate_qr(case_id, payment), payment
 
         self._start_action(
             self._btn_generate_qr,
@@ -496,7 +514,7 @@ class OffeneUeberweisungenDialog(QDialog):
         note = self._note.text().strip()
 
         def job() -> bool:
-            self._service.mark_deferred(case_id, note=note)
+            self._require_service().mark_deferred(case_id, note=note)
             return True
 
         def on_deferred(_payload: object) -> None:
@@ -530,8 +548,9 @@ class OffeneUeberweisungenDialog(QDialog):
         note = self._note.text().strip()
 
         def job() -> bool:
-            self._service.save_manual_payment(case_id, payment)
-            self._service.mark_done_in_outlook(
+            service = self._require_service()
+            service.save_manual_payment(case_id, payment)
+            service.mark_done_in_outlook(
                 case_id,
                 payment,
                 qr_path="",

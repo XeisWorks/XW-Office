@@ -132,6 +132,29 @@ def test_dialog_constructor_does_not_refresh_graph_synchronously(qtbot: object) 
     assert service.refresh_called == 0
 
 
+def test_service_resolution_for_initial_load_runs_off_ui_thread(qtbot: object) -> None:
+    started = Event()
+    release = Event()
+    service = _FakeTransferService()
+
+    class SlowContainer(_FakeContainer):
+        def resolve(self, service_type: object) -> object:
+            if service_type is OffeneUeberweisungenService:
+                started.set()
+                release.wait(2)
+            return super().resolve(service_type)
+
+    dialog = OffeneUeberweisungenDialog(SlowContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    heartbeats: list[bool] = []
+    QTimer.singleShot(20, lambda: heartbeats.append(True))
+    qtbot.waitUntil(started.is_set, timeout=1000)
+    qtbot.waitUntil(lambda: bool(heartbeats), timeout=1000)
+    assert dialog._status.text() == "Lade offene Ueberweisungen..."  # noqa: SLF001
+    release.set()
+    _wait_dialog_loaded(qtbot, dialog)
+
+
 def test_open_count_uses_loaded_cases(qtbot: object, monkeypatch) -> None:
     service = _FakeTransferService()
     dialog = OffeneUeberweisungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
