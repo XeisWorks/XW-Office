@@ -3299,3 +3299,13 @@ Die globale MyPy-Baseline sinkt von 85 Fehlern in 31 Dateien auf **76 Fehler
 in 30 Dateien**. Die aktuelle Vollsuite 2.316/5/1 stammt vom Stand vor dieser
 typischen Grenzbereinigung; der volle Windows-CI-Lauf deckt den gepushten
 Stand ab.
+## AP08-Fortschreibung - Microsoft-Graph-OneDrive-Payloads (12.11.2026)
+
+Der OneDrive-Asset-Client grenzt die Graph-Dateigroesse vor `int()` auf bekannte
+Zahl-/Textformen ein und bestaetigt heruntergeladene Bytes vor der Rueckgabe.
+Ungetypte Drittanbietergrenzen fuer MSAL/Requests sind lokal und explizit
+markiert; neue Stub-Abhaengigkeiten waren nicht erforderlich. Eine Regression
+schuetzt gueltige Textgroesse und verwirft unbekannte Objekte. **8 OneDrive-/Asset-
+Tests**, gezieltes striktes MyPy, Ruff und `git diff --check` bestehen. Die globale
+strikte MyPy-Baseline sinkt von 76 Fehlern in 30 Dateien auf **72 Fehler in 29
+Dateien**.

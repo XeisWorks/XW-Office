@@ -5,8 +5,8 @@ import os
 from dataclasses import dataclass
 from urllib.parse import quote
 
-import msal
-import requests
+import msal  # type: ignore[import-untyped]
+import requests  # type: ignore[import-untyped]
 
 
 class OneDriveConfigurationError(RuntimeError):
@@ -59,12 +59,14 @@ class OneDriveAssetClient:
     def _item_from_payload(drive_id: str, payload: dict[str, object]) -> OneDriveItem:
         parent = payload.get("parentReference")
         parent_id = str(parent.get("id") or "") if isinstance(parent, dict) else ""
+        raw_size = payload.get("size")
+        size = int(raw_size) if isinstance(raw_size, (int, float, str)) else 0
         return OneDriveItem(
             drive_id=drive_id,
             item_id=str(payload.get("id") or ""),
             name=str(payload.get("name") or ""),
             etag=str(payload.get("eTag") or ""),
-            size=int(payload.get("size") or 0),
+            size=size,
             parent_id=parent_id,
             is_folder=isinstance(payload.get("folder"), dict),
         )
@@ -133,4 +135,7 @@ class OneDriveAssetClient:
     def download(self, drive_id: str, item_id: str) -> bytes:
         response = requests.get(f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{item_id}/content", headers=self._headers(), timeout=60)
         response.raise_for_status()
-        return response.content
+        content = response.content
+        if not isinstance(content, bytes):
+            raise OneDriveConfigurationError("Microsoft Graph returned a non-binary file response")
+        return content

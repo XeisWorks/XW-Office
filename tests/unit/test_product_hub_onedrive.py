@@ -8,6 +8,14 @@ def test_onedrive_client_fails_closed_without_server_credentials() -> None:
         OneDriveAssetClient(tenant_id="", client_id="", client_secret="", root_item_id="")
 
 
+def test_graph_item_size_accepts_provider_integer_forms_only() -> None:
+    valid = OneDriveAssetClient._item_from_payload("drive", {"size": "24"})
+    malformed = OneDriveAssetClient._item_from_payload("drive", {"size": object()})
+
+    assert valid.size == 24
+    assert malformed.size == 0
+
+
 def test_onedrive_client_requires_stable_drive_item_root(monkeypatch) -> None:
     with pytest.raises(OneDriveConfigurationError):
         OneDriveAssetClient(tenant_id="tenant", client_id="client", client_secret="secret", root_item_id="path-only")
