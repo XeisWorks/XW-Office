@@ -3,12 +3,15 @@
 This tool only reads/writes the local SettingKV claim record. It never calls
 sevDesk, Wix, Outlook, a printer, or any other external service. Choose
 ``failed`` only after external readback confirms the side effect did not occur;
-that state enables a later retry.
+that state enables a later retry. Before reconciling a ``running`` claim, verify
+that no XW-Office process on any workstation is still executing that operation.
 
 Examples::
 
     python scripts/invoice_processing/reconcile_claim.py list-unknown
+    python scripts/invoice_processing/reconcile_claim.py list-open
     python scripts/invoice_processing/reconcile_claim.py --database-url <local-test-database> list-unknown
+    python scripts/invoice_processing/reconcile_claim.py --database-url <local-test-database> list-open
     python scripts/invoice_processing/reconcile_claim.py reconcile \
         --invoice-id 123 --operation invoice_mail --operation-id <exact-id> \
         --state succeeded --reconciled-by "Name" --evidence "Provider readback ..." \
@@ -24,7 +27,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -53,13 +56,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--database-url", default="")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("list-unknown", help="unknown claims read-only auflisten")
+    commands.add_parser(
+        "list-open", help="running- und unknown-Claims read-only zur Pruefung auflisten"
+    )
     reconcile = commands.add_parser(
         "reconcile",
-        help="unknown claim nach externem Readback protokolliert abgleichen",
+        help="open claim nach externem Readback protokolliert abgleichen",
     )
     reconcile.add_argument("--invoice-id", required=True)
     reconcile.add_argument("--operation", required=True)
     reconcile.add_argument("--operation-id", required=True)
+    reconcile.add_argument(
+        "--expected-state",
+        choices=("unknown", "running"),
+        default="unknown",
+        help="aktueller Claim-Status; running erfordert zusaetzliche Prozessbestaetigung",
+    )
     reconcile.add_argument(
         "--state", required=True, choices=("succeeded", "failed")
     )
@@ -69,6 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm-operation-id",
         required=True,
         help="muss exakt --operation-id entsprechen, um den Schreibvorgang zu bestätigen",
+    )
+    reconcile.add_argument(
+        "--confirm-no-active-processes",
+        default="",
+        help="bei expected-state running muss dieser Wert exakt der Operation-ID entsprechen",
     )
     return parser
 
@@ -86,10 +103,11 @@ def _claim_dict(claim: OperationClaim) -> dict[str, Any]:
 def run_command(args: argparse.Namespace, repository: SettingKvRepository) -> int:
     """Execute a parsed command against an injected repository (never external APIs)."""
     store = InvoiceOperationClaimStore(repository)
-    if args.command == "list-unknown":
+    if args.command in {"list-unknown", "list-open"}:
+        claims = store.list_unknown() if args.command == "list-unknown" else store.list_open()
         print(
             json.dumps(
-                [_claim_dict(item) for item in store.list_unknown()],
+                [_claim_dict(item) for item in claims],
                 ensure_ascii=False,
                 indent=2,
             )
@@ -99,13 +117,21 @@ def run_command(args: argparse.Namespace, repository: SettingKvRepository) -> in
     operation_id = str(args.operation_id).strip()
     if operation_id != str(args.confirm_operation_id).strip():
         raise ValueError("Bestaetigungs-ID muss exakt der Operation-ID entsprechen")
-    claim = store.reconcile_unknown(
+    expected_state = cast(Literal["unknown", "running"], str(args.expected_state))
+    if expected_state == "running" and str(args.confirm_no_active_processes).strip() != operation_id:
+        raise ValueError(
+            "running-Claims erfordern eine exakte Bestaetigung, dass kein Prozess mehr aktiv ist"
+        )
+    claim = store.reconcile_open(
         str(args.invoice_id),
         str(args.operation),
         operation_id,
         args.state,
         reconciled_by=str(args.reconciled_by),
         evidence=str(args.evidence),
+        expected_state=expected_state,
+        no_active_processes_confirmed=expected_state != "running"
+        or str(args.confirm_no_active_processes).strip() == operation_id,
     )
     print(json.dumps(_claim_dict(claim), ensure_ascii=False, indent=2))
     return 0

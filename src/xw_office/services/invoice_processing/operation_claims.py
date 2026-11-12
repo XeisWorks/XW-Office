@@ -154,6 +154,18 @@ class InvoiceOperationClaimStore:
 
     def list_unknown(self) -> list[OperationClaim]:
         """Return durable claims requiring an operator-confirmed readback."""
+        return self._list_states({"unknown"})
+
+    def list_open(self) -> list[OperationClaim]:
+        """Return uncertain and possibly orphaned running claims for review.
+
+        Running claims are never released automatically: a live process may still
+        own the operation. Operators must verify that no workstation is executing
+        it before using the manual reconciliation command.
+        """
+        return self._list_states({"running", "unknown"})
+
+    def _list_states(self, states: set[str]) -> list[OperationClaim]:
         method = getattr(self._settings, "list_values_json_by_prefix", None)
         if callable(method):
             values = method(self._PREFIX)
@@ -169,7 +181,8 @@ class InvoiceOperationClaimStore:
         claims: list[OperationClaim] = []
         for key, raw in values.items():
             payload = self._decode(raw)
-            if payload.get("state") != "unknown":
+            state = payload.get("state", "unknown")
+            if state not in states:
                 continue
             identity = key[len(self._PREFIX) :]
             invoice_id, separator, operation = identity.rpartition(":")
@@ -180,14 +193,14 @@ class InvoiceOperationClaimStore:
                     invoice_id=invoice_id,
                     operation=operation,
                     operation_id=payload.get("operation_id", ""),
-                    state="unknown",
+                    state=cast(ClaimState, state),
                     acquired=False,
                     error=payload.get("error", ""),
                 )
             )
         return sorted(claims, key=lambda claim: (claim.invoice_id, claim.operation))
 
-    def reconcile_unknown(
+    def reconcile_open(
         self,
         invoice_id: str,
         operation: str,
@@ -196,11 +209,15 @@ class InvoiceOperationClaimStore:
         *,
         reconciled_by: str,
         evidence: str,
+        expected_state: Literal["running", "unknown"] = "unknown",
+        no_active_processes_confirmed: bool = False,
     ) -> OperationClaim:
-        """Record a human-verified outcome for exactly the current unknown run.
+        """Record a human-verified outcome for exactly the current open run.
 
         Choosing ``failed`` explicitly permits a later retry. Operators must only
         choose it after verifying that the external side effect did not occur.
+        A ``running`` claim additionally requires the operator to verify that no
+        workstation is still executing the operation.
         """
         clean_operation_id = str(operation_id or "").strip()
         operator = str(reconciled_by or "").strip()
@@ -209,6 +226,12 @@ class InvoiceOperationClaimStore:
             raise ValueError("Operation-ID ist erforderlich")
         if state not in {"succeeded", "failed"}:
             raise ValueError("Reconciliation-Status muss succeeded oder failed sein")
+        if expected_state not in {"running", "unknown"}:
+            raise ValueError("Nur running- oder unknown-Claims koennen abgeglichen werden")
+        if expected_state == "running" and not no_active_processes_confirmed:
+            raise ValueError(
+                "running-Claims erfordern die Bestaetigung, dass kein Prozess mehr aktiv ist"
+            )
         if not operator:
             raise ValueError("Operator ist erforderlich")
         if len(proof) < 8:
@@ -220,8 +243,10 @@ class InvoiceOperationClaimStore:
             payload = self._decode(raw)
             if payload.get("operation_id") != clean_operation_id:
                 raise ValueError("Operation-ID stimmt nicht mit dem aktuellen Claim ueberein")
-            if payload.get("state") != "unknown":
-                raise ValueError("Nur ein unknown-Claim kann manuell abgeglichen werden")
+            if payload.get("state") != expected_state:
+                raise ValueError(
+                    f"Claim-Status ist nicht mehr {expected_state}; Abgleich abgebrochen"
+                )
             history_raw = payload.get("reconciliation_history", "[]")
             try:
                 history = json.loads(history_raw)
@@ -232,6 +257,7 @@ class InvoiceOperationClaimStore:
             history.append(
                 {
                     "state": state,
+                    "reconciled_from": expected_state,
                     "reconciled_at": datetime.now(timezone.utc).isoformat(),
                     "reconciled_by": operator[:200],
                     "evidence": proof[:2000],
@@ -254,6 +280,27 @@ class InvoiceOperationClaimStore:
             state=state,
             acquired=False,
             error=updated.get("error", ""),
+        )
+
+    def reconcile_unknown(
+        self,
+        invoice_id: str,
+        operation: str,
+        operation_id: str,
+        state: Literal["succeeded", "failed"],
+        *,
+        reconciled_by: str,
+        evidence: str,
+    ) -> OperationClaim:
+        """Compatibility wrapper for reconciling an ``unknown`` claim."""
+        return self.reconcile_open(
+            invoice_id,
+            operation,
+            operation_id,
+            state,
+            reconciled_by=reconciled_by,
+            evidence=evidence,
+            expected_state="unknown",
         )
 
     def _mutate(self, key: str, mutator: Callable[[str | None], str]) -> None:

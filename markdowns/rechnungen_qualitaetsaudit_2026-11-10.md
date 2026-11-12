@@ -146,7 +146,7 @@ Fundstellen sind Repository-Pfade; Methodennamen bleiben auch nach Zeilenverschi
 | F09 | P1 | ERLEDIGT | `InvoiceProcessingService.load_invoice_work_context/_run_finalize_step/build_inventory_requirements`: Positionsfehler werden als unvollst?ndiger Kontext mit Ladezustand/Fehlertext behandelt und nicht gecacht. Freigabe und Produktdruck brechen vor dem externen Schreibaufruf ab; Retry l?dt erneut. | Regressionen: Timeout bleibt uncached, Freigabe sendet nicht, Druck gibt klare Exception, Retry l?dt erfolgreich |
 | F10 | P1 | ERLEDIGT | `InvoiceInventoryBookingService.apply_line`: Booking, append-only Ledgerbewegung, materialisierter Bestand und Alarmstatus laufen in einer Session/Transaktion. Jede Mengen?nderung verwendet eine fortlaufende Transition-ID statt wiederverwendeter Zielmenge. | SQLite-Regression 10?2?3?2 ergibt 8; Replay bleibt idempotent; Transaktionscode sperrt vorhandene und erstmalige Booking-Zeile |
 | F11 | P1 | ERLEDIGT | `apply_credit_line`: sperrt die Ursprungsposition und berechnet bestehende R?ckgaben in derselben Transaktion wie die neue Gegenbuchung. Konkurrierende Credits serialisieren auf der Ursprungs-Booking-Zeile. | SQLite Cap-/Replay-Tests; isolierter PostgreSQL-Barrierentest laesst konkurrierend nur eine von zwei zu grossen Rueckgaben zu; injizierter Buchungsfehler rollt Ledger, Booking und Bestand zurueck |
-| F12 | P1 | OFFEN | Rechnungs-Mail, sevDesk-Freigabe, Wix-Fulfillment, Gutschrift-Mail und physischer Produktdruck nutzen dauerhafte Claims. Druck-Claims gelten pro Part-ID (Fallback SKU) in Rechnungs-Einzel-/Sammeldruck, offene Produkte und Produktbereich; `running`/`unknown` blockieren Instanzen, absichtlicher Nachdruck nach Erfolg erhaelt neue ID. `PrintDecisionEngine` serialisiert Part-GET/SET je Part im Prozess und ueber transaktionale PostgreSQL-Advisory-Locks; opt-in PostgreSQL-Tests bestaetigen verlustfreie Updates aus zwei unabhaengigen Engine-Instanzen und gemeinsame Claims ueber getrennte Stores. Die lokale manuelle `unknown`-Reconciliation ist mit einem auditierbaren Werkzeug erledigt; Bediener-Readback sowie externer Mehr-PC-/Prozessabbruchnachweis bleiben offen. Ledgerbasierte sevDesk-/Wix-Projektion und Master-aware, claim-idempotente Produktdruckbewegungen sind umgesetzt; der reale Dry-Run- und Cutover-Nachweis bleibt Betriebs-Gate. | Unit-Regression fuer Claim-Neulauf und Unknown-Sperre; UI-/Legacy-Drucktests; opt-in PostgreSQL-Barrierentests fuer Erstbuchung, Credit-Cap, Part-Stock-Serialisierung, Claim-Serialisierung und Rollback; credentialed read-only Projektionsprobe |
+| F12 | P1 | OFFEN | Rechnungs-Mail, sevDesk-Freigabe, Wix-Fulfillment, Gutschrift-Mail und physischer Produktdruck nutzen dauerhafte Claims. Druck-Claims gelten pro Part-ID (Fallback SKU) in Rechnungs-Einzel-/Sammeldruck, offene Produkte und Produktbereich; `running`/`unknown` blockieren Instanzen, absichtlicher Nachdruck nach Erfolg erhaelt neue ID. `PrintDecisionEngine` serialisiert Part-GET/SET je Part im Prozess und ueber transaktionale PostgreSQL-Advisory-Locks; opt-in PostgreSQL-Tests bestaetigen verlustfreie Updates aus zwei unabhaengigen Engine-Instanzen und gemeinsame Claims ueber getrennte Stores. Die lokale manuelle Reconciliation von `unknown`- und nach Prozessabbruch `running`-Claims ist mit einem auditierbaren Werkzeug erledigt; Bediener-Readback sowie externer Mehr-PC-/Prozessabbruchnachweis bleiben offen. Ledgerbasierte sevDesk-/Wix-Projektion und Master-aware, claim-idempotente Produktdruckbewegungen sind umgesetzt; der reale Dry-Run- und Cutover-Nachweis bleibt Betriebs-Gate. | Unit-Regression fuer Claim-Neulauf und Unknown-Sperre; UI-/Legacy-Drucktests; opt-in PostgreSQL-Barrierentests fuer Erstbuchung, Credit-Cap, Part-Stock-Serialisierung, Claim-Serialisierung und Rollback; credentialed read-only Projektionsprobe |
 | F13 | P1 | ERLEDIGT | Nutzerentscheidung vom 11.11.2026: Bestehende Zuordnung aus `sevdesk_reference`/`order_reference` bleibt verbindlich, auch für START-Zahlungsbuchung, Wix-Fulfillment und Nachlieferungskontext. Der Partner erzeugt die Referenz als Wix-Ordernummer oder `PO | Wix-Ordernummer`; XW-Office extrahiert fünfstellige Nummern. Die Detailansicht fällt bei leerem Wix-Treffer oder Fehler auf sevDesk-Positionen zurück; der WIX-ORDER-Button bleibt auf bestätigten WorkContext begrenzt. Automatische Schreibpfade behalten ihre persistenten Idempotenz-Claims. | Bestehende Tests schützen Fremdreferenz ohne Wix-Treffer in der Detailansicht, bestätigten WIX-ORDER-Button, erfolgreiche START-Zahlungsbuchung und Wix-Fulfillment. Die bewusste Beibehaltung der Referenzregel ist Nutzerentscheidung; keine neue Herkunftsmarkierung oder Kontakt-Heuristik |
 | F14 | P1 | ERLEDIGT | `load_invoice_piece_blocks` gibt nur explizit druckbare ganzzahlige Produktpositionen aus. Die SevDesk-Detailansicht zeigt jede normalisierte Position mit Art, Menge, SKU/Quelle, Druckbarkeit, Beschreibung, IDs, Gewicht, Einheitspreis netto/brutto, Positionssteuer, Steuersatz, Rabatt, Positionssummen und Klaerhinweisen. Optionale Zahlenfelder bleiben bei fehlenden/ungueltigen API-Werten leer; sie aendern keine Druck- oder Lagerentscheidung. | Regression: Bruchmenge wird nicht als ganze Druckmenge behandelt; Normalisierung prueft optionale Geld-/Steuerfelder und UI-Test prueft deren Darstellung |
 | F15 | P1 | ERLEDIGT | Decimal-Mengen, finale Statuswerte, stabile Positions-IDs und Needs-Review wurden strikt validiert. Der Invoice-Poll speichert einen atomaren Erfolgswasserstand mit 30-Tage-Overlap; bei Fehlern/Needs-Review bleibt er stehen. sevDesk-Seitenlimit wirft `TaxPageLimitError`, bevor Ergebnisse als vollstaendig gelten. | Feed-Validierungs-, Checkpoint- und `load_tax_resource`-Paginationstests |
@@ -3216,15 +3216,16 @@ neuer Lauf widerspricht ihrem Nachweis.
 
 Aktueller Restumfang, in dieser Reihenfolge:
 
-1. **AP03/F12 und AP05/F16 (P1):** die verbleibenden Claim-, Legacy-/Hub-
-Recovery- und Replay-Codepfade abschliessen. Ledgerbasierte sevDesk-/Wix-
-Projektion und claim-idempotente PRINT_RUN-Buchung im Master-Modus sind
-implementiert und getestet; ein credentialed read-only Dry-Run sowie echter
-Mehr-PC-/Prozessabbruch- und Cutover-Nachweis bleiben Betriebs-Gates. Das
-Unknown-Claim-Reconciliation-Werkzeug ist umgesetzt; sein externer Readback
-bleibt Bedienerbeleg. START-Bestandsbuchung bleibt gemaess Nutzerentscheidung
-standardmaessig aus. Bestehende Claims/Journale und der False/True-Schalter sind
-Regression-Invarianten.
+1. **AP03/F12 und AP05/F16 (P1):** Claim-/Replay-Code einschliesslich der
+manuellen Recovery verwaister `running`-Claims ist umgesetzt und getestet. Die
+Legacy-/Hub-Resume-Pfade sind durch Fehler- und Idempotenz-Fakes abgedeckt.
+Ledgerbasierte sevDesk-/Wix-Projektion und claim-idempotente PRINT_RUN-Buchung
+im Master-Modus sind ebenfalls umgesetzt; credentialed read-only Dry-Run, echter
+Mehr-PC-/Prozessabbruch-, 2+1-Teilfehler-/STOP- und Cutover-Nachweis bleiben
+Betriebs-Gates. Externe Readbacks und die Bestaetigung, dass kein XW-Office-
+Prozess mehr aktiv ist, bleiben Bedienerbelege. START-Bestandsbuchung bleibt
+gemaess Nutzerentscheidung standardmaessig aus; Claims/Journale und der
+False/True-Schalter sind Regression-Invarianten.
 2. **AP06/F17-F18 (P2):** offene synchrone I/O-Einstiege in Rechnungsdialogen
 gezielt aus dem vollstaendigen Inventar abarbeiten. Pro Einstieg Heartbeat,
 Fallidentitaet, Fehler, Doppelklick und Close/Shutdown durch einen Fake belegen.
@@ -3245,6 +3246,39 @@ Die aktuelle strikte lokale MyPy-Baseline vor der folgenden Fortschreibung
 betrug 122 Fehler in 33 Dateien. Der Regressionstest-Runner ist die Repository-
 `.venv` mit PySide6 6.11.0; das globale Python ohne PySide6 ist kein
 verbindlicher Testpfad.
+
+## AP03-Betriebsnachweis - Railway-Projektions-Dry-Run (12.11.2026)
+
+Der Projektions-CLI lief mit den Variablen des Railway-Produktionsservices
+`XW-Product-Hub` ohne `--write` und mit `--summary`. Readback:
+`dry_run=true`, `projected=0`, `would_project=0`, `equal=0`, `conflicts=0`,
+`errors=0`, `skipped=432`. Der Zusammenfassungsmodus enthaelt keine
+variantenspezifischen Skip-Gruende; die 432 Zeilen sind daher keine
+Mapping-/Ledger-Abnahme und kein Cutover-Go. Ein separater Konfigurations-
+Readback bestaetigte `inventory_master_enabled=false`,
+`inventory_shadow_enabled=false` und `start_stock_booking_enabled=false`.
+Der Lauf bestaetigt den read-only Credential-/DB-/CLI-Pfad und dass dabei
+keine Projektion ausgefuehrt wurde. Es wurden weder Produktivbestand noch
+Master-Schalter geaendert.
+
+## AP03/F12-Fortschreibung - Abgleich verwaister Running-Claims (12.11.2026)
+
+Ein Prozessabbruch waehrend einer externen Aktion liess den dauerhaften Claim
+auf `running`; das bisherige Werkzeug listete und reconciliierte nur `unknown`.
+`InvoiceOperationClaimStore.list_open()` stellt jetzt beide offenen Zustaende
+read-only bereit. Der manuelle CLI-Abgleich akzeptiert einen `running`-Claim nur
+mit exakter Operation-ID, externem Abgleichnachweis, Operator und zusaetzlicher
+exakter Bestaetigung, dass kein XW-Office-Prozess die Operation noch ausfuehrt.
+Der Service verlangt diese Bestaetigung ebenfalls explizit. Statuswechsel sind
+weiterhin zustandsgebunden; Historieneintraege halten den abgeglichenen
+Ausgangszustand fest. Es gibt weder automatische Lease-Freigabe noch automatische
+Wiederholung. 3 neue Regressionen pruefen Auflistung, zustandsgebundenen
+Abgleich und CLI-Prozessbestaetigung; die Claim-Suite besteht mit **17 Tests**.
+Gezieltes striktes MyPy fuer Service und CLI, Ruff und die Vollsuite (**2.340
+bestanden, 5 uebersprungen, 1 bestehende Starlette/httpx-Deprecation-Warnung;
+154,75 s**) sind gruen. Die fuenf opt-in PostgreSQL-Tests liefen mangels
+`XW_TEST_POSTGRES_URL` nicht. Reale Provider-Readbacks und Mehr-PC-/Prozess-
+Abbruchbelege bleiben G1/G2-Betriebsnachweise.
 
 ## AP08-Fortschreibung - Wix-Konflikt-API-Typgrenze (12.11.2026)
 

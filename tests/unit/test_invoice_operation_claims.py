@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+from _pytest.capture import CaptureFixture
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -113,6 +115,63 @@ def test_unknown_claim_listing_splits_ids_from_the_last_key_separator() -> None:
     assert listed[0].operation == "invoice_mail"
 
 
+def test_open_claim_listing_includes_running_and_unknown_claims() -> None:
+    store = InvoiceOperationClaimStore(_repository())
+    running = store.acquire("invoice-running", "invoice_mail")
+    unknown = store.acquire("invoice-unknown-open", "invoice_mail")
+    assert store.finish(unknown, "unknown", error="mail readback timeout") is True
+
+    open_claims = store.list_open()
+
+    assert [(claim.invoice_id, claim.state) for claim in open_claims] == [
+        ("invoice-running", "running"),
+        ("invoice-unknown-open", "unknown"),
+    ]
+    assert store.list_unknown() == [open_claims[1]]
+    assert running.operation_id == open_claims[0].operation_id
+
+
+def test_orphaned_running_claim_requires_manual_process_and_side_effect_readback() -> None:
+    repository = _repository()
+    store = InvoiceOperationClaimStore(repository)
+    claim = store.acquire("invoice-orphaned", "invoice_mail")
+
+    try:
+        store.reconcile_open(
+            claim.invoice_id,
+            claim.operation,
+            claim.operation_id,
+            "failed",
+            reconciled_by="operator@example.test",
+            evidence="provider readback confirms no message; no process active",
+            expected_state="running",
+        )
+    except ValueError as exc:
+        assert "kein Prozess mehr aktiv" in str(exc)
+    else:
+        raise AssertionError("running claim was reconciled without process confirmation")
+
+    reconciled = store.reconcile_open(
+        claim.invoice_id,
+        claim.operation,
+        claim.operation_id,
+        "failed",
+        reconciled_by="operator@example.test",
+        evidence="provider readback confirms no message; no process active",
+        expected_state="running",
+        no_active_processes_confirmed=True,
+    )
+
+    assert reconciled.state == "failed"
+    retry = store.acquire(claim.invoice_id, claim.operation)
+    assert retry.acquired is True
+    assert retry.operation_id == claim.operation_id
+    raw = repository.get_value_json(store._key(claim.invoice_id, claim.operation))
+    assert raw is not None
+    history = json.loads(json.loads(raw)["reconciliation_history"])
+    assert history[0]["reconciled_from"] == "running"
+
+
 def test_unknown_claim_reconciliation_requires_exact_current_operation_id() -> None:
     repository = _repository()
     store = InvoiceOperationClaimStore(repository)
@@ -200,7 +259,7 @@ def test_unknown_claim_reconciliation_rejects_replay_and_missing_evidence() -> N
             evidence="external readback confirms failure",
         )
     except ValueError as exc:
-        assert "Nur ein unknown" in str(exc)
+        assert "Status ist nicht mehr unknown" in str(exc)
     else:
         raise AssertionError("reconciliation replay was accepted")
 
@@ -244,6 +303,52 @@ def test_reconcile_cli_lists_unknown_and_requires_explicit_matching_confirmation
     else:
         raise AssertionError("CLI accepted mismatched confirmation id")
     assert store.get(claim.invoice_id, claim.operation).state == "unknown"  # type: ignore[union-attr]
+
+
+def test_reconcile_cli_requires_process_confirmation_for_running_claim(
+    capsys: CaptureFixture[str],
+) -> None:
+    repository = _repository()
+    store = InvoiceOperationClaimStore(repository)
+    claim = store.acquire("invoice-running-cli", "invoice_mail")
+    parser = build_parser()
+
+    listing = parser.parse_args(["list-open"])
+    assert run_command(listing, repository) == 0
+    assert '"state": "running"' in capsys.readouterr().out
+
+    arguments = [
+        "reconcile",
+        "--invoice-id",
+        claim.invoice_id,
+        "--operation",
+        claim.operation,
+        "--operation-id",
+        claim.operation_id,
+        "--expected-state",
+        "running",
+        "--state",
+        "failed",
+        "--reconciled-by",
+        "operator",
+        "--evidence",
+        "provider confirms operation did not happen",
+        "--confirm-operation-id",
+        claim.operation_id,
+    ]
+    without_process_confirmation = parser.parse_args(arguments)
+    try:
+        run_command(without_process_confirmation, repository)
+    except ValueError as exc:
+        assert "kein Prozess mehr aktiv" in str(exc)
+    else:
+        raise AssertionError("CLI accepted running claim without process confirmation")
+
+    with_process_confirmation = parser.parse_args(
+        [*arguments, "--confirm-no-active-processes", claim.operation_id]
+    )
+    assert run_command(with_process_confirmation, repository) == 0
+    assert store.get(claim.invoice_id, claim.operation).state == "failed"  # type: ignore[union-attr]
 
 
 def test_new_print_run_uses_new_id_after_success_but_serializes_other_workstations() -> None:
