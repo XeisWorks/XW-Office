@@ -3031,3 +3031,35 @@ explizit auf `shutdown_complete()`. Die gesamte Rechnungsansicht-Smoke-Datei
 besteht danach mit **104 Tests**; die Vollsuite mit 2.305 Tests lief vorher mit
 dem unbereinigten Testvertrag. Der neue Commit muss diesen Fall erneut im
 Hosted-Windows-Lauf bestaetigen.
+
+## F20-Fortschreibung - Qt-Eventtypen in Listenansichten (12.11.2026)
+
+Die Mollie- und Gutschein-Views hatten je fuenf globale MyPy-Fehler durch
+untypisierte Qt-Show-/Hide-Events, ueberfluessige Override-Ignores und die
+DataTable-Nutzung in frueh erfassten Lambdas. Die Eventparameter sind jetzt
+`QShowEvent`/`QHideEvent`; die Table-Attribute werden vor dem UI-Aufbau
+deklariert. Beide Views bestehen mit `--follow-imports=silent` strict MyPy und
+Ruff. Die globale Baseline sinkt von **172 Fehlern in 45 Dateien** auf **162
+Fehler in 43 Dateien**. Die UI-Views haben keine direkte Testdatei; der
+Hosted-Windows-Lauf auf dem vorherigen Commit deckt diese Typ-only-Aenderung
+nicht ab und der neue Commit benoetigt erneute CI.
+
+## F20-Fortschreibung - Commission-View Typfluss (12.11.2026)
+
+`calculation/view.py` hatte untypisierte Rueckgaben von `QDate.toPython()`,
+wiederverwendete Schleifenvariablen mit inkompatiblen Zeilenmodellen und einen
+unbenutzten Ignore-Kommentar. Die QDate-Rueckgaben sind an der Qt-Grenze als
+`date` eingegrenzt; Exportloops nutzen getrennte Variablennamen, die
+Artikellisten-Zuweisung bleibt unveraendert. Strict MyPy und Ruff fuer die View
+sind fehlerfrei; `test_calculation_view.py` besteht mit **3 Tests**. Die
+globale lokale Baseline sinkt von **162 Fehlern in 43 Dateien** auf **147
+Fehler in 42 Dateien**.
+
+## F20-Fortschreibung - Typisierte Steuer-Ergebnisdialoge (12.11.2026)
+
+Der gemeinsame Steuer-Ergebnisdialog typisiert seinen optionalen Eltern-Widget-
+Parameter jetzt und schaltet technische Details ueber einen benannten Qt-Slot
+statt ueber eine Rueckgabewert-Tupel-Lambda um. Die Detailansicht behaelt ihr
+ein-/ausblendbares Verhalten; die neue Qt-Regression besteht mit **1 Test**.
+Strict MyPy und Ruff fuer das Modul sind gruen. Die globale MyPy-Baseline sinkt
+auf **144 Fehler in 41 Dateien**.

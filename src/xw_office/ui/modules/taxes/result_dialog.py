@@ -10,11 +10,12 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 
 class OperationResultDialog(QDialog):
-    def __init__(self, parent, *, tone: str, title: str, summary: str, context: str = "", details: str = "",
+    def __init__(self, parent: QWidget | None, *, tone: str, title: str, summary: str, context: str = "", details: str = "",
                  actions: list[tuple[str, Callable[[], None]]] | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -39,7 +40,16 @@ class OperationResultDialog(QDialog):
             detail.setVisible(False)
             toggle = QPushButton("Technische Details anzeigen")
             toggle.setCheckable(True)
-            toggle.toggled.connect(lambda checked: (detail.setVisible(checked), toggle.setText("Technische Details ausblenden" if checked else "Technische Details anzeigen")))
+
+            def update_details_visibility(checked: bool) -> None:
+                detail.setVisible(checked)
+                toggle.setText(
+                    "Technische Details ausblenden"
+                    if checked
+                    else "Technische Details anzeigen"
+                )
+
+            toggle.toggled.connect(update_details_visibility)
             layout.addWidget(toggle)
             layout.addWidget(detail)
         for label, callback in actions or []:

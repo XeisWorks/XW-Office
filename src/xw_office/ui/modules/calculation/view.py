@@ -7,7 +7,7 @@ import logging
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from PySide6.QtCore import QTimer, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -466,9 +466,13 @@ class CalculationView(QWidget):
             return
 
         period_key = str(self._period_combo.currentData() or "last_month")
-        reference = self._reference_date.date().toPython()
-        custom_start = self._custom_start.date().toPython() if period_key == "custom" else None
-        custom_end = self._custom_end.date().toPython() if period_key == "custom" else None
+        reference = cast(date, self._reference_date.date().toPython())
+        custom_start = (
+            cast(date, self._custom_start.date().toPython()) if period_key == "custom" else None
+        )
+        custom_end = (
+            cast(date, self._custom_end.date().toPython()) if period_key == "custom" else None
+        )
 
         try:
             period = commission.resolve_period(
@@ -786,13 +790,13 @@ class CalculationView(QWidget):
                     "Netto",
                 ]
             )
-            for row in result.product_rows:
+            for product_row in result.product_rows:
                 ws_products.append(
                     [
-                        row.sku,
-                        row.name,
-                        row.net_quantity,
-                        row.net_amount,
+                        product_row.sku,
+                        product_row.name,
+                        product_row.net_quantity,
+                        product_row.net_amount,
                     ]
                 )
 
@@ -800,14 +804,14 @@ class CalculationView(QWidget):
             ws_categories.append(
                 ["Kategorie", "Menge", "Netto EUR", "Brutto EUR", "Anteil Netto %"]
             )
-            for row in result.category_rows:
+            for category_row in result.category_rows:
                 ws_categories.append(
                     [
-                        row.category_name,
-                        row.quantity,
-                        row.net_amount,
-                        row.gross_amount,
-                        row.share_of_net_amount * 100.0,
+                        category_row.category_name,
+                        category_row.quantity,
+                        category_row.net_amount,
+                        category_row.gross_amount,
+                        category_row.share_of_net_amount * 100.0,
                     ]
                 )
 
@@ -824,17 +828,17 @@ class CalculationView(QWidget):
 
             ws_docs = wb.create_sheet("Belege")
             ws_docs.append(["Beleg", "Datum", "Typ", "SKU", "Menge", "Netto", "Regel", "Warnung"])
-            for row in result.document_rows:
+            for document_row in result.document_rows:
                 ws_docs.append(
                     [
-                        row.document_number,
-                        row.document_date,
-                        row.document_type,
-                        row.sku,
-                        row.signed_quantity,
-                        row.signed_net,
-                        row.rule,
-                        row.warning,
+                        document_row.document_number,
+                        document_row.document_date,
+                        document_row.document_type,
+                        document_row.sku,
+                        document_row.signed_quantity,
+                        document_row.signed_net,
+                        document_row.rule,
+                        document_row.warning,
                     ]
                 )
 
@@ -1051,7 +1055,7 @@ class CalculationView(QWidget):
     def _on_articles_loaded(self, rows: object) -> None:
         if not isinstance(rows, list):
             return
-        self._articles = rows  # type: ignore[assignment]
+        self._articles = rows
         if not self._articles:
             self._art_status.setText(
                 "Keine Artikel — bitte calculation.articles in Einstellungen befuellen."

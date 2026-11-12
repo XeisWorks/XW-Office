@@ -5,6 +5,7 @@ import time
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QHideEvent, QShowEvent
 from PySide6.QtWidgets import QLabel, QPushButton, QHBoxLayout, QVBoxLayout, QWidget
 
 from xw_office.core.worker import BackgroundWorker
@@ -24,6 +25,7 @@ class GutscheineView(QWidget):
     def __init__(self, container: Container, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._container = container
+        self._table: DataTable
         self._rows: list[dict[str, str]] = []
         self._worker: BackgroundWorker | None = None
         self._last_loaded_at = 0.0
@@ -58,12 +60,12 @@ class GutscheineView(QWidget):
         self._table.horizontalHeader().setSectionsClickable(False)
         layout.addWidget(self._table, stretch=1)
 
-    def showEvent(self, event) -> None:  # type: ignore[override]
+    def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
         self.reload(force=False)
         self._timer.start()
 
-    def hideEvent(self, event) -> None:  # type: ignore[override]
+    def hideEvent(self, event: QHideEvent) -> None:
         super().hideEvent(event)
         self._timer.stop()
 
