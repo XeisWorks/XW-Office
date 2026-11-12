@@ -3966,7 +3966,7 @@ eine Deprecation-Warnung, weil `actions/checkout@v4` und `actions/setup-python@v
 noch Node.js 20 als Ziel ausweisen und auf Node.js 24 erzwungen werden.
 
 Die aktuelle Railway-XW-Office-Production-Abfrage zeigt beide App-Services
-`XW-Product-Hub` und `xw-inventory-worker` auf `f1a4976`, Deployment-Status
+`XW-Product-Hub` und `xw-inventory-worker` auf `ce12371`, Deployment-Status
 `SUCCESS`, keine staged changes; beide Postgres-Dienste sind ebenfalls `SUCCESS`.
 `https://products.xeisworks.at/health` antwortet mit HTTP 200. Es wurden keine
 Produktivdaten oder Bestands-Flags beschrieben. Der Desktop-Log
@@ -3981,3 +3981,14 @@ enthaelt ausschliesslich Biome-Formatierung. Die lokale Suite besteht mit
 MySQL-Volume-Backup als im aktuellen Workspace-Tarif nicht verfuegbar aus;
 fuer diesen Dienst liegt deshalb kein Backup-/Restore-Nachweis vor. Dieser
 separate Release aendert nicht den Status von G1/G2 oder den Rechnungs-Code.
+
+## GitHub-Actions-Runtime aktualisiert (12.11.2026)
+
+Run `43277099830` bestand, meldete jedoch die Node-20-Deprecation fuer
+`actions/checkout@v4` und `actions/setup-python@v5`; GitHub dokumentiert, dass
+Node 20 seit 23.09.2026 auf Actions-Runnern nicht mehr verfuegbar ist. Der
+Workflow verwendet jetzt `actions/checkout@v7` und `actions/setup-python@v7`,
+deren aktuellen offiziellen Releases Node 24 nutzen ([checkout changelog](https://github.com/actions/checkout/blob/main/CHANGELOG.md),
+[setup-python release notes](https://github.com/actions/setup-python/releases)).
+Der Hosted-Lauf fuer den aktualisierten Workflow steht nach dem Push aus; der
+laufende Run `43280079484` verwendet noch den vorherigen Workflow-Stand.
