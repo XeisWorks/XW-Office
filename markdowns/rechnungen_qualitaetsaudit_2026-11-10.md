@@ -2481,6 +2481,14 @@ Instanz. Eine blockierte Servicefactory bestaetigt den Qt-Heartbeat. Die vollsta
 `test_offene_sendungen_dialog.py`-Suite besteht mit **12 Tests**; Ruff und striktes
 MyPy fuer das Dialogmodul sind gruen.
 
+## F17-Fortschreibung - Lieferkorrekturmanager beim Erstladen (12.11.2026)
+
+`CustomerAftercareManagerDialog` loest seinen Repository-/Graph-Service jetzt im
+Listenworker auf. Fallliste, Positionen und Aktionen verwenden nach dem ersten
+Ergebnis dieselbe Instanz. Ein blockierter Service-Resolver bestaetigt den
+Qt-Heartbeat. Die komplette Manager-/Tab-Regression besteht mit **14 Tests**;
+Ruff und striktes MyPy fuer den Manager sind gruen.
+
 ## F17-Fortschreibung - PLC-Statistikservice im Worker (12.11.2026)
 
 Beim Oeffnen der PLC-Statistik wurde der Repository-/Datenbankservice im Aufrufer

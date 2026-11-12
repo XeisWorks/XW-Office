@@ -65,7 +65,7 @@ class CustomerAftercareManagerDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self._container = container
-        self._service: CustomerAftercareService = container.resolve(CustomerAftercareService)
+        self._service: CustomerAftercareService | None = None
         self._cases: list[CustomerAftercareCase] = []
         self._selected_case: CustomerAftercareCase | None = None
         self._selected_items: list[CustomerAftercareItem] = []
@@ -109,7 +109,8 @@ class CustomerAftercareManagerDialog(QDialog):
         self._detail_seq += 1
 
     def open_count(self) -> int:
-        return self._service.count_pending_review() + self._service.count_due()
+        service = self._service
+        return service.count_pending_review() + service.count_due() if service is not None else 0
 
     def _build_ui(self) -> None:
         self.setWindowTitle("Lieferkorrekturen")
@@ -214,13 +215,23 @@ class CustomerAftercareManagerDialog(QDialog):
         filter_key = self._current_filter()
         self._status.setText("Lade Lieferkorrekturen…")
 
-        def job() -> list[CustomerAftercareCase]:
-            return self._service.list_cases_for_filter(filter_key)
+        container = self._container
+        current_service = self._service
 
-        def on_result(cases: object) -> None:
+        def job() -> tuple[CustomerAftercareService, list[CustomerAftercareCase]]:
+            service = current_service or container.resolve(CustomerAftercareService)
+            return service, service.list_cases_for_filter(filter_key)
+
+        def on_result(result: object) -> None:
             if self._closing or seq != self._load_seq:
                 return
-            self._cases = cases if isinstance(cases, list) else []
+            if not isinstance(result, tuple) or len(result) != 2:
+                return
+            service, cases = result
+            if not isinstance(cases, list):
+                return
+            self._service = service
+            self._cases = cases
             self._populate_list()
             self._status.setText(f"{len(self._cases)} Fälle")
 
@@ -253,6 +264,12 @@ class CustomerAftercareManagerDialog(QDialog):
         self._selected_case = None
         self._selected_items = []
 
+    def _require_service(self) -> CustomerAftercareService:
+        service = self._service
+        if service is None:
+            raise RuntimeError("Lieferkorrektur-Service ist noch nicht geladen")
+        return service
+
     def _on_case_selected(self, row: int) -> None:
         if not (0 <= row < len(self._cases)):
             self._selected_case = None
@@ -277,7 +294,7 @@ class CustomerAftercareManagerDialog(QDialog):
         seq = self._detail_seq
 
         def job() -> list[CustomerAftercareItem]:
-            return self._service.get_items(case_id)
+            return self._require_service().get_items(case_id)
 
         def on_result(items: object) -> None:
             if self._closing or seq != self._detail_seq:
@@ -386,7 +403,7 @@ class CustomerAftercareManagerDialog(QDialog):
                 address_source="manual" if tuple(outcome.address_lines) != tuple(address) else case.address_source,
                 shipping_mode=outcome.shipping_mode,
             )
-            return self._service.confirm_manual_redelivery(
+            return self._require_service().confirm_manual_redelivery(
                 case.id, shipping_mode=outcome.shipping_mode, note=outcome.note
             )
 
@@ -410,7 +427,7 @@ class CustomerAftercareManagerDialog(QDialog):
         if outcome.action == "confirm":
             def confirm() -> None:
                 if outcome.selected_items:
-                    self._service.confirm_case(
+                    self._require_service().confirm_case(
                         case_id,
                         case_type=outcome.case_type,
                         courtesy=outcome.courtesy,
@@ -418,7 +435,7 @@ class CustomerAftercareManagerDialog(QDialog):
                         selected_items=outcome.selected_items,
                     )
                     return
-                self._service.confirm_case(
+                self._require_service().confirm_case(
                     case_id,
                     case_type=outcome.case_type,
                     courtesy=outcome.courtesy,
@@ -427,19 +444,19 @@ class CustomerAftercareManagerDialog(QDialog):
 
             self._run_action(confirm)
         elif outcome.action == "ignore":
-            self._run_action(lambda: self._service.ignore_case(case_id))
+            self._run_action(lambda: self._require_service().ignore_case(case_id))
 
     def _mark_resolved(self) -> None:
         case = self._selected_case
         if case is None:
             return
-        self._run_action(lambda: self._service.mark_resolved(case.id))
+        self._run_action(lambda: self._require_service().mark_resolved(case.id))
 
     def _mark_cancelled(self) -> None:
         case = self._selected_case
         if case is None:
             return
-        self._run_action(lambda: self._service.mark_cancelled(case.id))
+        self._run_action(lambda: self._require_service().mark_cancelled(case.id))
 
     def _run_action(self, fn: Any) -> None:
         if self._closing:

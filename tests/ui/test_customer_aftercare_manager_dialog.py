@@ -119,6 +119,28 @@ def test_dialog_loads_cases_for_initial_filter(qtbot: object) -> None:
     assert dialog._list.count() == 1  # noqa: SLF001
 
 
+def test_service_resolution_for_initial_load_runs_off_ui_thread(qtbot: object) -> None:
+    entered, release = Event(), Event()
+    service = _FakeService()
+
+    class SlowContainer(_FakeContainer):
+        def resolve(self, typ: object) -> object:
+            if typ is CustomerAftercareService:
+                entered.set()
+                release.wait(2)
+            return super().resolve(typ)
+
+    dialog = CustomerAftercareManagerDialog(SlowContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    beats: list[bool] = []
+    QTimer.singleShot(20, lambda: beats.append(True))
+    qtbot.waitUntil(entered.is_set, timeout=1000)
+    qtbot.waitUntil(lambda: bool(beats), timeout=1000)
+    assert "Lade Lieferkorrekturen" in dialog._status.text()  # noqa: SLF001
+    release.set()
+    _wait_loaded(qtbot, dialog)
+
+
 def test_selecting_case_shows_meta_and_items(qtbot: object) -> None:
     service = _FakeService()
     dialog = CustomerAftercareManagerDialog(_FakeContainer(service))  # type: ignore[arg-type]
@@ -134,6 +156,7 @@ def test_open_count_sums_pending_and_due(qtbot: object) -> None:
     service = _FakeService()
     dialog = CustomerAftercareManagerDialog(_FakeContainer(service))  # type: ignore[arg-type]
     qtbot.addWidget(dialog)
+    _wait_loaded(qtbot, dialog)
 
     assert dialog.open_count() == 1
 
