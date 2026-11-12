@@ -3103,9 +3103,10 @@ konkreten Formatfehlern abgewiesen, ungueltige Zeilen/Anhaenge werden beim
 Normalisieren verworfen und `FlowPrintCase.attachments` ist als Liste
 string-keyed Objekt-Mappings typisiert. Vier Fake-HTTP-Regressionsfaelle decken
 gueltige und fehlerhafte Case-/Completion-Antworten ab. Zusammen mit den zwei
-OPEN-PRINTS-Service-Regressionen bestehen **6 gezielte Tests**; die Vollsuite
-besteht mit **2.310 Tests, 5 optionalen PostgreSQL-Ueberspringungen und 1
-bestehenden Warnung (168,44 s)**. Strict MyPy und Ruff fuer den Client/Test sind
-gruen. Die globale lokale MyPy-Baseline sinkt von 143 Fehlern in 40 Dateien auf
-**141 Fehler in 40 Dateien**. F17 und die uebrigen F20-Aufraeumarbeiten bleiben
-offen.
+OPEN-PRINTS-Service-Regressionen bestehen **7 gezielte Tests**; zudem werden
+Anhangsgroessen aus unbekannten JSON-Werten jetzt als nichtnegative Ganzzahlen
+normalisiert. Die Vollsuite besteht mit **2.311 Tests, 5 optionalen
+PostgreSQL-Ueberspringungen und 1 bestehenden Warnung (165,39 s)**. Strict MyPy
+und Ruff fuer beide Services und Tests sind gruen. Die globale lokale
+MyPy-Baseline sinkt von 143 Fehlern in 40 Dateien auf **140 Fehler in 39
+Dateien**. F17 und die uebrigen F20-Aufraeumarbeiten bleiben offen.

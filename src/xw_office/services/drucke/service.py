@@ -78,7 +78,7 @@ class OffeneDruckeService:
                     id=str(item.get("id") or ""),
                     name=str(item.get("filename") or "Anhang"),
                     content_type=str(item.get("mime_type") or "application/octet-stream"),
-                    size_bytes=int(item.get("size_bytes") or 0),
+                    size_bytes=self._attachment_size_bytes(item.get("size_bytes")),
                     source_type=_SOURCE_FLOW,
                 )
                 for item in (remote.attachments if remote else [])
@@ -101,6 +101,19 @@ class OffeneDruckeService:
             for item in values
             if str(item.get("id") or "").strip()
         ]
+
+    @staticmethod
+    def _attachment_size_bytes(value: object) -> int:
+        if isinstance(value, bool):
+            return 0
+        if isinstance(value, int):
+            return max(0, value)
+        if isinstance(value, str):
+            try:
+                return max(0, int(value.strip()))
+            except ValueError:
+                return 0
+        return 0
 
     def download_attachment_to_cache(self, case_id: str, attachment_id: str, filename: str) -> Path:
         case = self._find_case(case_id)

@@ -24,12 +24,13 @@ class _Flow:
     def __init__(self) -> None:
         self.status_updates: list[tuple[str, bool]] = []
         self.synced: list[object] = []
+        self.attachments: list[dict[str, object]] = []
 
     def is_configured(self) -> bool:
         return True
 
     def fetch_open_cases(self) -> list[FlowPrintCase]:
-        return [FlowPrintCase(id="flow-print", title="Partitur", body_text="A4 doppelseitig", source_url="", created_at="2026-10-10T10:00:00Z", attachments=[])]
+        return [FlowPrintCase(id="flow-print", title="Partitur", body_text="A4 doppelseitig", source_url="", created_at="2026-10-10T10:00:00Z", attachments=self.attachments)]
 
     def set_status(self, case_id: str, *, completed: bool) -> None:
         self.status_updates.append((case_id, completed))
@@ -57,3 +58,19 @@ def test_completed_email_request_id_uses_the_shared_deterministic_namespace() ->
     service = OffeneDruckeService(_Repo(), _Secrets())  # type: ignore[arg-type]
     assert str(service._email_request_id("mail-id")) == str(service._email_request_id("mail-id"))
     assert str(service._email_request_id("mail-id")) != str(service._email_request_id("other-mail-id"))
+
+
+def test_flow_attachment_size_is_normalized_to_a_nonnegative_integer() -> None:
+    flow = _Flow()
+    flow.attachments = [
+        {"id": "valid", "filename": "score.pdf", "size_bytes": "1024"},
+        {"id": "invalid", "filename": "bad.pdf", "size_bytes": "unknown"},
+        {"id": "negative", "filename": "negative.pdf", "size_bytes": -4},
+        {"id": "boolean", "filename": "boolean.pdf", "size_bytes": True},
+    ]
+    service = OffeneDruckeService(_Repo(), _Secrets(), flow)  # type: ignore[arg-type]
+    service.refresh_from_graph()
+
+    attachments = service.list_attachments("flow:flow-print")
+
+    assert [item.size_bytes for item in attachments] == [1024, 0, 0, 0]
