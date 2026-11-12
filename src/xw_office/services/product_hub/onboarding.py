@@ -15,6 +15,7 @@ from typing import Protocol
 from sqlalchemy.orm import Session, sessionmaker
 
 from xw_office.core.database import session_scope
+from xw_office.models.product_hub import ChannelMapping, Product, ProductVariant
 from xw_office.repositories.product_hub import ProductHubRepository, normalize_sku
 from xw_office.services.sevdesk.part_client import PartClient
 from xw_office.services.wix.client import WixProductsClient
@@ -22,8 +23,11 @@ from xw_office.services.wix.product_details_client import WixProductDetailsClien
 
 
 class _WixProduct(Protocol):
-    id: str
-    all_skus: tuple[str, ...]
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def all_skus(self) -> tuple[str, ...]: ...
 
 
 @dataclass(frozen=True)
@@ -212,20 +216,31 @@ class ProductOnboardingService:
             hub_state=hub_state, channels=(sevdesk, wix),
         )
 
-    def _ensure_hub_variant(self, **values: object):
-        product_id = values["product_id"]
-        resume_variant_id = values.get("resume_variant_id")
+    def _ensure_hub_variant(
+        self,
+        *,
+        product_id: uuid.UUID,
+        sku: str,
+        name: str,
+        option_name: str,
+        option_value: str,
+        existing_default_option_value: str,
+        price_gross: Decimal,
+        tax_rate: Decimal,
+        weight_grams: Decimal | None,
+        resume_variant_id: uuid.UUID | None,
+    ) -> tuple[Product, ProductVariant, str]:
         with session_scope(self._session_factory) as session:
             repo = ProductHubRepository(session)
-            product = repo.get_product(product_id)  # type: ignore[arg-type]
+            product = repo.get_product(product_id)
             if product is None:
                 raise ValueError("Das Hauptprodukt wurde nicht gefunden.")
             if resume_variant_id:
-                variant = repo.get_variant(resume_variant_id)  # type: ignore[arg-type]
+                variant = repo.get_variant(resume_variant_id)
                 resume_matches = (
                     variant is not None
                     and variant.product_id == product.id
-                    and variant.sku == values["sku"]
+                    and variant.sku == sku
                 )
                 if not resume_matches:
                     raise ValueError("Variante und Wiederaufnahme-ID passen nicht zusammen.")
@@ -234,25 +249,23 @@ class ProductOnboardingService:
             default_variant = repo.get_default_variant(product.id)
             if default_variant is not None and not default_variant.option_values:
                 default_variant.option_values = {
-                    str(values["option_name"]): str(values["existing_default_option_value"])
+                    option_name: existing_default_option_value
                 }
                 default_variant.row_version += 1
             variant = repo.create_variant(
-                product_id=product.id, sku=str(values["sku"]), name=str(values["name"]),
-                option_values={str(values["option_name"]): str(values["option_value"])},
+                product_id=product.id, sku=sku, name=name,
+                option_values={option_name: option_value},
                 stock_enabled=product.product_type != "digital",
-                weight_grams=values.get("weight_grams"),  # type: ignore[arg-type]
+                weight_grams=weight_grams,
             )
             price_list = repo.get_price_list_by_code("RETAIL_EUR")
             if price_list is None:
                 raise RuntimeError("Preisliste RETAIL_EUR fehlt im Product Hub.")
-            gross = values["price_gross"]  # type: ignore[assignment]
-            tax = values["tax_rate"]  # type: ignore[assignment]
-            net = (gross / (Decimal(1) + tax / Decimal(100))).quantize(
+            net = (price_gross / (Decimal(1) + tax_rate / Decimal(100))).quantize(
                 Decimal("0.0001"), rounding=ROUND_HALF_UP
             )
             repo.set_price(variant.id, price_list_id=price_list.id, currency="EUR",
-                           net_amount=net, gross_amount=gross, tax_rate=tax,
+                           net_amount=net, gross_amount=price_gross, tax_rate=tax_rate,
                            source="variant_onboarding_wizard")
             repo.record_audit(actor_type="user", actor_id="variant-onboarding-wizard",
                               source="product_hub_web", entity_type="product_variant",
@@ -306,7 +319,7 @@ class ProductOnboardingService:
         category: str,
         weight_grams: Decimal | None,
         resume_product_id: uuid.UUID | None,
-    ):
+    ) -> tuple[Product, ProductVariant, str]:
         with session_scope(self._session_factory) as session:
             repo = ProductHubRepository(session)
             existing = repo.get_product_by_sku(sku)
@@ -363,7 +376,9 @@ class ProductOnboardingService:
             )
             return product, variant, "created"
 
-    def _existing_mapping(self, *, channel: str, entity_type: str, internal_id: uuid.UUID):
+    def _existing_mapping(
+        self, *, channel: str, entity_type: str, internal_id: uuid.UUID
+    ) -> ChannelMapping | None:
         repo = ProductHubRepository(self._session_factory)
         return next(
             (

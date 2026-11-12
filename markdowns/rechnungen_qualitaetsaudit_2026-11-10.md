@@ -3286,3 +3286,16 @@ mit **2.316 bestanden, 5 uebersprungen, 1 bestehende
 Starlette/httpx-Deprecation-Warnung (153,95 s)**. Die globale strikte MyPy-
 Baseline sinkt weiter von 102 Fehlern in 32 Dateien auf **85 Fehler in 31
 Dateien**. AP08 bleibt offen.
+## AP08-Fortschreibung - Product-Onboarding-Typgrenzen (12.11.2026)
+
+`ProductOnboardingService` verwendet fuer Variantenerstellung nun explizite
+UUID-, SKU-, Decimal- und Gewichtstypen statt eines untypisierten
+`**values: object`-Datenpakets. Hub-Produkt-/Varianten- und Mapping-Rueckgaben
+sind konkret typisiert; das Wix-Produktprotokoll bildet `all_skus` als
+read-only computed property ab. Externe sevDesk-/Wix-Aufrufreihenfolge und
+Resume-Verhalten bleiben unveraendert. Alle **4 Onboarding-Regressionen**,
+striktes MyPy fuer den Service, globales Ruff und `git diff --check` bestehen.
+Die globale MyPy-Baseline sinkt von 85 Fehlern in 31 Dateien auf **76 Fehler
+in 30 Dateien**. Die aktuelle Vollsuite 2.316/5/1 stammt vom Stand vor dieser
+typischen Grenzbereinigung; der volle Windows-CI-Lauf deckt den gepushten
+Stand ab.
