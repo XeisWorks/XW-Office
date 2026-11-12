@@ -716,7 +716,8 @@ def test_rechnungen_shutdown_suppresses_wix_warmup_restart(qtbot: object) -> Non
     qtbot.addWidget(view)
     view._wix_warm_queue = ["20844"]  # noqa: SLF001
 
-    assert view.prepare_shutdown() is True
+    view.request_shutdown()
+    qtbot.waitUntil(view.shutdown_complete, timeout=5000)
     view._warm_wix_context_for_summaries([invoice_service._draft])  # noqa: SLF001
     view._on_wix_warm_finished()  # noqa: SLF001
 

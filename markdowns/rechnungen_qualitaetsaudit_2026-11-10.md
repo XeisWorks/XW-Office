@@ -2997,3 +2997,37 @@ bleibt ein weicher Warn-Gate; lokal liegt der Stand bei 172 Fehlern in 45
 Dateien. Der lokale vollstaendige Testlauf bestand mit 2.303 Tests; 5 optionale
 PostgreSQL-Tests wurden uebersprungen. Der Arbeitsbaum ist sauber und `main`
 entspricht `origin/main`.
+
+## F27-Fortschreibung - Aktiven Druckjob in Eventloop-Luecken ausweisen (12.11.2026)
+
+Der Watchdog ergaenzt Eventloop-Luecken jetzt um den aktiven Druckjob mit
+Job-ID, Typ, Backend und bisheriger Laufzeit. `PrintQueueService` stellt den
+Snapshot thread-sicher direkt aus dem Queue-Worker bereit; `MainWindow` liest
+nur einen bereits aufgeloesten Queue-Service. Ein nachtraeglich zugestelltes
+Qt-Signal ist fuer die Korrelation nicht erforderlich.
+
+Der aktuelle lokale Laufzeitlog zeigte am 12.11. um 09:14:12 eine
+388-ms-Eventloop-Luecke zeitgleich mit dem Einreihen/Dispatch eines PLC-PDF-
+Labeljobs (`31eab6ca07454941ac255329c7ebc8e6`, `qt_raster`). Der PLC-Aufruf
+meldete 1.699 ms; in diesem Lauf wurde keine Packliste erzeugt. Fuer den
+Druckjob erschien vor dem App-Shutdown um 09:15:29 keine Abschlussmetrik; der
+Shutdown meldete den Queue-Worker noch als aktiv. Das ist ein konkreter
+Zusammenhang nach Zeitstempel, aber kein Ursachenbeweis. Die neue
+Eventloop-Jobzuordnung greift erst im naechsten Lauf mit diesem Code.
+
+Die gezielten Queue-/Watchdog-Tests bestehen mit **8 Tests**, striktes MyPy
+fuer Queue, Watchdog und MainWindow ist fehlerfrei, globales Ruff ist gruen.
+Die Vollsuite besteht mit **2.305 Tests, 5 optionalen PostgreSQL-Ueberspringungen
+und 1 bestehenden Starlette/httpx-Deprecation-Warnung (167,52 s)**. F27 bleibt
+offen fuer den naechsten korrelierten Echtlauf sowie die freigegebene
+Druck-/Hardwareabnahme unter G1.
+
+Der Dokumentationslauf `43195807618` auf `22dc270` fand zusaetzlich einen
+Timingfehler in `test_rechnungen_shutdown_suppresses_wix_warmup_restart`:
+unter Windows 3.12 war beim synchronen `prepare_shutdown()` noch ein
+Konstruktor-Worker aktiv, waehrend der lokale Python-3.14-Lauf bereits fertig
+war. Der Test wartet jetzt nach dem nichtblockierenden `request_shutdown()`
+explizit auf `shutdown_complete()`. Die gesamte Rechnungsansicht-Smoke-Datei
+besteht danach mit **104 Tests**; die Vollsuite mit 2.305 Tests lief vorher mit
+dem unbereinigten Testvertrag. Der neue Commit muss diesen Fall erneut im
+Hosted-Windows-Lauf bestaetigen.

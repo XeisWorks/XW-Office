@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 import time
+from collections.abc import Callable
 
 from PySide6.QtCore import QObject, QTimer
 
@@ -15,6 +16,7 @@ class EventLoopGap:
     elapsed_ms: int
     threshold_ms: int
     timestamp: float
+    context: str | None = None
 
 
 class EventLoopWatchdog(QObject):
@@ -28,12 +30,14 @@ class EventLoopWatchdog(QObject):
         warn_ms: int = 50,
         critical_ms: int = 250,
         history_size: int = 100,
+        context_provider: Callable[[], str | None] | None = None,
     ) -> None:
         super().__init__(parent)
         self._interval_ms = max(1, int(interval_ms))
         self._warn_ms = max(self._interval_ms, int(warn_ms))
         self._critical_ms = max(self._warn_ms, int(critical_ms))
         self._history_size = max(1, int(history_size))
+        self._context_provider = context_provider
         self._last_tick = time.perf_counter()
         self._gaps: list[EventLoopGap] = []
         self._timer = QTimer(self)
@@ -57,9 +61,20 @@ class EventLoopWatchdog(QObject):
         if elapsed_ms < self._warn_ms:
             return
         threshold = self._critical_ms if elapsed_ms >= self._critical_ms else self._warn_ms
-        gap = EventLoopGap(elapsed_ms=elapsed_ms, threshold_ms=threshold, timestamp=time.time())
+        context = self._context_provider() if self._context_provider is not None else None
+        gap = EventLoopGap(
+            elapsed_ms=elapsed_ms,
+            threshold_ms=threshold,
+            timestamp=time.time(),
+            context=context,
+        )
         self._gaps.append(gap)
         if len(self._gaps) > self._history_size:
             del self._gaps[0 : len(self._gaps) - self._history_size]
         log = logger.warning if elapsed_ms >= self._critical_ms else logger.info
-        log("Eventloop gap detected elapsed_ms=%s threshold_ms=%s", elapsed_ms, threshold)
+        log(
+            "Eventloop gap detected elapsed_ms=%s threshold_ms=%s active_print_job=%s",
+            elapsed_ms,
+            threshold,
+            context or "none",
+        )

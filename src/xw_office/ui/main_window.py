@@ -57,7 +57,10 @@ class MainWindow(QMainWindow):
         self._printer_status_timer = QTimer(self)
         self._printer_status_timer.setInterval(_PRINTER_STATUS_REFRESH_INTERVAL_MS)
         self._printer_status_timer.timeout.connect(self._refresh_printer_status_async)
-        self._eventloop_watchdog = EventLoopWatchdog(self)
+        self._eventloop_watchdog = EventLoopWatchdog(
+            self,
+            context_provider=self._active_print_job_context,
+        )
         self._setup_window()
         self._build_ui()
         self._connect_signals()
@@ -74,6 +77,10 @@ class MainWindow(QMainWindow):
     def performance_metrics_snapshot(self) -> dict[str, object]:
         """Return request/cache counters and named timings for support analysis."""
         return performance_metrics.snapshot()
+
+    def _active_print_job_context(self) -> str | None:
+        queue = self._container.get_if_resolved(PrintQueueService)
+        return queue.active_job_context() if queue is not None else None
 
     def _setup_window(self) -> None:
         cfg = self._container.config.app.window

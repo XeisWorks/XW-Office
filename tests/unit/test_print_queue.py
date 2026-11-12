@@ -121,6 +121,31 @@ def test_print_queue_logs_backend_duration_and_outcome(monkeypatch, caplog) -> N
     )
 
 
+def test_active_print_job_context_identifies_running_backend(monkeypatch) -> None:
+    entered_backend = threading.Event()
+    release_backend = threading.Event()
+    service = print_queue.PrintQueueService()
+    job = PdfPrintJob(pdf_path="a.pdf", printer_name="P", backend="qt_raster")
+
+    def blocking_backend(_worker: object, _job: PdfPrintJob) -> None:
+        entered_backend.set()
+        assert release_backend.wait(timeout=2)
+
+    monkeypatch.setattr(print_queue._PrintQueueWorker, "_execute", blocking_backend)
+    service.enqueue(job)
+    assert entered_backend.wait(timeout=2)
+    context = service.active_job_context()
+    assert context is not None
+    assert f"id={job.id}" in context
+    assert "kind=product" in context
+    assert "backend=qt_raster" in context
+    assert "active_ms=" in context
+
+    release_backend.set()
+    assert service.shutdown(2000) is True
+    assert service.active_job_context() is None
+
+
 def test_idle_print_queue_thread_stops_cleanly() -> None:
     service = print_queue.PrintQueueService()
     worker = service._ensure_worker()  # noqa: SLF001
@@ -139,7 +164,12 @@ def test_concurrent_first_enqueues_start_only_one_worker(monkeypatch) -> None:
             pass
 
     class FakeWorker:
-        def __init__(self, _jobs: object, _result_callback: object) -> None:
+        def __init__(
+            self,
+            _jobs: object,
+            _result_callback: object,
+            _active_job_callback: object = None,
+        ) -> None:
             self.job_started = FakeSignal()
             self.job_finished = FakeSignal()
             self.job_failed = FakeSignal()

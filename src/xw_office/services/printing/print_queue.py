@@ -101,11 +101,13 @@ class _PrintQueueWorker(QThread):
         self,
         jobs: "queue.Queue[PrintJob | None]",
         result_callback: Callable[[PrintJobResult], None] | None = None,
+        active_job_callback: Callable[[PrintJob | None, float | None], None] | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._jobs = jobs
         self._result_callback = result_callback
+        self._active_job_callback = active_job_callback
         self._stopping = False
 
     def stop(self) -> None:
@@ -118,8 +120,10 @@ class _PrintQueueWorker(QThread):
             if job is None:
                 self._jobs.task_done()
                 break
-            self.job_started.emit(job)
             started_at = time.perf_counter()
+            if self._active_job_callback is not None:
+                self._active_job_callback(job, started_at)
+            self.job_started.emit(job)
             outcome = "error"
             try:
                 self._execute(job)
@@ -156,6 +160,8 @@ class _PrintQueueWorker(QThread):
                     int((time.perf_counter() - started_at) * 1000),
                     outcome,
                 )
+                if self._active_job_callback is not None:
+                    self._active_job_callback(None, None)
                 if isinstance(job, PdfPrintJob) and job.cleanup_paths:
                     _delete_paths(job.cleanup_paths)
                 self._jobs.task_done()
@@ -205,6 +211,8 @@ class PrintQueueService(QObject):
         self._jobs: queue.Queue[PrintJob | None] = queue.Queue()
         self._worker: _PrintQueueWorker | None = None
         self._worker_lock = threading.RLock()
+        self._active_job_lock = threading.Lock()
+        self._active_job: tuple[PrintJob, float] | None = None
         self._stopping = False
         self._result_condition = threading.Condition()
         self._awaited_job_ids: set[str] = set()
@@ -215,12 +223,32 @@ class PrintQueueService(QObject):
             if self._stopping:
                 raise RuntimeError("Print queue is shutting down")
             if self._worker is None or not self._worker.isRunning():
-                self._worker = _PrintQueueWorker(self._jobs, self._record_result)
+                self._worker = _PrintQueueWorker(
+                    self._jobs,
+                    self._record_result,
+                    self._set_active_job,
+                )
                 self._worker.job_started.connect(self.job_started.emit)
                 self._worker.job_finished.connect(self.job_finished.emit)
                 self._worker.job_failed.connect(self.job_failed.emit)
                 self._worker.start()
             return self._worker
+
+    def _set_active_job(self, job: PrintJob | None, started_at: float | None) -> None:
+        with self._active_job_lock:
+            self._active_job = (job, started_at) if job is not None and started_at is not None else None
+
+    def active_job_context(self) -> str | None:
+        """Return a compact, thread-safe label for UI performance diagnostics."""
+        with self._active_job_lock:
+            active = self._active_job
+        if active is None:
+            return None
+        job, started_at = active
+        kind = job.job_kind if isinstance(job, PdfPrintJob) else "address_label"
+        backend = job.backend if isinstance(job, PdfPrintJob) else "brother_bpac"
+        elapsed_ms = max(0, int((time.perf_counter() - started_at) * 1000))
+        return f"id={job.id} kind={kind} backend={backend} active_ms={elapsed_ms}"
 
     def enqueue(self, job: PrintJob) -> str:
         with self._worker_lock:
