@@ -3168,3 +3168,15 @@ Log und Snapshot. Gezielt bestanden: **3 Tests** fuer Watchdog-Metrik,
 START-Bestandsbuchung aus und Qt-Preflight; Ruff und gezieltes MyPy sind gruen.
 Die neue Messung braucht noch einen Desktop-Lauf; die Ursache der bisherigen
 339–481-ms-Luecken ist deshalb weiterhin nicht als behoben nachgewiesen.
+
+## F20-Fortschreibung - Konfigurationsgrenze typisiert und validiert (12.11.2026)
+
+`PrintingSection.print_profiles` ist jetzt als Liste string-keyed Profilobjekte
+typisiert; der rekursive Dataclass-Merge gibt seinen konkreten Zieltyp statt
+`Any` zurueck. `load_config` akzeptiert leere YAML-Dateien weiterhin als
+Defaults, weist aber Listen, Skalare und andere nicht-Objekt-Wurzeln mit einem
+klaren `ValueError` zurueck, bevor Environment-Overrides angewandt werden.
+Drei neue YAML-Regressionen und die bestehende Config-Suite bestehen zusammen
+mit **11 Tests**. Striktes MyPy fuer Config und Tests sowie Ruff sind gruen.
+Die globale lokale MyPy-Baseline sinkt von 132 Fehlern in 37 Dateien auf **130
+Fehler in 36 Dateien**.

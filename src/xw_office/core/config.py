@@ -5,12 +5,13 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import yaml
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+_ConfigT = TypeVar("_ConfigT")
 
 
 @dataclass(frozen=True)
@@ -134,7 +135,7 @@ class PrintingSection:
     label_template_path: str = ""
     configured_printer_names: list[str] = field(default_factory=list)
     # Named profiles loaded from YAML (list[dict] from YAML → list[PrintProfile] via loader)
-    print_profiles: list[dict] = field(default_factory=list)
+    print_profiles: list[dict[str, Any]] = field(default_factory=list)
 
     @staticmethod
     def _profile_from_entry(entry: dict[str, Any]) -> PrintProfile:
@@ -332,7 +333,7 @@ class AppConfig:
     fernet_master_key: str = ""
 
 
-def _merge_dataclass(cls: type, data: dict[str, Any]) -> Any:
+def _merge_dataclass(cls: type[_ConfigT], data: dict[str, Any]) -> _ConfigT:
     """Recursively build a frozen dataclass from a dict."""
     field_types = {f.name: f.type for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
     kwargs: dict[str, Any] = {}
@@ -363,7 +364,13 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     config_file = Path(config_path)
     if config_file.exists():
         with open(config_file, encoding="utf-8") as f:
-            yaml_data = yaml.safe_load(f) or {}
+            loaded = yaml.safe_load(f)
+        if loaded is None:
+            yaml_data = {}
+        elif isinstance(loaded, dict) and all(isinstance(key, str) for key in loaded):
+            yaml_data = loaded
+        else:
+            raise ValueError(f"Config file must contain a YAML object at its root: {config_file}")
     else:
         logger.warning("Config file not found: %s — using defaults", config_path)
 

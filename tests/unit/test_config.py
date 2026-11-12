@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from xw_office.core.config import AppConfig, load_config
 
 
@@ -24,6 +26,18 @@ def test_load_config_with_missing_file() -> None:
     assert config.app.name == "XeisWorks Office"
 
 
+@pytest.mark.parametrize("yaml_content", ["[]", "true", "'scalar'"])
+def test_load_config_rejects_non_mapping_yaml_root(
+    tmp_path: Path,
+    yaml_content: str,
+) -> None:
+    config_path = tmp_path / "invalid-root.yaml"
+    config_path.write_text(yaml_content, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="YAML object at its root"):
+        load_config(config_path)
+
+
 def test_start_stock_booking_can_be_enabled_in_yaml(tmp_path: Path) -> None:
     config_path = tmp_path / "stock-enabled.yaml"
     config_path.write_text("inventory:\n  start_stock_booking_enabled: true\n", encoding="utf-8")
@@ -31,7 +45,7 @@ def test_start_stock_booking_can_be_enabled_in_yaml(tmp_path: Path) -> None:
     assert load_config(config_path).inventory.start_stock_booking_enabled is True
 
 
-def test_product_hub_runtime_flags_are_loaded_from_environment(monkeypatch) -> None:
+def test_product_hub_runtime_flags_are_loaded_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XW_PRODUCT_HUB_SYNC_PUSH_ENABLED", "true")
     monkeypatch.setenv("XW_PRODUCT_HUB_INVENTORY_SHADOW_ENABLED", "yes")
     monkeypatch.setenv("XW_PRODUCT_HUB_INVENTORY_MASTER_ENABLED", "on")
