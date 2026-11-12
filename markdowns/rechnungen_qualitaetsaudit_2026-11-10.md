@@ -2888,3 +2888,20 @@ mit **All checks passed**. Der zuletzt ausgefuehrte globale MyPy-Lauf fand
 **193 Fehler in 51 Dateien**; die in diesem Arbeitsabschnitt bereinigten Wix-,
 Transfer-/Graph- und PDF-Layout-Dateien haben jeweils null Fehler. Die globale
 Typbereinigung und Controller-Extraktion bleiben F20-offen.
+
+## Wix- und Railway-Deployment-Readback (12.11.2026)
+
+Der Wix-Website-Stand `0f883d4` ist laut Wix-Publish-Readback mit UI-Version
+`18585` veroeffentlicht; der oeffentliche Auftritt `https://www.xeisworks.at/`
+war beim anschliessenden Read-only-Aufruf erreichbar. Im Railway-Projekt
+`WIX-sevDesk-API` meldet der Produktionsdienst `wix-sevdesk-api` fuer Deployment
+`aab362ab-f131-4523-b2fb-0733d8b8a986` **SUCCESS** auf `main` / Commit
+`464fd75` (`Add replacement book selections to sevdesk invoice details`);
+MySQL meldet ebenfalls **SUCCESS**. Im XW-Office-Railway-Projekt sind
+`XW-Product-Hub` und `xw-inventory-worker` jeweils **SUCCESS** auf Commit
+`6b1f8cf` (Deployments `a9b30181-2d58-4b8a-b1b4-f7de438aada5` und
+`1054039a-6d41-4a0b-bb67-f1c7e25e34e0`); die angebundene PostgreSQL-Instanz
+ist **SUCCESS**. Railway zeigt fuer beide Projekte keine ausstehenden staged
+oder applying Aenderungen. Der zweite GitHub-CI-Lauf allein fuer den
+Dokumentations-Commit wurde beendet; der laufende Volltestlauf fuer den
+Code-Commit `85d7c97` bleibt der CI-Nachweis fuer den Code.
