@@ -40,7 +40,7 @@ def build_preview(*, max_pages: int = 100) -> dict[str, object]:
         raise RuntimeError("SEVDESK_API_TOKEN ist erforderlich.")
     factory = create_session_factory(config)
     repository = ProductHubRepository(factory)
-    products = repository.list_products(ProductFilter(active=True, include_archived=True))
+    products = repository.list_products(ProductFilter(status="live", active=True))
     products = [product for product in products if product.product_type == "physical"]
     variants = repository.list_variants_for_products([product.id for product in products])
     mappings = repository.list_channel_mappings_for_entities(
