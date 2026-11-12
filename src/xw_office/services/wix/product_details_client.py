@@ -41,6 +41,11 @@ _RETRY_BACKOFF_SEC = 0.4
 _BULK_CHUNK = 100  # max products per bulk request
 
 
+def _dict_or_empty(value: object) -> dict[str, Any]:
+    """Normalize an optional Wix object field before reading nested values."""
+    return value if isinstance(value, dict) else {}
+
+
 def _raw_fetch_failure(
     statuses: list[int], failures: list[str], invalid_response: bool
 ) -> dict[str, object]:
@@ -899,12 +904,15 @@ class WixProductDetailsClient:
 
     @staticmethod
     def _variant_sku(raw_variant: dict[str, Any]) -> str:
-        nested = raw_variant.get("variant") if isinstance(raw_variant.get("variant"), dict) else {}
+        nested = _dict_or_empty(raw_variant.get("variant"))
         return str(raw_variant.get("sku") or nested.get("sku") or "").strip()
 
-    def _ensure_variant_v1(self, pid: str, raw: dict[str, Any], **values: Any):
+    def _ensure_variant_v1(
+        self, pid: str, raw: dict[str, Any], **values: Any
+    ) -> tuple[str, CatalogVersion, str]:
         option, choice = values["option"], values["choice"]
-        existing_options = raw.get("productOptions") if isinstance(raw.get("productOptions"), list) else []
+        existing_options_value = raw.get("productOptions")
+        existing_options = existing_options_value if isinstance(existing_options_value, list) else []
         if len(existing_options) > 1:
             raise ValueError("Der Wix-V1-Produktdatensatz hat mehrere Optionen; bitte in Wix ergänzen")
         choices = [values["previous_choice"]]
@@ -942,15 +950,20 @@ class WixProductDetailsClient:
         matched = next((row for row in variants if isinstance(row, dict) and self._variant_sku(row) == values["sku"]), None)
         return str((matched or {}).get("id") or ""), CatalogVersion.V1, "created"
 
-    def _ensure_variant_v3(self, pid: str, raw: dict[str, Any], **values: Any):
+    def _ensure_variant_v3(
+        self, pid: str, raw: dict[str, Any], **values: Any
+    ) -> tuple[str, CatalogVersion, str]:
         option, choice = values["option"], values["choice"]
-        raw_options = raw.get("options") if isinstance(raw.get("options"), list) else []
+        raw_options_value = raw.get("options")
+        raw_options = raw_options_value if isinstance(raw_options_value, list) else []
         if len(raw_options) > 1:
             raise ValueError("Der Wix-V3-Produktdatensatz hat mehrere Optionen; bitte in Wix ergänzen")
-        variants_info = raw.get("variantsInfo") if isinstance(raw.get("variantsInfo"), dict) else {}
-        raw_variants = variants_info.get("variants") if isinstance(variants_info.get("variants"), list) else []
-        if not raw_variants and isinstance(raw.get("variants"), list):
-            raw_variants = raw["variants"]
+        variants_info = _dict_or_empty(raw.get("variantsInfo"))
+        raw_variant_rows = variants_info.get("variants")
+        raw_variants = raw_variant_rows if isinstance(raw_variant_rows, list) else []
+        product_variant_rows = raw.get("variants")
+        if not raw_variants and isinstance(product_variant_rows, list):
+            raw_variants = product_variant_rows
         for row in raw_variants:
             if isinstance(row, dict) and self._variant_sku(row).casefold() == values["sku"].casefold():
                 return str(row.get("id") or ""), CatalogVersion.V3, "reused"
@@ -978,7 +991,8 @@ class WixProductDetailsClient:
                     "Der Varianten-Wizard unterstützt bestehende Wix-Optionen nur als Textauswahl"
                 )
             settings = raw_option.get("choicesSettings")
-            raw_option_choices = settings.get("choices", []) if isinstance(settings, dict) else []
+            raw_option_choices_value = _dict_or_empty(settings).get("choices")
+            raw_option_choices = raw_option_choices_value if isinstance(raw_option_choices_value, list) else []
             choices = [str(item.get("name") or "").strip() for item in raw_option_choices if isinstance(item, dict)]
             writable_choices: list[dict[str, Any]] = []
             for item in raw_option_choices:
@@ -1013,7 +1027,8 @@ class WixProductDetailsClient:
         for index, row in enumerate(raw_variants):
             if not isinstance(row, dict):
                 continue
-            row_choices = row.get("choices") if isinstance(row.get("choices"), list) else []
+            row_choices_value = row.get("choices")
+            row_choices = row_choices_value if isinstance(row_choices_value, list) else []
             if not row_choices and index == 0 and not raw_options:
                 row_choices = [{
                     "optionChoiceNames": {
