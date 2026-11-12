@@ -258,6 +258,23 @@ Runtime-Readiness ist `eligible=true`; DB-Readiness bleibt `eligible=false`.
 594 Quellen-Auditprobleme, 29 Bestandsabweichungen und 710 offene Sync-Konflikte.
 Master/Shadow blieben `false`; es wurden keine Buchungs- oder Providerdaten geschrieben.
 
+## Aktueller manueller Zugriff (12. November 2026, 01:23 CET)
+
+Der Helper verarbeitet Railway-Native-Exitcodes robust und beendet den Exact-
+Mapping-Preflight ohne Secret-Ausgabe. Der verifizierte Aufruf ist:
+
+```powershell
+.\scripts\product_hub\invoke_inventory_railway_preflight.ps1 `
+  -IncludeExactMappingSummary
+```
+
+Der Lauf lieferte Healthcheck HTTP 200, Runtime-Readiness Exit 0, erwartete
+DB-Readiness Exit 2 und 231 read-only Exact-SKU-Kandidaten (374 Live-Produkte,
+492 Varianten, 528 Parts). Reports werden in einem temporaeren Verzeichnis unter
+`$env:TEMP` abgelegt; Token und Datenbank-URLs werden nicht in Reports geschrieben.
+Commit `f2ce26e` ist auf `origin/main` gepusht. Vor Inventur/Freigabe bleiben die
+manuellen Schritte aus Abschnitt 4/5 zwingend.
+
 ## Read-only-Folgepruefung nach Exact-SKU-Preflight (12. November 2026, 00:59 CET)
 
 Der kombinierte read-only Zugriff inklusive Exact-SKU-Zaehler ist:

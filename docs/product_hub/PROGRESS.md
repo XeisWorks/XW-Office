@@ -1581,6 +1581,24 @@ Runtime-Readiness `eligible=true` (Exit 0), DB-Readiness erwartungsgemäß
 726 Sync-Konflikte (davon 710 offen), 432 Outbox-Ereignisse und 263 archivierte
 Payloads. Es wurden keine Bestands- oder Providerdaten geschrieben.
 
+### Railway-Preflight-Haertung und aktueller Betriebszugriff (12. November 2026, 01:23 CET)
+
+Der kombinierte Helper verarbeitet PowerShell-Native-Command-Exitcodes jetzt robust:
+der erwartete DB-Readiness-Exit 2 wird als Datenwert weitergereicht, und der
+Exact-Mapping-Teil liest Railway-Variablen nur im Prozessspeicher. Der read-only Lauf
+mit `-IncludeExactMappingSummary` lieferte Healthcheck HTTP 200, Runtime-Readiness
+Exit 0, DB-Readiness Exit 2 und 231 eindeutige Exact-SKU-Kandidaten (374 Live-
+Produkte, 492 Varianten, 528 sevDesk-Parts). Der Snapshot bleibt bei 432
+Bestandspositionen, 0 Ledger-Bewegungen, 594 Mapping-Blockern, 565 fehlenden
+Quellmengen, 29 Legacy-/Hub-Drifts und 710 offenen Sync-Konflikten. Master und
+Shadow bleiben deaktiviert; es wurden keine Provider- oder Bestandsdaten geschrieben.
+
+Der Fix ist als Commit `f2ce26e` auf `origin/main` integriert. Die gezielte UI-Pruefung
+bestand mit 22 Tests, Ruff ist ohne Befund. Fuer den manuellen Betrieb ist nur noch
+der dokumentierte Helper-Aufruf erforderlich; Inventur, Backup-/Plan-Gate,
+Konfliktbereinigung, Shadow-/Rollback-Nachweis und die ausdrueckliche Master-Freigabe
+bleiben bewusst persoenliche Betriebsschritte.
+
 ### Letzte Produktionsverifikation (12. November 2026, 00:59 CET)
 
 Der kombinierte Railway-Betriebszugriff inklusive Exact-SKU-ZÃ¤hler wird mit
