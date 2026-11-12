@@ -119,6 +119,8 @@ class _PrintQueueWorker(QThread):
                 self._jobs.task_done()
                 break
             self.job_started.emit(job)
+            started_at = time.perf_counter()
+            outcome = "error"
             try:
                 self._execute(job)
             except Exception as exc:  # noqa: BLE001
@@ -134,6 +136,7 @@ class _PrintQueueWorker(QThread):
                     self._result_callback(result)
                 self.job_failed.emit(result)
             else:
+                outcome = "success"
                 result = PrintJobResult(
                     job_id=job.id,
                     success=True,
@@ -145,6 +148,14 @@ class _PrintQueueWorker(QThread):
                     self._result_callback(result)
                 self.job_finished.emit(result)
             finally:
+                logger.info(
+                    "Print job metric id=%s kind=%s backend=%s elapsed_ms=%s outcome=%s",
+                    job.id,
+                    job.job_kind if isinstance(job, PdfPrintJob) else "address_label",
+                    job.backend if isinstance(job, PdfPrintJob) else "brother_bpac",
+                    int((time.perf_counter() - started_at) * 1000),
+                    outcome,
+                )
                 if isinstance(job, PdfPrintJob) and job.cleanup_paths:
                     _delete_paths(job.cleanup_paths)
                 self._jobs.task_done()

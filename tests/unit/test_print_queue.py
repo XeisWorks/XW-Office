@@ -3,6 +3,8 @@ from __future__ import annotations
 import threading
 import time
 import types
+import queue
+import re
 from unittest.mock import MagicMock
 
 from xw_office.services.printing import print_queue
@@ -95,6 +97,28 @@ def test_enqueue_and_wait_returns_worker_result(monkeypatch) -> None:
 
     assert result.success is True
     assert result.job_id == job.id
+
+
+def test_print_queue_logs_backend_duration_and_outcome(monkeypatch, caplog) -> None:
+    jobs: queue.Queue[PdfPrintJob | None] = queue.Queue()
+    job = PdfPrintJob(pdf_path="a.pdf", printer_name="P", backend="qt_raster")
+    jobs.put(job)
+    jobs.put(None)
+    monkeypatch.setattr(
+        print_queue._PrintQueueWorker,
+        "_execute",
+        lambda _self, _job: time.sleep(0.02),
+    )
+    worker = print_queue._PrintQueueWorker(jobs)
+    caplog.set_level("INFO", logger="xw_office.services.printing.print_queue")
+
+    worker.run()
+
+    assert re.search(
+        rf"Print job metric id={job.id} kind=product backend=qt_raster "
+        r"elapsed_ms=\d+ outcome=success",
+        caplog.text,
+    )
 
 
 def test_idle_print_queue_thread_stops_cleanly() -> None:

@@ -176,7 +176,7 @@ Ruff ist gruen. F20 bleibt offen fuer weitere Typbereinigung und die geplante
 Controller-Extraktion.
 | F25 | P2 | OFFEN | Die Phasenmetriken und Hintergrundaufbereitung bleiben bestehen. Ein weiterer Desktop-Lauf am 12.11.2026 zeigt jedoch beim Abschluss der Non-Draft-Seitenladen erneut Eventloop-Luecken von 389 ms (50 Zeilen), 481 ms und 339 ms (je 10 Zeilen). Zeitgleich liefen sevDesk-Summary-Observer/Suchindex-Upserts; `Invoice batch metric` weist 4.310 ms fuer 50 Zeilen und 1.158/1.130 ms fuer die 10er-Seiten aus. Fuer diese Seiten fehlt ein `Rechnungen apply metric` ab 100 ms, daher belegen die Daten keine langsame Tabellenanwendung und auch keine eindeutige Ursache. Die bisherige Erledigt-Einstufung war zu weitgehend; GIL-Konkurrenz, Callback-Nacharbeit und Observer-Last muessen noch isoliert werden. | 50-Zeilen-Qt-Regression unter 250 ms; Phasenmetriken; Ursache der neuen 339–481-ms-Luecken isolieren und erneuten Desktop-Lauf unter 250 ms nachweisen |
 | F26 | P2 | ERLEDIGT | Beim automatischen PLC-Labelversand wurde bei einem physischen Paket ein Packlisten-PDF erzeugt und auf `Paketmarke A5` gedruckt, obwohl der manuelle Packlisten-Button bereits mindestens zwei Pakete verlangt. Ursache war die alleinige Pruefung auf vorhandene Packlisten-Kontexte in `plc_label_dialog.py`; ein Kontext wird auch fuer ein Paket benoetigt, damit dessen Inhalt vor dem PLC-Aufruf im lokalen Collo-/Paketjournal gespeichert wird. Der automatische PDF-/Druckpfad prueft jetzt `len(shipment.parcels) >= 2`; die Inhalts-Snapshots bleiben fuer ein Paket erhalten und in den PLC-Infos sichtbar. | Fake-Regressionen: ein Paket mit zwei PLC-Codes erzeugt weder PDF noch Druckauftrag, behaelt aber seine Produktinhalte im Collo-Journal; zwei Pakete erzeugen weiterhin ein gemeinsames Packlisten-PDF und einen Druckauftrag. 46 PLC-/UI-Tests bestanden; Ruff und gezieltes MyPy gruen |
-| F27 | P2 | OFFEN | Der Desktop-Loglauf vom 11.11.2026 verzeichnete waehrend Produkt-/Labeldruck-Dispatch Eventloop-Luecken von 334 bis 487 ms; zeitliche Korrelation belegt noch keine Ursache. Die Produktdruckvorbereitung protokolliert jetzt ihre Laufzeit. Zwei Fake-Qt-Heartbeat-Regressionen halten die maximale Luecke bei einem 400-ms-Fake-Dispatch unter 250 ms und bestaetigen die Ausfuehrung auf einem Hintergrundthread. Im Desktop-Lauf vom 12.11. lagen die Eventloop-Luecken direkt vor zwei Produktdruckauftraegen bei 159 ms oder darunter; spaetere 747/274/364/476-ms-Luecken traten im START-Rechnungs-/Labeldruck auf und brauchen eine getrennte Ursachenanalyse. | Fake-Druck mit Qt-Heartbeat unter 250 ms; Phasenmessung der Produktdruckvorbereitung; G1: freigegebener Testdruck mit Job-ID ohne Produktivbelege |
+| F27 | P2 | OFFEN | Der Desktop-Loglauf vom 11.11.2026 verzeichnete waehrend Produkt-/Labeldruck-Dispatch Eventloop-Luecken von 334 bis 487 ms; zeitliche Korrelation belegt noch keine Ursache. Die Produktdruckvorbereitung protokolliert jetzt ihre Laufzeit. Zwei Fake-Qt-Heartbeat-Regressionen halten die maximale Luecke bei einem 400-ms-Fake-Dispatch unter 250 ms und bestaetigen die Ausfuehrung auf einem Hintergrundthread. Im Desktop-Lauf vom 12.11. lagen die Eventloop-Luecken direkt vor zwei Produktdruckauftraegen bei 159 ms oder darunter; spaetere 747/274/364/476-ms-Luecken traten im START-Rechnungs-/Labeldruck auf. Die Druckwarteschlange protokolliert jetzt ausserdem Laufzeit und Ergebnis pro Job-ID und Backend, damit ein weiterer Desktop-Lauf Backenddauer und Eventloop-Luecken exakt korrelieren kann. | Fake-Druck mit Qt-Heartbeat unter 250 ms; Phasenmessung der Produktdruckvorbereitung; Job-ID-gebundene Druckbackend-Laufzeit; G1: freigegebener Testdruck mit Job-ID ohne Produktivbelege |
 
 ## 5. Performance-Audit
 
@@ -2611,6 +2611,18 @@ Das Log stammt von altem Commit `70ac3c2`; der aktuelle Lauf vom 12.11.2026
 belegt F25 fuer den Rechnungslisten-Flow, enthielt aber keinen START-Produktdruck.
 F27 bleibt offen, bis der aktuelle Druckdispatch ohne unbeabsichtigte physische
 Ausgabe mit Fake-/Qt-Heartbeat-Messung und spaeterem Testdruck abgenommen ist.
+
+## F27-Fortschreibung - Druckbackend-Laufzeit je Job-ID (12.11.2026)
+
+Die Qt-Druckwarteschlange protokolliert nach jedem Job nun `id`, Jobtyp, Backend,
+verstrichene Backendzeit und Ausgang (`success`/`error`). Die Messung umfasst die
+Ausfuehrung im Queue-Worker und enthaelt weder PDF-Inhalt noch Kunden-/Rechnungsdaten.
+Damit lassen sich Eventloop-Luecken in einem kuenftigen Desktop-Log mit der exakten
+Laufzeit des zeitgleich ausgefuehrten Backends abgleichen. Die neue Regression
+ueberprueft den Job-ID-/Backend-/Dauer-/Ergebnis-Logeintrag mit einem Fake-Backend.
+Queue-, Produktdruck- und 50-Zeilen-Qt-Regressionen: **28 bestanden**; Ruff gruen;
+striktes MyPy fuer die Queue-Datei mit ignorierten externen `pywin32`-Stubfehlern
+gruen. Kein realer Druckauftrag wurde ausgeloest.
 
 ### F17-Fortschreibung - Produktdruck-Konfiguration beim ersten Druck
 
