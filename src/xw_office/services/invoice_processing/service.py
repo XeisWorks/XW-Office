@@ -885,6 +885,7 @@ class InvoiceProcessingService:
                         printed_copy=(full_mode and not digital_only),
                     ),
                 )
+                summary = self._refresh_finalized_start_summary(summary)
                 if self._start_stock_booking_enabled and full_mode and not digital_only and not any(
                     marker in flags.last_warning
                     for marker in (
@@ -894,6 +895,7 @@ class InvoiceProcessingService:
                 ):
                     stock_consumed_invoice_ids.append(str(summary.id))
                 flags = run_phase("payment", lambda: self._run_payment_step(summary, flags))
+                summary = self._refresh_finalized_start_summary(summary)
                 if full_mode:
                     if not digital_only:
                         flags = self._run_aftercare_delivery_note_step(summary, flags)
@@ -1072,6 +1074,7 @@ class InvoiceProcessingService:
                         ),
                     ),
                 )
+                summary = self._refresh_finalized_start_summary(summary)
                 if self._start_stock_booking_enabled and not any(
                     marker in flags.last_warning
                     for marker in (
@@ -1186,6 +1189,7 @@ class InvoiceProcessingService:
                             summary, "payment", lambda: self._run_payment_step(summary, flags)
                         ),
                     )
+                    summary = self._refresh_finalized_start_summary(summary)
                     with persist_lock:
                         pending_manual_license_ids.append(str(summary.id))
                     return str(summary.id), flags, True
@@ -1208,12 +1212,14 @@ class InvoiceProcessingService:
                             ),
                         ),
                     )
+                    summary = self._refresh_finalized_start_summary(summary)
                     flags = persist(
                         summary,
                         run_phase(
                             summary, "payment", lambda: self._run_payment_step(summary, flags)
                         ),
                     )
+                    summary = self._refresh_finalized_start_summary(summary)
                 elif not flags.payment_booked:
                     flags = persist(
                         summary,
@@ -1221,6 +1227,7 @@ class InvoiceProcessingService:
                             summary, "payment", lambda: self._run_payment_step(summary, flags)
                         ),
                     )
+                    summary = self._refresh_finalized_start_summary(summary)
                 flags = persist(
                     summary,
                     run_phase(
@@ -2528,6 +2535,7 @@ class InvoiceProcessingService:
                     )
                 if not flags.payment_booked:
                     flags = persist(summary, self._run_payment_step(summary, flags))
+                    summary = self._refresh_finalized_start_summary(summary)
                 if not flags.wix_fulfilled:
                     flags = persist(summary, self._run_product_step_compat(summary, flags))
                 if not flags.mail_sent:
@@ -2634,6 +2642,20 @@ class InvoiceProcessingService:
                 )
                 return candidate
         return summary
+
+    def _refresh_finalized_start_summary(self, summary: InvoiceSummary) -> InvoiceSummary:
+        """Use the revision and number assigned by sevDesk's sendBy mutation."""
+        refreshed = self._load_summary_by_id(str(summary.id))
+        if int(refreshed.status_code or 0) == 100:
+            raise RuntimeError(f"Rechnung {summary.id} ist nach Freigabe noch Entwurf")
+        updates: dict[str, str] = {}
+        if summary.order_reference and not refreshed.order_reference:
+            updates["order_reference"] = summary.order_reference
+        if summary.sevdesk_reference and not refreshed.sevdesk_reference:
+            updates["sevdesk_reference"] = summary.sevdesk_reference
+        if updates:
+            refreshed = refreshed.model_copy(update=updates)
+        return refreshed
 
     def _stamp(self, flags: FulfillmentFlags) -> FulfillmentFlags:
         return FulfillmentFlags(

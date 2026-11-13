@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import json
 import re
 import threading
 import time
@@ -65,12 +66,30 @@ def test_brother_lbx_job_initializes_and_uninitializes_com(monkeypatch, tmp_path
     monkeypatch.setitem(__import__("sys").modules, "win32com", types.SimpleNamespace(client=win32com_client))
     monkeypatch.setitem(__import__("sys").modules, "win32com.client", win32com_client)
 
-    print_queue._execute_brother_lbx_job(
+    print_queue._print_brother_lbx_direct(
         BrotherLbxLabelJob(printer_name="Brother", template_path=str(template), lines=["Line 1"])
     )
 
     assert events == ["init", "uninit"]
     doc.SetPrinter.assert_called_once_with("Brother", True)
+    doc.PrintOut.assert_called_once_with(1, 0)
+
+
+def test_brother_lbx_queue_runs_com_in_a_separate_main_thread_process(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> types.SimpleNamespace:
+        calls.append({"command": command, **kwargs})
+        return types.SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(print_queue.subprocess, "run", fake_run)
+    print_queue._execute_brother_lbx_job(
+        BrotherLbxLabelJob(printer_name="Brother", template_path="template.lbx", lines=["Line 1"])
+    )
+
+    assert calls[0]["command"][1:] == ["-m", "xw_office.services.printing.bpac_worker"]
+    assert json.loads(str(calls[0]["input"]))["lines"] == ["Line 1"]
+    assert calls[0]["timeout"] == 60
 
 
 def test_enqueue_and_wait_returns_worker_result(monkeypatch) -> None:

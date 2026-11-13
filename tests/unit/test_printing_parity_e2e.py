@@ -1044,6 +1044,78 @@ def test_fullflow_resumes_stranded_physical_invoice_without_duplicate_print() ->
     assert flags.mail_sent is True
 
 
+def test_fullflow_uses_finalized_revision_for_physical_followup() -> None:
+    class _ChangingInvoiceClient(_InvoiceClientE2E):
+        finalized = False
+        payment_booked = False
+
+        def list_invoice_summaries(self, *, limit: int, offset: int, status: int | None = None):
+            if offset or status != 100 or self.finalized:
+                return []
+            return [InvoiceSummary(
+                id="INV-001",
+                invoiceNumber="R-DRAFT",
+                order_reference="WIX-001",
+                sourceUpdatedAt="draft-revision",
+            )]
+
+        def fetch_invoice_by_id(self, invoice_id: str) -> dict:
+            payload = super().fetch_invoice_by_id(invoice_id)
+            payload.update({
+                "status": 1000 if self.payment_booked else (200 if self.finalized else 100),
+                "invoiceNumber": "R-FINAL" if self.finalized else "R-DRAFT",
+                "update": "paid-revision" if self.payment_booked else ("final-revision" if self.finalized else "draft-revision"),
+                "customerInternalNote": "WIX-001",
+            })
+            return payload
+
+        def send_invoice_document(self, invoice_id: str, *, send_type: str, send_draft: bool) -> None:
+            super().send_invoice_document(invoice_id, send_type=send_type, send_draft=send_draft)
+            self.finalized = True
+
+    invoice_client = _ChangingInvoiceClient()
+    service = InvoiceProcessingService(
+        AppConfig(), invoice_client, _SettingsRepoE2E(), _WixOrdersPhysicalStub(),
+    )
+    observed: list[tuple[str, str]] = []
+
+    def check_current(summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
+        detail = service._fetch_invoice_detail(  # noqa: SLF001
+            summary.id, expected_source_updated_at=summary.source_updated_at,
+        )
+        observed.append((summary.source_updated_at, detail["invoiceNumber"]))
+        return flags
+
+    def book_payment(summary: InvoiceSummary, flags: FulfillmentFlags) -> FulfillmentFlags:
+        check_current(summary, flags)
+        invoice_client.payment_booked = True
+        service.invalidate_invoice_detail_cache(summary.id)
+        return replace(flags, payment_booked=True)
+
+    def send_mail(summary: InvoiceSummary, flags: FulfillmentFlags, **_kwargs: object) -> FulfillmentFlags:
+        check_current(summary, flags)
+        return replace(flags, mail_sent=True)
+
+    with (
+        patch.object(service, "_run_aftercare_delivery_note_step", side_effect=check_current),
+        patch.object(service, "_run_invoice_print_step", side_effect=lambda _s, f: replace(f, invoice_printed=True)),
+        patch.object(service, "_run_label_print_step", side_effect=lambda _s, f, **_kw: replace(f, label_printed=True)),
+        patch.object(service, "_run_payment_step", side_effect=book_payment),
+        patch.object(service, "_run_product_step", side_effect=lambda _s, f, **_kw: replace(f, wix_fulfilled=True)),
+        patch.object(service, "_run_mail_step", side_effect=send_mail),
+    ):
+        result = service.run_start_fullflow(full_mode=True)
+
+    assert result["failures"] == 0
+    assert result["successful"] == 1
+    assert observed == [
+        ("final-revision", "R-FINAL"),
+        ("final-revision", "R-FINAL"),
+        ("paid-revision", "R-FINAL"),
+    ]
+    assert invoice_client.send_calls == [("INV-001", "VPR", False)]
+
+
 def test_fullflow_runs_independent_post_processing_concurrently() -> None:
     invoice_client = _InvoiceClientE2E()
     invoice_client.list_invoice_summaries = lambda **_: [

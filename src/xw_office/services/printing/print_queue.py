@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
 import queue
 import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -30,6 +33,33 @@ def _delete_paths(paths: tuple[str, ...]) -> None:
 
 
 def _execute_brother_lbx_job(job: BrotherLbxLabelJob) -> None:
+    """Run bPAC on a fresh main thread; its COM activation can hang in QThread."""
+    payload = {
+        "printer_name": job.printer_name,
+        "template_path": job.template_path,
+        "lines": job.lines,
+        "overlay_object": job.overlay_object,
+        "overlay_text": job.overlay_text,
+        "description": job.description,
+    }
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "xw_office.services.printing.bpac_worker"],
+            input=json.dumps(payload, ensure_ascii=False),
+            text=True,
+            capture_output=True,
+            timeout=60,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Brother bPAC reagiert seit 60 Sekunden nicht") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip()[:300]
+        raise RuntimeError(detail or f"Brother bPAC fehlgeschlagen (Code {result.returncode})")
+
+
+def _print_brother_lbx_direct(job: BrotherLbxLabelJob) -> None:
     pythoncom_mod = None
     try:
         import pythoncom  # type: ignore[import-untyped]  # COM bindings do not ship stubs.
@@ -47,10 +77,13 @@ def _execute_brother_lbx_job(job: BrotherLbxLabelJob) -> None:
             temp_path = handle.name
         shutil.copyfile(job.template_path, temp_path)
 
+        logger.info("Brother bPAC stage=dispatch")
         doc = win32com.client.Dispatch("bpac.Document")
+        logger.info("Brother bPAC stage=open")
         if not bool(doc.Open(temp_path)):
             raise RuntimeError("LBX konnte nicht geladen werden")
 
+        logger.info("Brother bPAC stage=recipient")
         obj = doc.GetObject("Empfaenger")
         if not obj:
             raise RuntimeError("LBX-Objekt 'Empfaenger' nicht gefunden")
@@ -63,6 +96,7 @@ def _execute_brother_lbx_job(job: BrotherLbxLabelJob) -> None:
             if job.overlay_text is not None:
                 overlay.Text = job.overlay_text
 
+        logger.info("Brother bPAC stage=set_printer")
         if not doc.SetPrinter(job.printer_name, True):
             raise RuntimeError("Etikettendrucker nicht gefunden")
         if hasattr(doc, "SetMediaByName"):
@@ -71,17 +105,21 @@ def _execute_brother_lbx_job(job: BrotherLbxLabelJob) -> None:
             except Exception:
                 pass
         if hasattr(doc, "StartPrint") and callable(doc.StartPrint):
+            logger.info("Brother bPAC stage=start_print")
             if not bool(doc.StartPrint(job.description or "Address Label", 0)):
                 raise RuntimeError("StartPrint fehlgeschlagen")
         if not hasattr(doc, "PrintOut"):
             raise RuntimeError("Etikettendruck fehlgeschlagen")
-        ok = doc.PrintOut(False, False) if callable(doc.PrintOut) else bool(doc.PrintOut)
+        logger.info("Brother bPAC stage=print_out")
+        ok = doc.PrintOut(1, 0) if callable(doc.PrintOut) else bool(doc.PrintOut)
         if not ok:
             raise RuntimeError("Etikettendruck fehlgeschlagen")
         if hasattr(doc, "EndPrint") and callable(doc.EndPrint):
+            logger.info("Brother bPAC stage=end_print")
             doc.EndPrint()
+        logger.info("Brother bPAC stage=complete")
     finally:
-        if doc is not None:
+        if doc is not None and callable(getattr(doc, "Close", None)):
             try:
                 doc.Close()
             except Exception:
