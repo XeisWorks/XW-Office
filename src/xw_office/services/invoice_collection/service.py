@@ -24,6 +24,9 @@ class ConnectionRouteIssue:
     connection_id: str
     route_key: str
     message: str
+    provider_id: str | None = None
+    tenant_id: str | None = None
+    account_alias: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,6 +102,9 @@ class InvoiceCollectionService:
                             connection_id=str(connection.connection_id),
                             route_key=route.route_key,
                             message=message,
+                            provider_id=connection.provider_id,
+                            tenant_id=connection.tenant_id.value,
+                            account_alias=connection.account_alias,
                         )
                     )
         return CollectionRun(

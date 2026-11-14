@@ -19,6 +19,10 @@ class CollectionItemResult:
     outcome: DocumentOutcome | None = None
     error: str | None = None
     route_key: str | None = None
+    provider_id: str | None = None
+    tenant_id: str | None = None
+    account_alias: str | None = None
+    display_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +82,24 @@ class CollectionOrchestrator:
                                     source_id=connection_id,
                                     route_key=connector.route_key,
                                     error=_safe_error(exc),
+                                    provider_id=getattr(connection, "provider_id", None),
+                                    tenant_id=getattr(
+                                        getattr(connection, "tenant_id", None), "value", None
+                                    ),
+                                    account_alias=getattr(connection, "account_alias", None),
+                                )
+                            )
+                            continue
+                        if not candidates:
+                            results.append(
+                                CollectionItemResult(
+                                    source_id=connection_id,
+                                    route_key=connector.route_key,
+                                    provider_id=getattr(connection, "provider_id", None),
+                                    tenant_id=getattr(
+                                        getattr(connection, "tenant_id", None), "value", None
+                                    ),
+                                    account_alias=getattr(connection, "account_alias", None),
                                 )
                             )
                             continue
@@ -125,6 +147,10 @@ class CollectionOrchestrator:
                             source_id=candidate.source_id,
                             outcome=processed.receipt.outcome,
                             route_key=candidate.route_key,
+                            provider_id=candidate.connection.provider_id,
+                            tenant_id=candidate.connection.tenant_id.value,
+                            account_alias=candidate.connection.account_alias,
+                            display_name=candidate.original_filename,
                         )
                     )
                 except Exception as exc:  # noqa: BLE001 - continue independent providers
@@ -133,6 +159,10 @@ class CollectionOrchestrator:
                             source_id=candidate.source_id,
                             route_key=candidate.route_key,
                             error=_safe_error(exc),
+                            provider_id=candidate.connection.provider_id,
+                            tenant_id=candidate.connection.tenant_id.value,
+                            account_alias=candidate.connection.account_alias,
+                            display_name=candidate.original_filename,
                         )
                     )
         return results

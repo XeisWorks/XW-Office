@@ -93,8 +93,10 @@ class InvoiceCollectorDialog(QDialog):
         self._document_type = QComboBox()
         for item in DocumentType:
             self._document_type.addItem(item.value, item)
-        self._table = QTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(["Provider", "Mandant", "Datei", "Ergebnis"])
+        self._table = QTableWidget(0, 5)
+        self._table.setHorizontalHeaderLabels(
+            ["Provider/Konto", "Route", "Mandant", "Datei", "Ergebnis"]
+        )
         self._table.horizontalHeader().setStretchLastSection(True)
         self._load_catalog()
         self._provider.currentIndexChanged.connect(self._provider_changed)
@@ -205,6 +207,12 @@ class InvoiceCollectorDialog(QDialog):
             self._status.setText(
                 "Keine aktiven Provider-Verbindungen eingerichtet. "
                 "Nutzen Sie zunächst „PDF manuell hinzufügen“."
+            )
+            return
+        if not any(route.enabled for connection in connections for route in connection.route_settings):
+            self._status.setText(
+                "Keine aktivierte Abrufroute eingerichtet. Nicht live verifizierte Routen "
+                "bleiben gesperrt; Belege können manuell hinzugefügt werden."
             )
             return
         service = self._collection_service
@@ -349,18 +357,39 @@ class InvoiceCollectorDialog(QDialog):
         issue_count = len(result.issues)
         error_count = sum(item.error is not None for item in result.summary.items)
         successful_count = result.summary.new_count + result.summary.existing_count
+        self._table.setRowCount(0)
+        for item in result.summary.items:
+            if item.error:
+                outcome = item.error
+            elif item.outcome is not None:
+                outcome = item.outcome.value
+            else:
+                outcome = "Keine passenden Dokumente"
+            self._append_collection_result(
+                provider_id=item.provider_id,
+                account_alias=item.account_alias,
+                route_key=item.route_key,
+                tenant_id=item.tenant_id,
+                display_name=item.display_name,
+                outcome=outcome,
+            )
+        for issue in result.issues:
+            self._append_collection_result(
+                provider_id=issue.provider_id,
+                account_alias=issue.account_alias,
+                route_key=issue.route_key,
+                tenant_id=issue.tenant_id,
+                display_name=None,
+                outcome=issue.message,
+            )
         if successful_count == 0 and (issue_count or error_count):
-            failures = [
-                f"{item.route_key}: {item.error}"
-                for item in result.summary.items
-                if item.error and item.route_key
-            ]
-            failures.extend(f"{item.route_key}: {item.message}" for item in result.issues)
-            detail = " | ".join(failures[:3])
             self._status.setText(
                 f"Kein Dokument verarbeitet. {issue_count + error_count} Route(n) "
-                "konnten nicht ausgeführt werden. " + detail
+                "konnten nicht ausgeführt werden. Details stehen in der Ergebnistabelle."
             )
+            return
+        if successful_count == 0:
+            self._status.setText("Abruf abgeschlossen; keine passenden Dokumente gefunden.")
             return
         self._status.setText(
             f"Abruf beendet: {result.summary.new_count} neu, "
@@ -368,6 +397,31 @@ class InvoiceCollectorDialog(QDialog):
             f"{issue_count + error_count} Route(n) fehlgeschlagen. "
             "Lokal gespeicherte Dateien bleiben SYNC_PENDING."
         )
+
+    def _append_collection_result(
+        self,
+        *,
+        provider_id: str | None,
+        account_alias: str | None,
+        route_key: str | None,
+        tenant_id: str | None,
+        display_name: str | None,
+        outcome: str,
+    ) -> None:
+        row = self._table.rowCount()
+        self._table.insertRow(row)
+        provider_account = provider_id or "—"
+        if account_alias:
+            provider_account = f"{provider_account} / {account_alias}"
+        values = [
+            provider_account,
+            route_key or "—",
+            tenant_id or "—",
+            display_name or "—",
+            outcome,
+        ]
+        for column, value in enumerate(values):
+            self._table.setItem(row, column, QTableWidgetItem(value))
 
     def _on_collection_error(self, generation: int, error: Exception) -> None:
         if generation != self._fetch_generation:
@@ -484,6 +538,7 @@ class InvoiceCollectorDialog(QDialog):
         self._table.insertRow(row)
         values = [
             str(self._provider.currentData() or "manual"),
+            "manual_import",
             str(self._tenant.currentData()),
             filename,
             outcome,

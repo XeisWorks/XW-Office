@@ -16,6 +16,8 @@ current_status:
     - "planned routes blocked both at save time and when loading existing connections"
     - "Graph mail factory wired into desktop dialog with mailbox and sender-domain settings"
     - "explicit delegated Graph mailbox probe using minimal Mail.Read and one-message-ID query"
+    - "collection table reports provider/account/route/tenant and per-candidate result without external IDs"
+    - "empty discovery is distinct from successful document processing"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
     - "all 18 real provider accounts and 26 route behaviors; mailbox probe is not invoice-route verification"
@@ -167,7 +169,10 @@ tasks:
       - "tests/unit/test_invoice_collection_foundations.py::test_orchestrator_honors_cooperative_cancellation_before_start"
       - "tests/unit/test_invoice_collection_foundations.py::test_orchestrator_isolates_discovery_failure_and_uses_connection_lock"
       - "tests/unit/test_invoice_collection_foundations.py::test_collection_service_wires_saved_routes_to_factory_and_orchestrator (period forwarding)"
+      - "tests/unit/test_invoice_collection_foundations.py::test_orchestrator_reports_empty_route_without_source_identifiers"
       - "tests/ui/test_expense_review_view.py"
+      - "tests/ui/test_invoice_collector_dialog.py::test_collection_results_show_route_outcomes_without_external_ids"
+      - "tests/ui/test_invoice_collector_dialog.py::test_collection_results_distinguish_empty_route_from_success"
     deliverables:
       - "Additional text button in ExpenseReviewView"
       - "InvoiceCollectorDialog generated from manifests, connections, capabilities and states"

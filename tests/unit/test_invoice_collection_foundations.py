@@ -415,6 +415,44 @@ def test_collection_service_wires_saved_routes_to_factory_and_orchestrator(tmp_p
     assert run.issues == ()
     assert run.summary.new_count == 1
     assert received_periods == [selected_period]
+    item = run.summary.items[0]
+    assert item.provider_id == "fixture"
+    assert item.tenant_id == "xw"
+    assert item.account_alias == "billing"
+    assert item.display_name == "saved-route.pdf"
+
+
+def test_orchestrator_reports_empty_route_without_source_identifiers(tmp_path: Path) -> None:
+    connection = ProviderConnection.create(
+        provider_id="fixture", tenant_id=TenantId.XW, account_alias="billing"
+    )
+
+    class EmptyConnector:
+        route_key = "fixture_mail"
+
+        def __init__(self) -> None:
+            self.connection = connection
+
+        def discover(self) -> list[object]:
+            return []
+
+        def download(self, *_args: object) -> object:
+            raise AssertionError("empty route must not download")
+
+    sink_root = tmp_path / "onedrive"
+    sink_root.mkdir()
+    summary = CollectionOrchestrator(
+        DocumentPipeline(sink=OneDriveLocalSink(sink_root))
+    ).collect([EmptyConnector()])
+
+    assert len(summary.items) == 1
+    item = summary.items[0]
+    assert item.route_key == "fixture_mail"
+    assert item.provider_id == "fixture"
+    assert item.tenant_id == "xw"
+    assert item.account_alias == "billing"
+    assert item.outcome is None
+    assert item.error is None
 
 
 def test_collection_service_blocks_saved_route_that_catalog_marks_planned(tmp_path: Path) -> None:
