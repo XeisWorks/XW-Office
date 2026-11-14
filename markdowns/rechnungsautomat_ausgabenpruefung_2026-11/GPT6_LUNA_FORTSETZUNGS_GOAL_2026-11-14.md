@@ -1,6 +1,6 @@
 # Fortsetzungs-Goal fuer GPT-6-Luna
 
-**Stand:** 14.11.2026 (Fehlerredaktion, kataloggesteuerte Portale, Tool-Recherche und Vollsuite 2.428/7 ergaenzt)
+**Stand:** 14.11.2026 (Fehlerredaktion, kataloggesteuerte Portale, Tool-Recherche und Vollsuite 2.429/7 und mandantenspezifische Prüfablage ergaenzt)
 **Repository:** `XeisWorks/XW-Office`, Branch `main`
 **Ausgangslage:** Die technische MVP-Grundlage ist weitgehend implementiert und lokal getestet. Der erste echte Rechnungsabruf ist noch nicht verifiziert. Der Benutzer hat bestaetigt, dass Anbieter-Mailbox und Absenderdomain(s) noch geklaert werden muessen.
 

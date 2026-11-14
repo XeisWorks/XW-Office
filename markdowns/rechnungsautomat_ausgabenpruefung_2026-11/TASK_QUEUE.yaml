@@ -378,10 +378,10 @@ tasks:
     status: "in_progress"
     depends_on: ["T05", "T06", "T07"]
     evidence:
-      - "python -m pytest tests/ -q: 2428 passed, 7 skipped, 0 failed"
+      - "python -m pytest -q: 2429 passed, 7 skipped, 0 failed (after tenant review-folder UI action)"
       - "OneDrive identical-publish race test: 5 consecutive passes after synchronizing both target-existence checks"
       - "python -m ruff check .: passed"
-      - "Targeted mypy on changed Mollie connector, registry and dialog with foreign imports skipped: passed; broad local mypy unavailable due missing optional msal_extensions/Playwright and NumPy stub/Python-version mismatch"
+      - "Targeted mypy on changed Mollie connector/registry and dialog with foreign imports skipped: passed; dialog also passes with --disable-error-code=unused-ignore. Without that flag, two pre-existing unused-ignore findings remain at lines 70 and 765. Broad local mypy is blocked by missing optional msal_extensions/Playwright and NumPy stub/Python-version mismatch"
       - "Provider and task queue YAML parse: passed"
       - "git diff --check: passed"
       - "Added-diff secret-pattern scan: no matches"
