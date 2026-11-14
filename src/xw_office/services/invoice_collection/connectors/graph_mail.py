@@ -109,6 +109,17 @@ class GraphMailAttachmentConnector:
         self.reader.download_attachment(message_id, attachment_id, destination)
         return DownloadedArtifact(candidate=candidate, path=destination)
 
+    def probe(self) -> None:
+        probe = getattr(self.reader, "probe_mailbox", None)
+        if not callable(probe):
+            raise RuntimeError("Graph-Mailbox-Probe wird vom Reader nicht unterstützt")
+        probe()
+
+    def close(self) -> None:
+        close = getattr(self.reader, "close", None)
+        if callable(close):
+            close()
+
 
 def _looks_like_pdf(attachment: dict[str, Any]) -> bool:
     name = str(attachment.get("name") or "").casefold()

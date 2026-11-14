@@ -72,6 +72,14 @@ class GraphMailAttachmentReader:
             url = str(next_link) if next_link else None
         return messages
 
+    def probe_mailbox(self) -> None:
+        """Verify delegated mailbox access without reading message content or attachments."""
+        url = (
+            f"{self.base_url}/users/{quote(self.mailbox, safe='@.')}/messages"
+            "?$select=id&$top=1"
+        )
+        self._request("GET", url)
+
     def download_attachment(self, message_id: str, attachment_id: str, destination: Path) -> None:
         url = (
             f"{self.base_url}/users/{quote(self.mailbox, safe='@.')}/messages/"

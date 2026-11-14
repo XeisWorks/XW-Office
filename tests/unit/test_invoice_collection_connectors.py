@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import fitz
@@ -17,9 +18,11 @@ from xw_office.services.invoice_collection.connectors.mollie_invoices import (
     MollieInvoicesHttpClient,
 )
 from xw_office.services.invoice_collection.domain import (
+    DateRange,
     DocumentCandidate,
     DocumentType,
     ProviderConnection,
+    RouteSettings,
     TenantId,
 )
 from xw_office.services.invoice_collection.errors import InvoiceCollectionError, InvoiceErrorCode
@@ -27,6 +30,7 @@ from xw_office.services.invoice_collection.auth.graph import (
     CallbackGraphTokenProvider,
     MsalInteractiveGraphTokenProvider,
 )
+from xw_office.services.invoice_collection.bootstrap import build_connector_factories
 from xw_office.services.invoice_collection.playwright_session import PlaywrightPersistentSession
 from xw_office.services.invoice_collection.pipeline import DocumentPipeline
 from xw_office.services.invoice_collection.sinks.onedrive_local import OneDriveLocalSink
@@ -93,6 +97,45 @@ def test_graph_mail_connector_fails_closed_without_verified_sender_domains(
     assert connector.discover() == []
 
 
+def test_graph_mail_factory_wires_local_connection_settings_and_selected_period(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setenv("MS_GRAPH_CLIENT_ID", "test-public-client-id")
+    monkeypatch.setenv("MS_GRAPH_TENANT_ID", "test-tenant-id")
+
+    class TokenProvider:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+        def get_access_token(self) -> str:
+            return "test-access-token"
+
+    connection = ProviderConnection.create(
+        provider_id="browserstack",
+        tenant_id=TenantId.XW,
+        account_alias="primary",
+    )
+    route = RouteSettings(
+        route_key="mail_pdf",
+        options={
+            "mailbox": "invoices@example.test",
+            "sender_domains": "billing.example.test",
+            "document_type": DocumentType.EXPENSE_INVOICE.value,
+        },
+    )
+    period = DateRange(date(2026, 11, 1), date(2026, 11, 30))
+    connector = build_connector_factories(
+        token_provider_factory=TokenProvider
+    ).create("graph_mail_attachment", connection, route, period)
+    assert isinstance(connector, GraphMailAttachmentConnector)
+    assert connector.start == period.start
+    assert connector.end == period.end
+    assert connector.policy.sender_domains == frozenset({"billing.example.test"})
+    assert connector.policy.document_type is DocumentType.EXPENSE_INVOICE
+    connector.close()
+
+
 def test_graph_reader_paginates_and_downloads_attachment_bytes(tmp_path: Path) -> None:
     pdf_bytes = b"%PDF-1.4 fake"
 
@@ -137,6 +180,26 @@ def test_graph_reader_paginates_and_downloads_attachment_bytes(tmp_path: Path) -
     destination = tmp_path / "invoice.pdf"
     reader.download_attachment("message-1", "attachment-1", destination)
     assert destination.read_bytes() == pdf_bytes
+
+
+def test_graph_reader_mailbox_probe_reads_only_one_message_id() -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(200, json={"value": [{"id": "message-id"}]})
+
+    reader = GraphMailAttachmentReader(
+        mailbox="billing@example.test",
+        token_provider=CallbackGraphTokenProvider(lambda: "test-token"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    reader.probe_mailbox()
+    reader.close()
+    assert len(requests) == 1
+    assert "$select=id" in requests[0]
+    assert "$top=1" in requests[0]
+    assert "attachments" not in requests[0]
 
 
 def test_msal_provider_uses_silent_token_before_visible_interactive_login(

@@ -36,7 +36,7 @@ from xw_office.services.invoice_collection.domain import (
     TenantId,
 )
 from xw_office.services.invoice_collection.journal import InvoiceJournal
-from xw_office.services.invoice_collection.factories import ConnectorFactoryRegistry
+from xw_office.services.invoice_collection.bootstrap import build_connector_factories
 from xw_office.services.invoice_collection.pipeline import DocumentPipeline
 from xw_office.services.invoice_collection.registry import ProviderCatalog
 from xw_office.services.invoice_collection.security import ensure_invoice_collection_dirs
@@ -62,6 +62,7 @@ class InvoiceCollectorDialog(QDialog):
         self._connection_repository = connection_repository or ConnectionRepository()
         self._collection_service = collection_service
         self._fetch_worker: BackgroundWorker | None = None
+        self._mail_test_worker: BackgroundWorker | None = None
         self._fetch_generation = 0
         self._folder = QLineEdit()
         self._folder.setReadOnly(True)
@@ -171,6 +172,9 @@ class InvoiceCollectorDialog(QDialog):
         save = QPushButton("Verbindung speichern")
         save.clicked.connect(self._save_connection)
         actions.addWidget(save)
+        self._mail_test_button = QPushButton("Graph-Mailbox testen")
+        self._mail_test_button.clicked.connect(self._test_mailbox_access)
+        actions.addWidget(self._mail_test_button)
         manual = QPushButton("PDF manuell hinzufügen")
         manual.clicked.connect(self._manual_import)
         actions.addWidget(manual)
@@ -207,7 +211,7 @@ class InvoiceCollectorDialog(QDialog):
         if service is None:
             service = InvoiceCollectionService(
                 connections=self._connection_repository,
-                factories=ConnectorFactoryRegistry(),
+                factories=build_connector_factories(),
                 target_root=Path(self._folder.text()),
                 journal=InvoiceJournal(),
                 catalog=getattr(self, "_catalog", None),
@@ -243,6 +247,85 @@ class InvoiceCollectorDialog(QDialog):
             lambda token=generation, current=worker: self._on_fetch_finished(token, current)
         )
         worker.start()
+
+    def _test_mailbox_access(self) -> None:
+        route = self._route.currentData()
+        mailbox = self._mailbox.text().strip()
+        domains = _parse_sender_domains(self._sender_domains.text())
+        if route is None or route.method != "mail":
+            self._status.setText("Bitte zuerst eine Mailroute auswählen.")
+            return
+        if not _looks_like_mailbox(mailbox) or not domains:
+            self._status.setText(
+                "Bitte Rechnungs-Postfach und bestätigte Absenderdomains eintragen."
+            )
+            return
+        if self._mail_test_worker is not None and self._mail_test_worker.isRunning():
+            return
+        options = {
+            "connector": str(route.connector),
+            "mailbox": mailbox,
+            "sender_domains": ",".join(sorted(domains)),
+            "document_type": str(self._document_type.currentData().value),
+        }
+        connection = ProviderConnection.create(
+            provider_id=str(self._provider.currentData()),
+            tenant_id=TenantId(str(self._tenant.currentData())),
+            account_alias=self._account_alias.text().strip() or "mailbox-test",
+            route_settings=(RouteSettings(route_key=route.route_key, options=options),),
+        )
+        factories = build_connector_factories()
+        try:
+            connector = factories.create(str(route.connector), connection, connection.route_settings[0])
+        except Exception as exc:  # noqa: BLE001 - show safe configuration failure
+            self._status.setText(f"Mailbox-Test nicht vorbereitet: {type(exc).__name__}")
+            return
+        self._mail_test_button.setEnabled(False)
+        self._status.setText(
+            "Microsoft-Anmeldung wird geöffnet. Nach Zustimmung prüfe ich nur den Mailboxzugriff."
+        )
+
+        def probe() -> bool:
+            try:
+                probe_method = getattr(connector, "probe", None)
+                if not callable(probe_method):
+                    raise RuntimeError("Mailbox-Probe wird vom Connector nicht unterstützt")
+                probe_method()
+                return True
+            finally:
+                close_method = getattr(connector, "close", None)
+                if callable(close_method):
+                    close_method()
+
+        worker = BackgroundWorker(probe)
+        self._mail_test_worker = worker
+        worker.signals.result.connect(self._on_mail_test_result)
+        worker.signals.error.connect(self._on_mail_test_error)
+        worker.signals.finished.connect(lambda current=worker: self._on_mail_test_finished(current))
+        worker.start()
+
+    def _on_mail_test_result(self, result: object) -> None:
+        if result is True:
+            self._status.setText(
+                "Mailboxzugriff bestätigt. Dieser Probe markiert keine Rechnungsroute als verified."
+            )
+
+    def _on_mail_test_error(self, error: Exception) -> None:
+        message = str(error)
+        if "msal-extensions" in message:
+            self._status.setText(
+                "Geschützter Microsoft-Token-Cache fehlt. Installiere das optionale "
+                "Paket xw-office[invoice-collection] und starte den Test erneut."
+            )
+        elif "keyring" in message:
+            self._status.setText("Windows Credential Manager ist für diese Verbindung nicht verfügbar.")
+        else:
+            self._status.setText(f"Mailbox-Test fehlgeschlagen: {type(error).__name__}")
+
+    def _on_mail_test_finished(self, worker: BackgroundWorker) -> None:
+        if self._mail_test_worker is worker:
+            self._mail_test_worker = None
+        self._mail_test_button.setEnabled(True)
 
     def _cancel_fetch(self) -> None:
         worker = self._fetch_worker
@@ -303,6 +386,8 @@ class InvoiceCollectorDialog(QDialog):
 
     def closeEvent(self, event: object) -> None:
         self._cancel_fetch()
+        if self._mail_test_worker is not None and self._mail_test_worker.isRunning():
+            self._mail_test_worker.cancel()
         super().closeEvent(event)  # type: ignore[arg-type]
 
     def _save_connection(self) -> None:

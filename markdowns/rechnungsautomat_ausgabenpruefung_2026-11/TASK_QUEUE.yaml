@@ -182,11 +182,16 @@ tasks:
     depends_on: ["T02", "T03", "T04"]
     parallelizable_with: ["T06", "T07"]
     evidence:
+      - "src/xw_office/services/invoice_collection/bootstrap.py::build_connector_factories"
       - "src/xw_office/services/invoice_collection/auth/graph.py"
       - "src/xw_office/services/invoice_collection/connectors/graph_reader.py"
       - "src/xw_office/services/invoice_collection/connectors/graph_mail.py"
+      - "src/xw_office/services/invoice_collection/connectors/graph_reader.py::probe_mailbox"
       - "tests/unit/test_invoice_collection_connectors.py"
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_connector_fails_closed_without_verified_sender_domains"
+      - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_factory_wires_local_connection_settings_and_selected_period"
+      - "tests/unit/test_invoice_collection_connectors.py::test_graph_reader_mailbox_probe_reads_only_one_message_id"
+      - "src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py::_test_mailbox_access"
     deliverables:
       - "UI-visible delegated sign-in with minimal required mail scopes"
       - "DPAPI-protected MSAL cache outside repo and migration/reauth decision"

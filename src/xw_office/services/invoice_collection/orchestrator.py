@@ -61,37 +61,47 @@ class CollectionOrchestrator:
             connector_list = list(connectors)
             account_locks: dict[str, Lock] = {}
             futures = []
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                for index, connector in enumerate(connector_list):
-                    if cancel is not None and cancel.cancelled:
-                        return CollectionSummary(tuple(results), cancelled=True)
-                    connection = getattr(connector, "connection", None)
-                    connection_id = str(getattr(connection, "connection_id", index))
-                    lock = account_locks.setdefault(connection_id, Lock())
-                    connector_workspace = workspace_path / str(index)
-                    try:
-                        candidates = connector.discover()
-                    except Exception as exc:  # noqa: BLE001 - isolate a failed route
-                        results.append(
-                            CollectionItemResult(
-                                source_id=connection_id,
-                                route_key=connector.route_key,
-                                error=_safe_error(exc),
+            try:
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    for index, connector in enumerate(connector_list):
+                        if cancel is not None and cancel.cancelled:
+                            return CollectionSummary(tuple(results), cancelled=True)
+                        connection = getattr(connector, "connection", None)
+                        connection_id = str(getattr(connection, "connection_id", index))
+                        lock = account_locks.setdefault(connection_id, Lock())
+                        connector_workspace = workspace_path / str(index)
+                        try:
+                            candidates = connector.discover()
+                        except Exception as exc:  # noqa: BLE001 - isolate a failed route
+                            results.append(
+                                CollectionItemResult(
+                                    source_id=connection_id,
+                                    route_key=connector.route_key,
+                                    error=_safe_error(exc),
+                                )
+                            )
+                            continue
+                        futures.append(
+                            executor.submit(
+                                self._collect_connector,
+                                connector,
+                                candidates,
+                                connector_workspace,
+                                cancel,
+                                lock,
                             )
                         )
-                        continue
-                    futures.append(
-                        executor.submit(
-                            self._collect_connector,
-                            connector,
-                            candidates,
-                            connector_workspace,
-                            cancel,
-                            lock,
-                        )
-                    )
-                for future in as_completed(futures):
-                    results.extend(future.result())
+                    for future in as_completed(futures):
+                        results.extend(future.result())
+            finally:
+                for connector in connector_list:
+                    close = getattr(connector, "close", None)
+                    if callable(close):
+                        try:
+                            close()
+                        except Exception:
+                            # Cleanup failure must not mask the route result.
+                            pass
         return CollectionSummary(tuple(results))
 
     def _collect_connector(
