@@ -6,6 +6,8 @@ import calendar
 from datetime import date, datetime
 import re
 import uuid
+from collections.abc import Callable
+from typing import TypeVar
 from zoneinfo import ZoneInfo
 
 from PySide6.QtCore import QDate, QSettings, QUrl, Qt
@@ -822,15 +824,17 @@ class InvoiceCollectorDialog(QDialog):
             worker: BackgroundWorker
 
             def import_files() -> list[tuple[str, str, str, str]]:
-                return _run_manual_import(
-                    files=selected_files,
-                    connection=connection,
-                    document_type=document_type,
-                    target_root=target_root,
-                    period=period,
-                    provider_id=provider_id,
-                    tenant_id=tenant_id,
-                    cancel=worker,
+                return _run_collector_operation_safely(
+                    lambda: _run_manual_import(
+                        files=selected_files,
+                        connection=connection,
+                        document_type=document_type,
+                        target_root=target_root,
+                        period=period,
+                        provider_id=provider_id,
+                        tenant_id=tenant_id,
+                        cancel=worker,
+                    )
                 )
 
             worker = BackgroundWorker(import_files, publish_result_on_cancel=True)
@@ -938,17 +942,27 @@ class InvoiceCollectorDialog(QDialog):
             self._table.setItem(row, column, QTableWidgetItem(value))
 
 
+_ResultT = TypeVar("_ResultT")
+
+
+def _run_collector_operation_safely(operation: Callable[[], _ResultT]) -> _ResultT:
+    """Convert unexpected failures before the generic worker logs them."""
+    try:
+        return operation()
+    except Exception as exc:  # noqa: BLE001 - exceptions may contain secrets or signed URLs
+        raise _safe_collector_error(exc) from None
+
+
 def _collect_active_safely(
     service: InvoiceCollectionService,
     *,
     cancel: CancelToken,
     period: DateRange,
 ) -> CollectionRun:
-    """Convert unexpected boundary errors before the generic worker logs them."""
-    try:
-        return service.collect_active(cancel=cancel, period=period)
-    except Exception as exc:  # noqa: BLE001 - exceptions may contain secrets or signed URLs
-        raise _safe_collector_error(exc) from None
+    """Convert fatal collection failures before the generic worker logs them."""
+    return _run_collector_operation_safely(
+        lambda: service.collect_active(cancel=cancel, period=period)
+    )
 
 
 def _safe_collector_error(error: Exception) -> InvoiceCollectionError:

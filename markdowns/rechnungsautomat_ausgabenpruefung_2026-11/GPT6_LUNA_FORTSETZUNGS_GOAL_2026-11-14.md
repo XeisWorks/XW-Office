@@ -65,9 +65,9 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    `SecretStore`/Windows Credential Manager sichert; die Mollie-Factory liest diesen SecretRef
    und bekommt den gewaehlten Zeitraum. Erhalte diese Guardrails; vollstaendige
    capability-basierte Auth-/Retry-/Portalaktionen bleiben ein gesonderter offener T04-Punkt.
-   Der allgemeine `BackgroundWorker` protokolliert Ausnahme-Text. Collector-Lauf- und Graph-
-   Mailbox-Probe-Fehler muessen vor Worker-Logging und UI-Ausgabe redigiert werden. Diese
-   Grenzfaelle sind inzwischen umgesetzt und getestet; neue Workergrenzen duerfen keine rohen
+   Der allgemeine `BackgroundWorker` protokolliert Ausnahme-Text. Monatsabruf, Graph-Mailbox-
+   Probe und manueller PDF-Import redigieren fatale Fehler vor Worker-Logging und UI-Ausgabe.
+   Diese Grenzen sind umgesetzt und getestet; neue Workergrenzen duerfen keine rohen
    Providerfehler, Tokens, signierten URLs oder Exception-Chains protokollieren.
 4. Der Live-Mailpilot ist extern blockiert: Anbieter, Rechnungs-Mailbox und bestaetigte
    Absenderdomain(s) sind noch nicht geklaert. Frage nie nach diesen Werten oder Geheimnissen

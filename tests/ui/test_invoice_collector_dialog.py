@@ -31,6 +31,7 @@ from xw_office.ui.modules.expense_review.invoice_collector_dialog import (
     _collect_active_safely,
     _looks_like_mailbox,
     _parse_sender_domains,
+    _run_collector_operation_safely,
 )
 
 
@@ -60,6 +61,15 @@ def test_collection_worker_boundary_redacts_exception_text_before_logging() -> N
     assert "secret-token" not in str(raised.value)
     assert "signed=secret" not in str(raised.value)
     assert raised.value.__suppress_context__ is True
+
+    def unexpected_failure() -> None:
+        raise RuntimeError("Bearer other-secret-token from a signed provider URL")
+
+    with pytest.raises(InvoiceCollectionError) as unexpected:
+        _run_collector_operation_safely(unexpected_failure)
+    assert unexpected.value.code is InvoiceErrorCode.INTERNAL_ERROR
+    assert "other-secret-token" not in str(unexpected.value)
+    assert unexpected.value.__suppress_context__ is True
 
 
 def test_collector_error_status_redacts_untrusted_provider_text(
