@@ -70,7 +70,7 @@ class InvoiceCollectionService:
         max_workers: int = 2,
         period: DateRange | None = None,
     ) -> CollectionRun:
-        active_connections = self.active_connections()
+        active_connections, invalid_records = self.connections.list_enabled_with_issues()
         fingerprints = {
             str(connection.connection_id): _connection_fingerprint(connection)
             for connection in active_connections
@@ -93,6 +93,17 @@ class InvoiceCollectionService:
         )
         connectors = []
         issues: list[ConnectionRouteIssue] = []
+        issues.extend(
+            ConnectionRouteIssue(
+                connection_id=record.connection_id,
+                route_key="connection_configuration",
+                message=(
+                    "CONFIGURATION_ERROR: saved provider connection metadata is invalid "
+                    f"({record.error_type})"
+                ),
+            )
+            for record in invalid_records
+        )
         route_context: dict[tuple[str, str], ProviderConnection] = {}
         for connection in active_connections:
             for route in connection.route_settings:

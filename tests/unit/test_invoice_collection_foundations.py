@@ -486,6 +486,65 @@ def test_connection_repository_round_trips_metadata_without_secret_values(tmp_pa
     assert loaded == [value]
 
 
+def test_collection_isolates_invalid_saved_connection_and_keeps_valid_accounts_running(
+    tmp_path: Path,
+) -> None:
+    source = _pdf(tmp_path / "valid-account.pdf")
+    repository_path = tmp_path / "connections.sqlite3"
+    repository = ConnectionRepository(repository_path)
+    valid = ProviderConnection.create(
+        provider_id="fixture",
+        tenant_id=TenantId.XW,
+        account_alias="billing",
+        route_settings=(
+            RouteSettings(route_key="manual_import", options={"connector": "fixture"}),
+        ),
+    )
+    invalid = ProviderConnection.create(
+        provider_id="legacy",
+        tenant_id=TenantId.XW,
+        account_alias="invalid",
+    )
+    repository.save(valid)
+    with sqlite3.connect(repository_path) as connection:
+        connection.execute(
+            "INSERT INTO provider_connections VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                str(invalid.connection_id),
+                "legacy",
+                "invalid-tenant",
+                "invalid",
+                1,
+                "[]",
+            ),
+        )
+    factories = ConnectorFactoryRegistry()
+    factories.register(
+        "fixture",
+        lambda saved, _settings, _period: ManualImportConnector(
+            connection=saved, files=[source]
+        ),
+    )
+    target = tmp_path / "onedrive"
+    target.mkdir()
+
+    run = InvoiceCollectionService(
+        connections=repository,
+        factories=factories,
+        target_root=target,
+        journal=InvoiceJournal(tmp_path / "journal.sqlite3"),
+    ).collect_active()
+
+    assert run.status is RunStatus.PARTIAL
+    assert run.summary.new_count == 1
+    assert len(run.issues) == 1
+    assert run.issues[0].route_key == "connection_configuration"
+    assert run.issues[0].message.startswith("CONFIGURATION_ERROR:")
+    assert run.issues[0].provider_id is None
+    assert run.issues[0].tenant_id is None
+    assert run.issues[0].account_alias is None
+
+
 def test_connector_factory_registry_never_loads_yaml_import_paths() -> None:
     registry = ConnectorFactoryRegistry()
     registry.register("fixture", lambda connection, settings: object())  # type: ignore[arg-type]

@@ -213,14 +213,14 @@ class InvoiceCollectorDialog(QDialog):
         if not self._folder.text().strip():
             self._status.setText("Bitte zuerst einen Zielordner auswählen.")
             return
-        connections = self._connection_repository.list_enabled()
-        if not connections:
+        connections, invalid_records = self._connection_repository.list_enabled_with_issues()
+        if not connections and not invalid_records:
             self._status.setText(
                 "Keine aktiven Provider-Verbindungen eingerichtet. "
                 "Nutzen Sie zunächst „PDF manuell hinzufügen“."
             )
             return
-        if not any(route.enabled for connection in connections for route in connection.route_settings):
+        if not any(route.enabled for connection in connections for route in connection.route_settings) and not invalid_records:
             self._status.setText(
                 "Keine aktivierte Abrufroute eingerichtet. Nicht live verifizierte Routen "
                 "bleiben gesperrt; Belege können manuell hinzugefügt werden."
@@ -242,7 +242,10 @@ class InvoiceCollectorDialog(QDialog):
         self._fetch_button.setEnabled(False)
         self._manual_button.setEnabled(False)
         self._cancel_button.setEnabled(True)
-        self._status.setText(f"{len(connections)} aktive Verbindung(en) werden abgerufen …")
+        self._status.setText(
+            f"{len(connections)} aktive Verbindung(en), "
+            f"{len(invalid_records)} fehlerhafte Konfiguration(en) werden geprüft …"
+        )
         try:
             period = self._selected_period()
         except ValueError:

@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 import sqlite3
 from threading import RLock
 from uuid import UUID
+import hashlib
 
 from xw_office.core.app_paths import invoice_collection_dir
 from xw_office.services.invoice_collection.domain import (
@@ -13,6 +15,14 @@ from xw_office.services.invoice_collection.domain import (
     RouteSettings,
     TenantId,
 )
+
+
+@dataclass(frozen=True)
+class InvalidConnectionRecord:
+    """Safe reference to an enabled row that cannot be decoded as a connection."""
+
+    connection_id: str
+    error_type: str
 
 
 class ConnectionRepository:
@@ -79,12 +89,36 @@ class ConnectionRepository:
             )
 
     def list_enabled(self) -> list[ProviderConnection]:
+        connections, issues = self.list_enabled_with_issues()
+        if issues:
+            raise ValueError("one or more saved provider connections are invalid")
+        return connections
+
+    def list_enabled_with_issues(
+        self,
+    ) -> tuple[list[ProviderConnection], list[InvalidConnectionRecord]]:
+        """Load valid rows and isolate malformed legacy rows for per-record reporting."""
         with self._lock, self._connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM provider_connections "
                 "WHERE enabled=1 ORDER BY provider_id, account_alias"
             ).fetchall()
-        return [_from_row(row) for row in rows]
+        valid: list[ProviderConnection] = []
+        issues: list[InvalidConnectionRecord] = []
+        for row in rows:
+            try:
+                valid.append(_from_row(row))
+            except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                raw_id = str(row["connection_id"] or "")
+                try:
+                    safe_id = str(UUID(raw_id))
+                except ValueError:
+                    digest = hashlib.sha256(raw_id.encode("utf-8", errors="replace")).hexdigest()
+                    safe_id = f"invalid-{digest[:12]}"
+                issues.append(
+                    InvalidConnectionRecord(connection_id=safe_id, error_type=type(exc).__name__)
+                )
+        return valid, issues
 
 
 def _from_row(row: sqlite3.Row) -> ProviderConnection:
