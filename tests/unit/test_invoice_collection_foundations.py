@@ -34,6 +34,7 @@ from xw_office.services.invoice_collection.errors import (
 from xw_office.services.invoice_collection.factories import ConnectorFactoryRegistry
 from xw_office.services.invoice_collection.journal import InvoiceJournal
 from xw_office.services.invoice_collection.invoice_date import extract_invoice_date_from_text
+from xw_office.services.invoice_collection.naming import safe_component, workspace_download_path
 from xw_office.services.invoice_collection.pipeline import DocumentPipeline
 from xw_office.services.invoice_collection.pdf_validation import inspect_pdf
 from xw_office.services.invoice_collection.registry import (
@@ -85,6 +86,22 @@ def test_registry_parses_secret_free_catalog() -> None:
         for provider in catalog.providers
         for route in provider.routes
     )
+
+
+def test_workspace_download_path_sanitizes_traversal_and_windows_devices(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    traversal_path = workspace_download_path(workspace, "../../outside.pdf")
+    device_path = workspace_download_path(workspace, "CON.pdf")
+
+    assert traversal_path.parent == workspace.resolve()
+    assert traversal_path.name == "outside.pdf"
+    assert device_path.parent == workspace.resolve()
+    assert device_path.name == "_CON.pdf"
+    assert safe_component("LPT1.txt").startswith("_LPT1")
 
 
 def test_registry_rejects_secret_values_and_unknown_tenant(tmp_path: Path) -> None:

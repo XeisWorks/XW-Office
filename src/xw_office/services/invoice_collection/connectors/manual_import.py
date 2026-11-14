@@ -10,6 +10,7 @@ from xw_office.services.invoice_collection.domain import (
     DownloadedArtifact,
     ProviderConnection,
 )
+from xw_office.services.invoice_collection.naming import workspace_download_path
 from xw_office.services.invoice_collection.ports import CancelToken
 
 
@@ -54,7 +55,7 @@ class ManualImportConnector:
             raise RuntimeError("Import abgebrochen")
         source = Path(candidate.source_id)
         workspace.mkdir(parents=True, exist_ok=True)
-        destination = workspace / source.name
+        destination = workspace_download_path(workspace, source.name)
         shutil.copy2(source, destination)
         return DownloadedArtifact(
             candidate=candidate, path=destination, content_type="application/pdf"

@@ -24,9 +24,19 @@ def safe_component(value: str, *, fallback: str = "unknown", limit: int = 80) ->
     normalized = _INVALID.sub("-", normalized).strip(" .-")[:limit]
     if not normalized:
         normalized = fallback
-    if normalized.upper() in _RESERVED:
+    if normalized.split(".", 1)[0].upper() in _RESERVED:
         normalized = f"_{normalized}"
     return normalized
+
+
+def workspace_download_path(workspace: Path, original_filename: str) -> Path:
+    """Map an untrusted provider filename to one safe file inside its temp workspace."""
+    root = workspace.resolve()
+    filename = safe_component(original_filename, fallback="attachment.pdf")
+    destination = (root / filename).resolve()
+    if destination.parent != root:
+        raise ValueError("download filename escaped its workspace")
+    return destination
 
 
 def build_relative_path(

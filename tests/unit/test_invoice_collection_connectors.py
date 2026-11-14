@@ -52,8 +52,9 @@ def _connection(provider: str = "fixture") -> ProviderConnection:
 
 
 class _MailReader:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, filename: str = "invoice.pdf") -> None:
         self.root = root
+        self.filename = filename
         self.downloads: list[tuple[str, str]] = []
 
     def list_messages(self) -> list[dict[str, object]]:
@@ -63,7 +64,7 @@ class _MailReader:
                 "received_at": "2026-11-05T10:00:00Z",
                 "sender_domain": "billing.example.test",
                 "attachments": [
-                    {"id": "pdf-1", "name": "invoice.pdf", "content_type": "application/pdf"},
+                    {"id": "pdf-1", "name": self.filename, "content_type": "application/pdf"},
                     {"id": "html-1", "name": "notice.html", "content_type": "text/html"},
                 ],
             }
@@ -92,6 +93,22 @@ def test_graph_mail_connector_requires_real_pdf_attachment_and_stable_ids(tmp_pa
     assert candidates[0].document_date is None
     assert candidates[0].metadata["received_at"] == "2026-11-05T10:00:00Z"
     assert candidates[0].metadata["selected_period_start"] == "2026-10-01"
+
+
+def test_graph_mail_connector_contains_untrusted_filename_in_workspace(tmp_path: Path) -> None:
+    reader = _MailReader(tmp_path, filename="../../outside.pdf")
+    connector = GraphMailAttachmentConnector(
+        connection=_connection(),
+        reader=reader,
+        policy=MailMatchPolicy(sender_domains=frozenset({"billing.example.test"})),
+    )
+    candidate = connector.discover()[0]
+    workspace = tmp_path / "workspace"
+    artifact = connector.download(candidate, workspace)
+
+    assert artifact.path.parent == workspace.resolve()
+    assert artifact.path.is_file()
+    assert not (tmp_path / "outside.pdf").exists()
 
 
 def test_graph_mail_connector_fails_closed_without_verified_sender_domains(

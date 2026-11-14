@@ -44,7 +44,10 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
 3. Pruefe die Dialog-, Journal-, Wiederaufnahme- und Fehlerpfade auf noch fehlende MVP-
    Bedienhandlungen. Implementiere nur konkret belegte, providerunabhaengige Luecken.
    Insbesondere keine erfundenen Mail-Absenderregeln, Portal-Selektoren, API-Rechte oder
-   Rechnungsdaten. Der Browseradapter hat generische Fake-Portal-Tests, aber keine echten
+   Rechnungsdaten. Temp-Downloadpfade nutzen `workspace_download_path()` fuer Graph, Browser,
+   Mollie und manuellen Import; diese Funktion begrenzt bereinigte Anbieterdateinamen auf den
+   Workspace und prueft Traversal/Geraetedateien. Pruefe diese bestehende Loesung, statt sie
+   erneut zu bauen. Der Browseradapter hat generische Fake-Portal-Tests, aber keine echten
    Anbieter-Callbacks.
 4. Der Live-Mailpilot ist extern blockiert: Anbieter, Rechnungs-Mailbox und bestaetigte
    Absenderdomain(s) sind noch nicht geklaert. Frage nie nach diesen Werten oder Geheimnissen

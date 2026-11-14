@@ -17,6 +17,7 @@ current_status:
     - "Graph mail factory wired into desktop dialog with mailbox and sender-domain settings"
     - "explicit delegated Graph mailbox probe using minimal Mail.Read and one-message-ID query"
     - "Graph attachment downloads enforce streaming byte limits for raw and JSON/Base64 response bodies"
+    - "provider-controlled filenames are sanitized into the isolated workspace for mail, browser, API and manual downloads"
     - "collection table reports provider/account/route/tenant and per-candidate result without external IDs"
     - "empty discovery is distinct from successful document processing"
     - "local SQLite run journal stores status, context fingerprints, route states and hashed candidate checkpoints"
@@ -30,7 +31,7 @@ current_status:
     - "same tenant/sink/PDF hash across routes publishes once and adds hashed source provenance to the journal"
     - "collection results show safe provider/route provenance labels without raw source or external IDs"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
-    - "full repository suite after bounded Graph attachment streaming: 2404 passed, 7 skipped, 0 failed; repo Ruff, provider/queue YAML, collector MyPy and diff checks pass"
+    - "full repository suite after bounded Graph attachment streaming and workspace filename hardening: 2406 passed, 7 skipped, 0 failed; repo Ruff, provider/queue YAML, collector MyPy and diff checks pass"
     - "collector/dialog MyPy: 30 source files, no issues; DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
@@ -168,12 +169,14 @@ tasks:
       - "tests/unit/test_invoice_collection_foundations.py::test_encrypted_pdf_is_typed_as_quarantined_and_preserved_locally"
       - "tests/unit/test_invoice_collection_foundations.py::test_onedrive_sink_preflight_rejects_unwritable_target"
       - "tests/unit/test_invoice_collection_foundations.py::test_same_tenant_cross_route_duplicate_publishes_once_and_merges_safe_provenance"
+      - "tests/unit/test_invoice_collection_foundations.py::test_workspace_download_path_sanitizes_traversal_and_windows_devices"
     deliverables:
       - "PDF size/signature/MIME/parser/encryption validation"
       - "SHA-256, deterministic safe naming and tenant-scoped deduplication"
       - "OneDriveLocalSink with preflight, no-clobber publish and truthful sync state"
       - "ManualImportConnector through the same pipeline and journal"
       - "Conflict/quarantine handling and workspace cleanup/recovery"
+      - "Traversal-safe temporary download paths for all connector-provided filenames"
     acceptance:
       - "Repeated import creates no duplicate"
       - "Same external ID with different hash becomes CONTENT_CONFLICT"
@@ -181,6 +184,7 @@ tasks:
       - "HTML/empty/corrupt/encrypted/oversized PDF cases are tested"
       - "Local save never emits CLOUD_VERIFIED"
       - "Concurrent identical target and divergent target cases are tested"
+      - "Traversal, separator and Windows device filenames remain inside the temporary workspace"
 
   - id: "T04"
     title: "Provider-unabhängiger Dialog und Orchestrator"
@@ -232,6 +236,7 @@ tasks:
       - "src/xw_office/services/invoice_collection/connectors/graph_reader.py::probe_mailbox"
       - "tests/unit/test_invoice_collection_connectors.py"
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_connector_fails_closed_without_verified_sender_domains"
+      - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_connector_contains_untrusted_filename_in_workspace"
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_connector_requires_real_pdf_attachment_and_stable_ids (receipt date is not invoice-period filter)"
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_factory_wires_local_connection_settings_and_selected_period"
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_reader_mailbox_probe_reads_only_one_message_id"

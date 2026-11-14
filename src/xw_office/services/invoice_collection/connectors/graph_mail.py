@@ -16,6 +16,7 @@ from xw_office.services.invoice_collection.domain import (
     DownloadedArtifact,
     ProviderConnection,
 )
+from xw_office.services.invoice_collection.naming import workspace_download_path
 from xw_office.services.invoice_collection.ports import CancelToken
 
 
@@ -107,7 +108,7 @@ class GraphMailAttachmentConnector:
         if not message_id or not attachment_id:
             raise ValueError("Mailkandidat enthält keine stabile Attachment-Identität")
         workspace.mkdir(parents=True, exist_ok=True)
-        destination = workspace / candidate.original_filename
+        destination = workspace_download_path(workspace, candidate.original_filename)
         self.reader.download_attachment(message_id, attachment_id, destination)
         return DownloadedArtifact(candidate=candidate, path=destination)
 

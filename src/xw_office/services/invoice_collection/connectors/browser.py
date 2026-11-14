@@ -14,6 +14,7 @@ from xw_office.services.invoice_collection.errors import (
     InvoiceCollectionError,
     InvoiceErrorCode,
 )
+from xw_office.services.invoice_collection.naming import workspace_download_path
 from xw_office.services.invoice_collection.ports import CancelToken
 
 
@@ -76,7 +77,7 @@ class BrowserInvoiceConnector:
         if cancel is not None and cancel.cancelled:
             raise RuntimeError("Browser-Abruf abgebrochen")
         workspace.mkdir(parents=True, exist_ok=True)
-        destination = workspace / candidate.original_filename
+        destination = workspace_download_path(workspace, candidate.original_filename)
         self.session.download(candidate, destination)
         return DownloadedArtifact(candidate=candidate, path=destination)
 

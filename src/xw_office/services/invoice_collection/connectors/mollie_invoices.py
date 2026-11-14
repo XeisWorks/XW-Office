@@ -19,6 +19,7 @@ from xw_office.services.invoice_collection.errors import (
     InvoiceCollectionError,
     InvoiceErrorCode,
 )
+from xw_office.services.invoice_collection.naming import workspace_download_path
 from xw_office.services.invoice_collection.ports import CancelToken
 
 
@@ -87,7 +88,7 @@ class MollieInvoicesConnector:
         if invoice is None:
             raise ValueError("Mollie-Rechnung wurde nicht durch discover() vorbereitet")
         workspace.mkdir(parents=True, exist_ok=True)
-        destination = workspace / candidate.original_filename
+        destination = workspace_download_path(workspace, candidate.original_filename)
         self.api.download_invoice_pdf(invoice, destination)
         return DownloadedArtifact(candidate=candidate, path=destination)
 
