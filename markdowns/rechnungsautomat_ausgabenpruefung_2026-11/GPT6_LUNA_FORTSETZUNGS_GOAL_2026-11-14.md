@@ -45,9 +45,11 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    erledigt betrachtest; erfinde keine zweite Downloadstrategie.
 3. Pruefe die Dialog-, Journal-, Wiederaufnahme- und Fehlerpfade auf noch fehlende MVP-
    Bedienhandlungen. Implementiere nur konkret belegte, providerunabhaengige Luecken.
-   Der Laufverlauf zeigt bereits sichere Run-/Routenstatus und uebernimmt einen
-   frueheren Zeitraum; Resume erfolgt nur bei identischem Kontext. Diese Funktion nicht
-   erneut bauen.
+   Der Laufverlauf zeigt sichere Run-/Routenstatus und uebernimmt einen frueheren Zeitraum;
+   Resume erfolgt nur bei identischem Kontext. Diese Funktion nicht erneut bauen.
+   Checkpoints zeigen erfolgreiche Kandidatenzahlen. Nicht allein aufgrund einer Quellen-ID
+   Downloads ueberspringen: Resume muss erneut laden und pruefen, bis ein Connector eine
+   getestete Inhaltsrevision oder einen Integritaetsdigest bereitstellt.
    Insbesondere keine erfundenen Mail-Absenderregeln, Portal-Selektoren, API-Rechte oder
    Rechnungsdaten. Temp-Downloadpfade nutzen `workspace_download_path()` fuer Graph, Browser,
    Mollie und manuellen Import; diese Funktion begrenzt bereinigte Anbieterdateinamen auf den

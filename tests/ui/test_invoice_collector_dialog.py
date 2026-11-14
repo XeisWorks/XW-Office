@@ -745,6 +745,12 @@ def test_run_history_shows_route_status_and_reuses_selected_period(
         status="WAITING_FOR_USER",
         error_code="AUTH_REQUIRED",
     )
+    journal.record_checkpoint(
+        run_id=run_id,
+        connection_id="connection-id",
+        route_key="mail_pdf",
+        source_id="opaque-source-id",
+    )
     dialog = InvoiceRunHistoryDialog(journal)
     qtbot.addWidget(dialog)  # type: ignore[attr-defined]
 
@@ -753,6 +759,7 @@ def test_run_history_shows_route_status_and_reuses_selected_period(
     assert dialog._routes_table.rowCount() == 1
     assert dialog._routes_table.item(0, 1).text() == "mail_pdf"
     assert dialog._routes_table.item(0, 2).text() == "WAITING_FOR_USER: AUTH_REQUIRED"
+    assert dialog._routes_table.item(0, 3).text() == "1"
     assert dialog._use_period_button.isEnabled()
 
     dialog._use_period_button.click()

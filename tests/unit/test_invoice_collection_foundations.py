@@ -657,6 +657,12 @@ def test_invoice_journal_lists_recent_run_and_route_status_without_context_secre
         status="WAITING_FOR_USER",
         error_code="AUTH_REQUIRED",
     )
+    journal.record_checkpoint(
+        run_id=run_id,
+        connection_id="connection-id",
+        route_key="mail_pdf",
+        source_id="opaque-source-id",
+    )
     journal.finish_run(run_id=run_id, status=RunStatus.PARTIAL)
 
     runs = journal.list_recent_runs(limit=1)
@@ -671,6 +677,7 @@ def test_invoice_journal_lists_recent_run_and_route_status_without_context_secre
     assert [(route.route_key, route.status, route.error_code) for route in routes] == [
         ("mail_pdf", "WAITING_FOR_USER", "AUTH_REQUIRED")
     ]
+    assert routes[0].completed_candidates == 1
     assert "target-fingerprint" not in repr(runs)
     assert "connection-fingerprint" not in repr(runs)
 

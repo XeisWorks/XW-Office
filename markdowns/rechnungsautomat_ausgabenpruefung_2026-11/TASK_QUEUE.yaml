@@ -37,7 +37,7 @@ current_status:
     - "invoice journal schema 5 migrates legacy external IDs to hashed provenance, stores review-resolution metadata and never persists new raw external IDs"
     - "review resolution requires explicit user date/type, revalidates PDF identity, publishes no-clobber, updates journal and removes old copy only after success"
     - "retry action targets only retryable active route errors (auth, rate limit, transient network, destination); policy/config/document/content conflicts and out-of-period results are excluded"
-    - "local run history displays safe run and route states and can reuse a selected period; matching context resumes through the existing journal guard"
+    - "local run history displays safe run/route states and completed-candidate counts from hashed checkpoints; resume still downloads and revalidates current source content"
     - "collection results show safe provider/route provenance labels without raw source or external IDs"
     - "saved provider connections can be selected, updated by stable ID, and disabled; re-enabling still requires verified routes"
     - "unverified connection settings can be saved locally as disabled drafts for later route verification"
@@ -54,6 +54,7 @@ current_status:
     - "DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values (prior recorded checks)"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
+    - "provider registry audit: 18 providers, 26 routes, all maturity planned; no collector route is available for live retrieval"
     - "all 18 real provider accounts and 26 route behaviors; mailbox probe is not invoice-route verification"
     - "live provider-specific extraction coverage and user verification of the review-resolution workflow"
     - "remote OneDrive cloud confirmation"
@@ -248,7 +249,7 @@ tasks:
       - "tests/ui/test_invoice_collector_dialog.py::test_dialog_resolves_review_pdf_after_explicit_date_and_type_confirmation"
       - "tests/ui/test_invoice_collector_dialog.py::test_retry_action_targets_only_routes_that_failed_last_run"
       - "tests/unit/test_invoice_collection_foundations.py::test_invoice_journal_lists_recent_run_and_route_status_without_context_secrets"
-      - "tests/ui/test_invoice_collector_dialog.py::test_run_history_shows_route_status_and_reuses_selected_period"
+      - "tests/ui/test_invoice_collector_dialog.py::test_run_history_shows_route_status_and_reuses_selected_period (shows completed hashed-checkpoint count)"
       - "tests/ui/test_invoice_collector_dialog.py::test_collector_run_history_applies_period_and_starts_fetch"
       - "tests/unit/test_invoice_collection_foundations.py::test_registry_rejects_provider_portal_urls_instead_of_hosts"
       - "tests/ui/test_invoice_collector_dialog.py::test_manual_import_runs_in_worker_and_publishes_partial_results_on_cancel"
@@ -263,7 +264,7 @@ tasks:
       - "Existing refresh, filters, tenant tabs, settings and supplier URLs remain unaffected"
       - "One failed connection does not abort others"
       - "Retry after partial failure runs only eligible active route pairs; permanent policy/config/document/content conflicts are excluded"
-      - "Recent run and per-route status history is visible; selecting a period starts a normal fetch and resumes only when the journal context matches"
+      - "Recent run and per-route status history includes completed-candidate counts; selecting a period starts a normal fetch and resumes only when journal context matches"
       - "View destruction and cancellation do not leak QThreads or apply stale results"
       - "Adding a fixture provider requires no dialog/orchestrator code change"
       - "Manual import works end-to-end from UI to sink"
@@ -370,7 +371,9 @@ tasks:
     priority: 8
     status: "blocked_external"
     depends_on: ["T05", "T06", "T07"]
-    evidence: []
+    evidence:
+      - "PROVIDER_REGISTRY.yaml parsed: 18 providers and 26 routes; all 26 remain planned as of 2026-11-15"
+      - "User stated provider mailbox and sender domain still need clarification; Graph probe not run"
     deliverables:
       - "Verification report per tested route and account type"
       - "At least one real mail route assessed"

@@ -99,8 +99,10 @@ class InvoiceRunHistoryDialog(QDialog):
                 self._runs_table.setItem(row, column, QTableWidgetItem(value))
         self._runs_table.currentCellChanged.connect(self._select_run)
         layout.addWidget(self._runs_table, stretch=1)
-        self._routes_table = QTableWidget(0, 3)
-        self._routes_table.setHorizontalHeaderLabels(["Verbindung", "Route", "Status / Fehler"])
+        self._routes_table = QTableWidget(0, 4)
+        self._routes_table.setHorizontalHeaderLabels(
+            ["Verbindung", "Route", "Status / Fehler", "Verarbeitet"]
+        )
         self._routes_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self._routes_table, stretch=1)
         actions = QHBoxLayout()
@@ -128,6 +130,7 @@ class InvoiceRunHistoryDialog(QDialog):
                 route.connection_id[:8],
                 route.route_key,
                 ": ".join(value for value in (route.status, route.error_code) if value),
+                str(route.completed_candidates),
             )
             for column, value in enumerate(values):
                 self._routes_table.setItem(route_row, column, QTableWidgetItem(value))

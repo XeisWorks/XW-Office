@@ -70,6 +70,7 @@ class CollectionRouteStatus:
     route_key: str
     status: str
     error_code: str | None
+    completed_candidates: int
 
 
 class InvoiceJournal:
@@ -381,9 +382,12 @@ class InvoiceJournal:
     def list_route_statuses(self, *, run_id: str) -> tuple[CollectionRouteStatus, ...]:
         with self._lock, self._connect() as connection:
             rows = connection.execute(
-                "SELECT connection_id, route_key, status, error_code "
-                "FROM collection_run_routes WHERE run_id=? "
-                "ORDER BY connection_id, route_key",
+                "SELECT r.connection_id, r.route_key, r.status, r.error_code, "
+                "(SELECT COUNT(*) FROM collection_checkpoints AS c "
+                " WHERE c.run_id=r.run_id AND c.connection_id=r.connection_id "
+                " AND c.route_key=r.route_key) AS completed_candidates "
+                "FROM collection_run_routes AS r WHERE r.run_id=? "
+                "ORDER BY r.connection_id, r.route_key",
                 (run_id,),
             ).fetchall()
         return tuple(
@@ -392,6 +396,7 @@ class InvoiceJournal:
                 route_key=str(row["route_key"]),
                 status=str(row["status"]),
                 error_code=str(row["error_code"]) if row["error_code"] else None,
+                completed_candidates=int(row["completed_candidates"]),
             )
             for row in rows
         )
