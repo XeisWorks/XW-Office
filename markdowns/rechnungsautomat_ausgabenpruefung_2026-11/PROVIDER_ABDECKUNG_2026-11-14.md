@@ -17,7 +17,7 @@ Alle unten genannten Konten bleiben bis zur lokalen Einrichtung und Liveprüfung
 
 | Anbieter-ID | Anbieter | Katalogrouten | Status |
 | --- | --- | --- | --- |
-| `mollie_fees` | Mollie Gebühren | Graph-Mail, Mollie API | `planned`; API nur mit verfügbarem `invoices.read` |
+| `mollie_fees` | Mollie Gebühren | Graph-Mail, Mollie API | `planned`; Advanced Access Token oder OAuth mit `invoices.read`; kein Sandbox-Testmodus für Invoices API |
 | `google_cloud` | Google Cloud | Graph-Mail | `planned`; Konto/Billing-Export prüfen |
 | `anthropic_api` | Anthropic API | Graph-Mail, Browser | `planned` |
 | `anthropic_subscription` | Claude / Claude Code | Graph-Mail, Browser | `planned` |

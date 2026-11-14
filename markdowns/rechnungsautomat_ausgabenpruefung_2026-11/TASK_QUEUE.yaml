@@ -37,9 +37,11 @@ current_status:
     - "invoice journal schema 4 migrates legacy external IDs to hashed provenance and never persists new raw external IDs"
     - "collection results show safe provider/route provenance labels without raw source or external IDs"
     - "saved provider connections can be selected, updated by stable ID, and disabled; re-enabling still requires verified routes"
+    - "unverified connection settings can be saved locally as disabled drafts for later route verification"
+    - "official API credentials are entered masked and stored through SecretStore; the Mollie invoice factory reads only the saved secret reference"
     - "selected OneDrive target folder can be opened from the dialog without implying cloud sync"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
-    - "full repository suite after invoice-journal schema 4 privacy migration and saved-connection UI: 2418 passed, 7 skipped, 0 failed; repo Ruff, provider/queue YAML, collector MyPy and diff checks pass"
+    - "full repository suite after journal privacy migration, saved-connection UI, protected API credential entry and Mollie factory wiring: 2421 passed, 7 skipped, 0 failed; repo Ruff, provider/queue YAML, collector MyPy and diff checks pass"
     - "collector/dialog MyPy: 30 source files, no issues; DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
@@ -209,9 +211,10 @@ tasks:
       - "src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py"
       - "src/xw_office/services/invoice_collection/orchestrator.py"
       - "tests/ui/test_invoice_collector_dialog.py"
-      - "tests/ui/test_invoice_collector_dialog.py::test_invoice_collector_dialog_refuses_to_enable_unverified_route"
+      - "tests/ui/test_invoice_collector_dialog.py::test_invoice_collector_dialog_saves_unverified_route_as_disabled_draft"
       - "tests/ui/test_invoice_collector_dialog.py::test_saved_connection_can_be_loaded_but_unverified_route_stays_disabled"
       - "tests/ui/test_invoice_collector_dialog.py::test_saving_an_existing_verified_connection_keeps_its_identity"
+      - "tests/ui/test_invoice_collector_dialog.py::test_api_token_is_saved_only_through_secret_store"
       - "tests/ui/test_invoice_collector_dialog.py::test_invoice_collector_dialog_opens_only_an_existing_target_folder"
       - "tests/unit/test_invoice_collection_foundations.py::test_collection_service_blocks_saved_route_that_catalog_marks_planned"
       - "tests/unit/test_invoice_collection_foundations.py::test_orchestrator_honors_cooperative_cancellation_before_start"
@@ -286,6 +289,9 @@ tasks:
     parallelizable_with: ["T05", "T07"]
     evidence:
       - "src/xw_office/services/invoice_collection/connectors/mollie_invoices.py"
+      - "src/xw_office/services/invoice_collection/bootstrap.py::build_connector_factories (Mollie secret-ref and selected-period wiring)"
+      - "tests/unit/test_invoice_collection_connectors.py::test_mollie_factory_reads_keyring_secret_and_forwards_month_period"
+      - "tests/unit/test_invoice_collection_connectors.py::test_mollie_factory_rejects_missing_secret_reference"
       - "tests/unit/test_invoice_collection_connectors.py"
       - "tests/unit/test_invoice_collection_connectors.py::test_mollie_connector_sends_fee_invoice_through_common_pipeline (also verifies adapter close)"
       - "tests/unit/test_invoice_collection_connectors.py::test_mollie_pdf_download_streams_with_size_limit_and_closes_response"
@@ -360,7 +366,7 @@ tasks:
     status: "in_progress"
     depends_on: ["T05", "T06", "T07"]
     evidence:
-      - "python -m pytest -q: 2418 passed, 7 skipped, 0 failed"
+      - "python -m pytest -q: 2421 passed, 7 skipped, 0 failed"
       - "python -m ruff check .: passed"
       - "python -m mypy src/xw_office/services/invoice_collection src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py: 30 source files, no issues"
       - "Provider and task queue YAML parse: passed"

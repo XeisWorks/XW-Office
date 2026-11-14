@@ -59,10 +59,12 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    Provenienz migriert und aus der aktiven Spalte entfernt. Erhalte die Hash-basierte
    Konflikterkennung und fuehre keinen Klartext-Fallback wieder ein.
    Der Dialog listet gespeicherte Providerverbindungen, aktualisiert Einstellungen mit stabiler
-   Connection-ID und verhindert die Reaktivierung nicht verifizierter Routen. Er kann auch den
-   gewaehlten lokalen Zielordner oeffnen, ohne Cloud-Sync zu behaupten. Erhalte diese
-   Guardrails; capability-basierte Auth-/Token-/Portalaktionen bleiben ein gesonderter offener
-   T04-Punkt.
+   Connection-ID und verhindert die Reaktivierung nicht verifizierter Routen. Angaben zu
+   unverifizierten Routen koennen als deaktivierte Entwuerfe lokal gespeichert werden. Fuer
+   `official_api` gibt es eine maskierte Eingabe, die das Credential ausschliesslich ueber
+   `SecretStore`/Windows Credential Manager sichert; die Mollie-Factory liest diesen SecretRef
+   und bekommt den gewaehlten Zeitraum. Erhalte diese Guardrails; vollstaendige
+   capability-basierte Auth-/Retry-/Portalaktionen bleiben ein gesonderter offener T04-Punkt.
 4. Der Live-Mailpilot ist extern blockiert: Anbieter, Rechnungs-Mailbox und bestaetigte
    Absenderdomain(s) sind noch nicht geklaert. Frage nie nach diesen Werten oder Geheimnissen
    im Chat. Wenn der Benutzer soweit ist, gib genau eine lokale UI-Anweisung: in Finanzen >
@@ -73,7 +75,11 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    Mit echtem Anbieterbeleg muessen Absender, Anhang, Dokumenttyp, Rechnungsdatum, Mandant,
    Wiederholung ohne zweite Datei und Auth-Fehlerverhalten separat nachgewiesen werden.
    Bis dahin bleibt T08 `blocked_external`; unbewiesene Routen bleiben `planned`/manuell.
-6. Mollie nur live pruefen, wenn ein rechtmaessig verfuegbares `invoices.read`-Konto besteht.
+6. Mollie nur live pruefen, wenn ein rechtmaessig verfuegbarer Advanced Access Token oder ein
+   OAuth-Credential mit `invoices.read` besteht. Ein normaler Profil-API-Key ist fuer den
+   `/v2/invoices`-Endpunkt nicht als Zugriffsart dokumentiert. Mollies
+   Business-Operations-Invoices-API hat keinen Sandbox-Modus, daher nur mit echtem
+   Produktionskonto und bewusstem Benutzerauftrag pruefen.
    Maximal einen echten Browserpilot starten, nur mit erlaubter sichtbarer Anmeldung. Keine
    CAPTCHA-, MFA-, Bot- oder Google-Login-Umgehung.
 7. Nach jeder Codeaenderung passende Tests ausfuehren. Vor Abschluss volle relevante

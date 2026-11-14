@@ -76,14 +76,35 @@ def test_invoice_collector_dialog_opens_only_an_existing_target_folder(
     assert "nicht verfügbar" in dialog._status.text()
 
 
-def test_invoice_collector_dialog_refuses_to_enable_unverified_route(qtbot: object, tmp_path: Path) -> None:
+def test_invoice_collector_dialog_saves_unverified_route_as_disabled_draft(
+    qtbot: object, tmp_path: Path
+) -> None:
     repository = ConnectionRepository(tmp_path / "connections.sqlite3")
     dialog = InvoiceCollectorDialog(tenant_id="xw", connection_repository=repository)
     qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    provider = next(
+        provider for provider in dialog._catalog.providers
+        if any(route.method == "mail" for route in provider.routes)
+    )
+    route = next(route for route in provider.routes if route.method == "mail")
+    dialog._provider.setCurrentIndex(dialog._provider.findData(provider.provider_id))
+    dialog._route.setCurrentIndex(
+        next(
+            index for index in range(dialog._route.count())
+            if dialog._route.itemData(index).route_key == route.route_key
+        )
+    )
     dialog._account_alias.setText("billing")
+    dialog._mailbox.setText("billing@example.test")
+    dialog._sender_domains.setText("invoices.example.test")
     dialog._save_connection()
     assert repository.list_enabled() == []
-    assert "nicht live verifiziert" in dialog._status.text()
+    connections, issues = repository.list_all_with_issues()
+    assert issues == []
+    assert len(connections) == 1
+    assert connections[0].enabled is False
+    assert connections[0].route_settings[0].options["mailbox"] == "billing@example.test"
+    assert "deaktivierter Entwurf" in dialog._status.text()
 
 
 def test_saved_connection_can_be_loaded_but_unverified_route_stays_disabled(
@@ -189,6 +210,56 @@ def test_saving_an_existing_verified_connection_keeps_its_identity(
     third = repository.list_all_with_issues()[0][0]
     assert third.enabled is False
     assert third.route_settings[0].options["mailbox"] == "billing2@example.test"
+
+
+def test_api_token_is_saved_only_through_secret_store(
+    qtbot: object, tmp_path: Path
+) -> None:
+    class MemorySecretStore:
+        def __init__(self) -> None:
+            self.values: dict[str, str] = {}
+
+        def get(self, secret_ref: str) -> str:
+            return self.values[secret_ref]
+
+        def set(self, secret_ref: str, value: str) -> None:
+            self.values[secret_ref] = value
+
+    secrets = MemorySecretStore()
+    journal_path = tmp_path / "connections.sqlite3"
+    repository = ConnectionRepository(journal_path)
+    dialog = InvoiceCollectorDialog(
+        tenant_id="xw",
+        connection_repository=repository,
+        secret_store=secrets,
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    provider = next(
+        provider for provider in dialog._catalog.providers
+        if any(route.method == "official_api" for route in provider.routes)
+    )
+    route = next(route for route in provider.routes if route.method == "official_api")
+    dialog._provider.setCurrentIndex(dialog._provider.findData(provider.provider_id))
+    route_index = next(
+        index for index in range(dialog._route.count())
+        if dialog._route.itemData(index).route_key == route.route_key
+    )
+    dialog._route.setCurrentIndex(route_index)
+    dialog._account_alias.setText("fees")
+    assert "invoices.read" in dialog._api_token_label.text()
+    dialog._api_token.setText("test-sensitive-api-token")
+    dialog._save_connection()
+
+    saved, issues = repository.list_all_with_issues()
+    assert issues == []
+    assert len(saved) == 1
+    assert saved[0].enabled is False
+    secret_ref = saved[0].route_settings[0].secret_ref
+    assert secret_ref is not None
+    assert secret_ref in secrets.values
+    assert b"test-sensitive-api-token" not in journal_path.read_bytes()
+    assert secrets.values[secret_ref] == "test-sensitive-api-token"
+    assert "deaktivierter Entwurf" in dialog._status.text()
 
 
 def test_invoice_collector_dialog_does_not_save_provider_without_automated_route(

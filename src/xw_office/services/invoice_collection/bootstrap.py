@@ -9,12 +9,18 @@ from xw_office.services.invoice_collection.auth.graph import (
     GraphTokenProvider,
     MsalInteractiveGraphTokenProvider,
 )
+from xw_office.services.invoice_collection.auth.secrets import KeyringSecretStore, SecretStore
 from xw_office.services.invoice_collection.connectors.graph_mail import (
     GraphMailAttachmentConnector,
     MailMatchPolicy,
 )
 from xw_office.services.invoice_collection.connectors.graph_reader import (
     GraphMailAttachmentReader,
+)
+from xw_office.services.invoice_collection.connectors.mollie_invoices import (
+    MollieInvoiceApi,
+    MollieInvoicesConnector,
+    MollieInvoicesHttpClient,
 )
 from xw_office.services.invoice_collection.domain import (
     DateRange,
@@ -31,7 +37,10 @@ from xw_office.services.invoice_collection.security import ensure_invoice_collec
 
 
 def build_connector_factories(
-    *, token_provider_factory: Callable[..., GraphTokenProvider] | None = None
+    *,
+    token_provider_factory: Callable[..., GraphTokenProvider] | None = None,
+    secret_store_factory: Callable[[], SecretStore] | None = None,
+    mollie_api_factory: Callable[[str], MollieInvoiceApi] | None = None,
 ) -> ConnectorFactoryRegistry:
     """Register generic adapters; provider manifests never select executable imports."""
     factories = ConnectorFactoryRegistry()
@@ -95,4 +104,26 @@ def build_connector_factories(
         )
 
     factories.register("graph_mail_attachment", graph_mail)
+
+    def mollie_invoices(
+        connection: ProviderConnection,
+        settings: RouteSettings,
+        period: DateRange | None,
+    ) -> MollieInvoicesConnector:
+        if not settings.secret_ref:
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.AUTH_REQUIRED,
+                "Mollie-Zugang muss lokal im geschützten Speicher hinterlegt werden",
+            )
+        store = (secret_store_factory or KeyringSecretStore)()
+        token = store.get(settings.secret_ref)
+        api = (mollie_api_factory or MollieInvoicesHttpClient)(token)
+        return MollieInvoicesConnector(
+            connection=connection,
+            api=api,
+            start=period.start if period else None,
+            end=period.end if period else None,
+        )
+
+    factories.register("mollie_invoices_v2", mollie_invoices)
     return factories

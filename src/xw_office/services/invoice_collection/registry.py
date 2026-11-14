@@ -21,6 +21,8 @@ class RouteManifest:
     priority: int
     maturity: str
     allowed_hosts: tuple[str, ...] = ()
+    auth: str | None = None
+    required_scope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -129,6 +131,8 @@ def _parse_routes(
                 priority=int(raw.get("priority") or 100),
                 maturity=maturity,
                 allowed_hosts=hosts,
+                auth=str(raw.get("auth") or "").strip() or None,
+                required_scope=str(raw.get("required_scope") or "").strip() or None,
             )
         )
     return result

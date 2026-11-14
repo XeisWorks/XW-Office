@@ -39,9 +39,10 @@ Contract-Tests – keine Änderung an Dialog, Orchestrator, PDF-Pipeline oder On
 ## Bedienung in drei Schritten
 
 1. **Lokales Setup:** Zielordner wählen. Der Zeitraum ist mit dem aktuellen Kalendermonat in
-   `Europe/Vienna` vorbelegt. Eine automatisierte Verbindung lässt sich erst speichern und
-   aktivieren, wenn ihre konkrete Route im Katalog als `verified` steht. Der Graph-Mailbox-Probe
-   testet Zugriff, verifiziert aber keine Rechnungsroute.
+   `Europe/Vienna` vorbelegt. Verbindungsangaben für eine noch nicht verifizierte Route lassen
+   sich lokal als deaktivierter Entwurf speichern; aktivieren lässt sie sich erst, wenn die
+   konkrete Route im Katalog als `verified` steht. Der Graph-Mailbox-Probe testet Zugriff,
+   verifiziert aber keine Rechnungsroute.
 2. **Monatslauf:** **„Alle aktiven Verbindungen abrufen“** verarbeitet nur aktivierte, aktuell
    verifizierte Routen. Unabhängige Verbindungen laufen begrenzt parallel; pro Konto läuft
    höchstens ein Job. Ohne Live-verifizierte Route bleibt **„PDF manuell hinzufügen“** der
@@ -117,11 +118,14 @@ Datensatz; SQLite garantiert dadurch keine physische Bereinigung alter Datenseit
 - Danach Graph-Mailbox-Test und sichtbaren Microsoft-Login/Consent im lokalen UI abschließen.
 - Echten Rechnungsbeleg und Wiederholung lokal prüfen; ein erfolgreicher Mailbox-Probe allein
   reicht nicht zur Route-Verifikation.
+- Ein API-Credential nur bei einer offiziellen API-Route über das maskierte Eingabefeld
+  hinterlegen; der Wert liegt im Windows Credential Manager, SQLite hält nur die Referenz.
+  Mollies [List-invoices-API](https://docs.mollie.com/reference/list-invoices) erfordert einen
+  Advanced Access Token oder OAuth-Zugriff mit `invoices.read`; ein normaler Profil-API-Key ist
+  dort nicht als Zugriffsart dokumentiert.
 - Browser-Login einschließlich Authenticator/Passkey/SMS nur für einen konkret unterstützten
   und erlaubten Portalpilot im sichtbaren Browser durchführen; ein solcher Anbieterpilot ist
   noch nicht verifiziert.
-- Die aktuelle UI hat noch kein API-Token-Eingabefeld. Einen minimal berechtigten API-Token
-  erst eingeben, wenn die jeweilige Route und ihre lokale Secret-Eingabe implementiert sind.
 - Microsoft-Graph-Zustimmung für die konkret angezeigten minimalen Rechte erteilen.
 
 **Technische Referenzen:** [Playwright Auth](https://playwright.dev/python/docs/auth),

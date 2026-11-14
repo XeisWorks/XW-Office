@@ -157,6 +157,55 @@ def test_graph_mail_factory_wires_local_connection_settings_and_selected_period(
     connector.close()
 
 
+def test_mollie_factory_reads_keyring_secret_and_forwards_month_period() -> None:
+    seen: dict[str, str] = {}
+
+    class SecretStore:
+        def get(self, secret_ref: str) -> str:
+            seen["secret_ref"] = secret_ref
+            return "test-mollie-token"
+
+        def set(self, secret_ref: str, value: str) -> None:
+            raise AssertionError("factory must not write a secret")
+
+    class Api:
+        def list_invoices(self):
+            return []
+
+        def download_invoice_pdf(self, invoice, destination):
+            raise AssertionError("no invoice expected in factory test")
+
+    api = Api()
+    def api_factory(token: str) -> Api:
+        seen["token"] = token
+        return api
+
+    connection = _connection("mollie_fees")
+    route = RouteSettings(route_key="invoices_api", secret_ref="invoice/mollie/account")
+    period = DateRange(date(2026, 11, 1), date(2026, 11, 30))
+    connector = build_connector_factories(
+        secret_store_factory=SecretStore,
+        mollie_api_factory=api_factory,
+    ).create("mollie_invoices_v2", connection, route, period)
+
+    assert isinstance(connector, MollieInvoicesConnector)
+    assert seen == {
+        "secret_ref": "invoice/mollie/account",
+        "token": "test-mollie-token",
+    }
+    assert connector.start == period.start
+    assert connector.end == period.end
+    connector.close()
+
+
+def test_mollie_factory_rejects_missing_secret_reference() -> None:
+    connection = _connection("mollie_fees")
+    route = RouteSettings(route_key="invoices_api")
+    with pytest.raises(InvoiceCollectionError) as error:
+        build_connector_factories().create("mollie_invoices_v2", connection, route)
+    assert error.value.code is InvoiceErrorCode.AUTH_REQUIRED
+
+
 def test_graph_reader_paginates_and_downloads_attachment_bytes(tmp_path: Path) -> None:
     pdf_bytes = b"%PDF-1.4 fake"
     requests: list[str] = []

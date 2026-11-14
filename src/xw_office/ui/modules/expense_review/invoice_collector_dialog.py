@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from xw_office.core.app_paths import default_invoice_target_dir, find_repo_root
 from xw_office.core.worker import BackgroundWorker
+from xw_office.services.invoice_collection.auth.secrets import KeyringSecretStore, SecretStore
 from xw_office.services.invoice_collection.connectors.manual_import import ManualImportConnector
 from xw_office.services.invoice_collection.connections import ConnectionRepository
 from xw_office.services.invoice_collection.domain import (
@@ -59,12 +60,14 @@ class InvoiceCollectorDialog(QDialog):
         parent: object | None = None,
         connection_repository: ConnectionRepository | None = None,
         collection_service: InvoiceCollectionService | None = None,
+        secret_store: SecretStore | None = None,
     ) -> None:
         super().__init__(parent)  # type: ignore[arg-type]
         self.setWindowTitle("Rechnungen abrufen")
         self.resize(900, 560)
         self._settings = QSettings("XeisWorks", "XW Office")
         self._connection_repository = connection_repository or ConnectionRepository()
+        self._secret_store = secret_store
         self._editing_connection: ProviderConnection | None = None
         self._saved_connections_by_id: dict[str, ProviderConnection] = {}
         self._collection_service = collection_service
@@ -101,6 +104,12 @@ class InvoiceCollectorDialog(QDialog):
         self._document_type = QComboBox()
         for item in DocumentType:
             self._document_type.addItem(item.value, item)
+        self._api_token_label = QLabel("API-Zugang")
+        self._api_token = QLineEdit()
+        self._api_token.setEchoMode(QLineEdit.EchoMode.Password)
+        self._api_token.setPlaceholderText("Nur lokal im Windows Credential Manager")
+        self._api_token_label.setVisible(False)
+        self._api_token.setVisible(False)
         self._table = QTableWidget(0, 6)
         self._table.setHorizontalHeaderLabels(
             ["Provider/Konto", "Route", "Mandant", "Datei", "Ergebnis", "Belegquellen"]
@@ -108,6 +117,7 @@ class InvoiceCollectorDialog(QDialog):
         self._table.horizontalHeader().setStretchLastSection(True)
         self._load_catalog()
         self._provider.currentIndexChanged.connect(self._provider_changed)
+        self._route.currentIndexChanged.connect(self._route_changed)
         self._provider_changed()
         self._build_ui()
         self._load_saved_connections()
@@ -152,6 +162,39 @@ class InvoiceCollectorDialog(QDialog):
             self._route.addItem(
                 f"{route.route_key} ({route.method}, {route.maturity})", route
             )
+        self._route_changed()
+
+    def _route_changed(self, *_args: object) -> None:
+        route = self._route.currentData()
+        self._api_token.clear()
+        visible = route is not None and route.method == "official_api"
+        self._api_token_label.setVisible(visible)
+        self._api_token.setVisible(visible)
+        scope = route.required_scope if route is not None else None
+        self._api_token_label.setText(
+            f"API-Zugang ({scope})" if scope else "API-Zugang"
+        )
+        existing_setting = next(
+            (
+                setting
+                for setting in (
+                    self._editing_connection.route_settings
+                    if self._editing_connection is not None
+                    else ()
+                )
+                if route is not None and setting.route_key == route.route_key
+            ),
+            None,
+        )
+        self._api_token.setPlaceholderText(
+            "Zugang hinterlegt; leer lassen zum Beibehalten"
+            if existing_setting is not None and existing_setting.secret_ref
+            else (
+                f"Credential mit {scope} lokal hinterlegen"
+                if scope
+                else "Route-spezifisches Credential lokal hinterlegen"
+            )
+        )
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -177,6 +220,7 @@ class InvoiceCollectorDialog(QDialog):
         form.addRow("Graph-Mailbox", self._mailbox)
         form.addRow("Bestätigte Absenderdomains", self._sender_domains)
         form.addRow("Dokumenttyp", self._document_type)
+        form.addRow(self._api_token_label, self._api_token)
         root.addLayout(form)
         actions = QHBoxLayout()
         self._fetch_button = QPushButton("Alle aktiven Verbindungen abrufen")
@@ -257,7 +301,9 @@ class InvoiceCollectorDialog(QDialog):
             self._account_alias.setText("default")
             self._mailbox.clear()
             self._sender_domains.clear()
+            self._api_token.clear()
             self._connection_toggle_button.setEnabled(False)
+            self._route_changed()
             return
 
         connection = self._editing_connection
@@ -292,6 +338,7 @@ class InvoiceCollectorDialog(QDialog):
             )
             if type_index >= 0:
                 self._document_type.setCurrentIndex(type_index)
+        self._route_changed()
         self._connection_toggle_button.setText(
             "Verbindung deaktivieren" if connection.enabled else "Verbindung aktivieren"
         )
@@ -304,16 +351,30 @@ class InvoiceCollectorDialog(QDialog):
         enabled = not connection.enabled
         if enabled:
             catalog = getattr(self, "_catalog", None)
-            if catalog is None or any(
-                (route := catalog.route(connection.provider_id, settings.route_key)) is None
-                or route.maturity != "verified"
-                for settings in connection.route_settings
-                if settings.enabled
-            ):
+            if catalog is None:
                 self._status.setText(
                     "Die Verbindung kann erst aktiviert werden, wenn alle aktiven Routen live verifiziert sind."
                 )
                 return
+            for settings in connection.route_settings:
+                if not settings.enabled:
+                    continue
+                route = catalog.route(connection.provider_id, settings.route_key)
+                if route is None or route.maturity != "verified":
+                    self._status.setText(
+                        "Die Verbindung kann erst aktiviert werden, wenn alle aktiven Routen live verifiziert sind."
+                    )
+                    return
+                if route.method == "official_api":
+                    try:
+                        if not settings.secret_ref:
+                            raise ValueError("missing secret reference")
+                        self._secret_store_for_ui().get(settings.secret_ref)
+                    except Exception:  # noqa: BLE001 - never expose keyring/provider details
+                        self._status.setText(
+                            "Für diese API-Route fehlt ein Zugang im geschützten lokalen Speicher."
+                        )
+                        return
         if self._connection_repository.set_enabled(connection.connection_id, enabled):
             self._load_saved_connections(select_id=str(connection.connection_id))
             self._status.setText(
@@ -348,7 +409,9 @@ class InvoiceCollectorDialog(QDialog):
         if service is None:
             service = InvoiceCollectionService(
                 connections=self._connection_repository,
-                factories=build_connector_factories(),
+                factories=build_connector_factories(
+                    secret_store_factory=self._secret_store_for_ui
+                ),
                 target_root=Path(self._folder.text()),
                 journal=InvoiceJournal(),
                 catalog=getattr(self, "_catalog", None),
@@ -488,6 +551,11 @@ class InvoiceCollectorDialog(QDialog):
             return value
         return DocumentType(str(value))
 
+    def _secret_store_for_ui(self) -> SecretStore:
+        if self._secret_store is None:
+            self._secret_store = KeyringSecretStore()
+        return self._secret_store
+
     def _on_collection_finished(self, generation: int, result: object) -> None:
         if generation != self._fetch_generation:
             return
@@ -617,12 +685,7 @@ class InvoiceCollectorDialog(QDialog):
                 "Sie können Belege über den manuellen PDF-Import ablegen."
             )
             return
-        if selected_route.maturity != "verified":
-            self._status.setText(
-                "Diese Abrufroute ist noch nicht live verifiziert und kann nicht aktiviert werden. "
-                "Nutzen Sie den manuellen PDF-Import."
-            )
-            return
+        route_verified = selected_route.maturity == "verified"
         route_options = {"connector": str(selected_route.connector)}
         if selected_route.method == "mail":
             mailbox = self._mailbox.text().strip()
@@ -640,6 +703,11 @@ class InvoiceCollectorDialog(QDialog):
                 }
             )
         route_options["document_type"] = self._selected_document_type().value
+        connection_id = (
+            self._editing_connection.connection_id
+            if self._editing_connection is not None
+            else uuid.uuid4()
+        )
         route_settings_by_key = {
             setting.route_key: setting
             for setting in (
@@ -648,29 +716,70 @@ class InvoiceCollectorDialog(QDialog):
                 else ()
             )
         }
+        previous_setting = route_settings_by_key.get(str(selected_route.route_key))
+        secret_ref = previous_setting.secret_ref if previous_setting is not None else None
+        credential_ready = True
+        if selected_route.method == "official_api":
+            api_token = self._api_token.text().strip()
+            if api_token:
+                secret_ref = secret_ref or (
+                    f"invoice-collection:{connection_id}:{selected_route.route_key}"
+                )
+                try:
+                    self._secret_store_for_ui().set(secret_ref, api_token)
+                except Exception as exc:  # noqa: BLE001 - do not surface secret-bearing errors
+                    self._status.setText(
+                        f"API-Zugang konnte nicht geschützt gespeichert werden: {type(exc).__name__}."
+                    )
+                    return
+            elif secret_ref:
+                try:
+                    self._secret_store_for_ui().get(secret_ref)
+                except Exception:  # noqa: BLE001 - keep disabled if secret cannot be read
+                    credential_ready = False
+            else:
+                credential_ready = False
         route_settings_by_key[str(selected_route.route_key)] = RouteSettings(
             route_key=str(selected_route.route_key),
             options=route_options,
+            secret_ref=secret_ref,
         )
         connection = ProviderConnection(
-            connection_id=(
-                self._editing_connection.connection_id
-                if self._editing_connection is not None
-                else uuid.uuid4()
-            ),
+            connection_id=connection_id,
             provider_id=provider_id,
             tenant_id=TenantId(str(self._tenant.currentData())),
             account_alias=account_alias,
             enabled=(
-                self._editing_connection.enabled
-                if self._editing_connection is not None
-                else True
+                route_verified
+                and credential_ready
+                and (
+                    self._editing_connection.enabled
+                    if self._editing_connection is not None
+                    else True
+                )
             ),
             route_settings=tuple(route_settings_by_key.values()),
         )
         self._connection_repository.save(connection)
+        self._api_token.clear()
         self._load_saved_connections(select_id=str(connection.connection_id))
-        self._status.setText("Verbindung lokal gespeichert; Secretwerte werden separat hinterlegt.")
+        if not route_verified:
+            self._status.setText(
+                "Verbindung als deaktivierter Entwurf gespeichert. Aktivierung erst nach "
+                "Live-Verifikation der Route; Secretwerte werden separat hinterlegt."
+            )
+        elif not credential_ready:
+            self._status.setText(
+                "Verbindung gespeichert und deaktiviert; für die API-Route fehlt ein geschützter Zugang."
+            )
+        elif not connection.enabled:
+            self._status.setText(
+                "Verbindung lokal gespeichert und deaktiviert; Secretwerte werden separat hinterlegt."
+            )
+        else:
+            self._status.setText(
+                "Verbindung lokal gespeichert; Secretwerte werden separat hinterlegt."
+            )
 
     def _manual_import(self) -> None:
         if self._fetch_worker is not None and self._fetch_worker.isRunning():
