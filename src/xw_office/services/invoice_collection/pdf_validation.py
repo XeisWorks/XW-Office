@@ -6,7 +6,10 @@ from pathlib import Path
 
 from pypdf import PdfReader
 
-from xw_office.services.invoice_collection.errors import DocumentValidationError
+from xw_office.services.invoice_collection.errors import (
+    DocumentValidationError,
+    QuarantinedDocumentError,
+)
 
 
 @dataclass(frozen=True)
@@ -35,7 +38,9 @@ def inspect_pdf(
                 raise DocumentValidationError("Datei besitzt keine PDF-Signatur")
         reader = PdfReader(str(path), strict=False)
         if reader.is_encrypted:
-            raise DocumentValidationError("Verschlüsselte PDFs benötigen eine manuelle Prüfung")
+            raise QuarantinedDocumentError(
+                "Verschlüsseltes PDF wurde lokal quarantänisiert und benötigt manuelle Prüfung"
+            )
         pages = len(reader.pages)
         if pages <= 0:
             raise DocumentValidationError("PDF enthält keine Seiten")

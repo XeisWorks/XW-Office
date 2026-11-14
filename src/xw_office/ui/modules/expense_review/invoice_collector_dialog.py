@@ -714,7 +714,11 @@ def _run_manual_import(
                     else result.receipt.outcome.value
                 )
             except InvoiceCollectionError as exc:
-                outcome = exc.code.value
+                outcome = (
+                    f"{exc.code.value}: {exc}"
+                    if exc.code is InvoiceErrorCode.QUARANTINED
+                    else exc.code.value
+                )
             except Exception as exc:  # noqa: BLE001 - keep a failed file local to its row
                 outcome = f"ERROR: {type(exc).__name__}"
             results.append(

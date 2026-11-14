@@ -186,6 +186,55 @@ def test_pdf_inspection_rejects_html_with_pdf_extension(tmp_path: Path) -> None:
         inspect_pdf(path)
 
 
+def test_pdf_inspection_rejects_oversized_artifact(tmp_path: Path) -> None:
+    path = _pdf(tmp_path / "invoice.pdf")
+    with pytest.raises(DocumentValidationError, match="zulässige Größe"):
+        inspect_pdf(path, max_bytes=8)
+
+
+def test_encrypted_pdf_is_typed_as_quarantined_and_preserved_locally(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "encrypted.pdf"
+    with fitz.open() as document:
+        document.new_page()
+        document.save(
+            path,
+            encryption=fitz.PDF_ENCRYPT_AES_256,
+            owner_pw="owner-test-only",
+            user_pw="user-test-only",
+        )
+    connection = ProviderConnection.create(
+        provider_id="fixture", tenant_id=TenantId.XW, account_alias="a"
+    )
+    quarantine = tmp_path / "quarantine"
+    pipeline = DocumentPipeline(
+        sink=OneDriveLocalSink(tmp_path / "onedrive"),
+        quarantine_root=quarantine,
+    )
+
+    with pytest.raises(InvoiceCollectionError) as error:
+        pipeline.process(DownloadedArtifact(_candidate(connection, source_id="encrypted"), path))
+
+    assert error.value.code is InvoiceErrorCode.QUARANTINED
+    assert not path.exists()
+    assert (quarantine / "encrypted.pdf").is_file()
+
+
+def test_onedrive_sink_preflight_rejects_unwritable_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "onedrive"
+    destination.mkdir()
+    sink = OneDriveLocalSink(destination)
+    monkeypatch.setattr("xw_office.services.invoice_collection.sinks.onedrive_local.os.access", lambda *_args: False)
+
+    with pytest.raises(InvoiceCollectionError) as error:
+        sink.preflight()
+
+    assert error.value.code is InvoiceErrorCode.DESTINATION_UNAVAILABLE
+
+
 def test_pipeline_quarantines_invalid_artifact(tmp_path: Path) -> None:
     source = tmp_path / "broken.pdf"
     source.write_text("not a PDF", encoding="utf-8")

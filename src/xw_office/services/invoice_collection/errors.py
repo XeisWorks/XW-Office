@@ -7,6 +7,7 @@ from enum import StrEnum
 class InvoiceErrorCode(StrEnum):
     CONFIGURATION_ERROR = "CONFIGURATION_ERROR"
     INVALID_DOCUMENT = "INVALID_DOCUMENT"
+    QUARANTINED = "QUARANTINED"
     DESTINATION_UNAVAILABLE = "DESTINATION_UNAVAILABLE"
     CONTENT_CONFLICT = "CONTENT_CONFLICT"
     OUT_OF_PERIOD = "OUT_OF_PERIOD"
@@ -32,6 +33,13 @@ class DocumentValidationError(InvoiceCollectionError):
 
     def __init__(self, message: str) -> None:
         super().__init__(InvoiceErrorCode.INVALID_DOCUMENT, message)
+
+
+class QuarantinedDocumentError(DocumentValidationError):
+    """Raised when a document is preserved locally for a required manual review."""
+
+    def __init__(self, message: str) -> None:
+        InvoiceCollectionError.__init__(self, InvoiceErrorCode.QUARANTINED, message)
 
 
 class DestinationError(InvoiceCollectionError):
