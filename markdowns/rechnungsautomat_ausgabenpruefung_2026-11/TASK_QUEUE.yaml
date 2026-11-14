@@ -36,7 +36,7 @@ current_status:
     - "same tenant/sink/PDF hash across routes publishes once and adds hashed source provenance to the journal"
     - "invoice journal schema 5 migrates legacy external IDs to hashed provenance, stores review-resolution metadata and never persists new raw external IDs"
     - "review resolution requires explicit user date/type, revalidates PDF identity, publishes no-clobber, updates journal and removes old copy only after success"
-    - "retry action targets only failed active connection/route pairs from the latest run; other providers do not rerun"
+    - "retry action targets only retryable active route errors (auth, rate limit, transient network, destination); policy/config/document/content conflicts and out-of-period results are excluded"
     - "collection results show safe provider/route provenance labels without raw source or external IDs"
     - "saved provider connections can be selected, updated by stable ID, and disabled; re-enabling still requires verified routes"
     - "unverified connection settings can be saved locally as disabled drafts for later route verification"
@@ -258,7 +258,7 @@ tasks:
     acceptance:
       - "Existing refresh, filters, tenant tabs, settings and supplier URLs remain unaffected"
       - "One failed connection does not abort others"
-      - "Retry after partial failure runs only the failed active route pairs"
+      - "Retry after partial failure runs only eligible active route pairs; permanent policy/config/document/content conflicts are excluded"
       - "View destruction and cancellation do not leak QThreads or apply stale results"
       - "Adding a fixture provider requires no dialog/orchestrator code change"
       - "Manual import works end-to-end from UI to sink"
@@ -389,7 +389,8 @@ tasks:
     status: "in_progress"
     depends_on: ["T05", "T06", "T07"]
     evidence:
-      - "python -m pytest -q: 2435 passed, 7 skipped, 0 failed (after selective failed-route retry)"
+      - "python -m pytest -q: 2435 passed, 7 skipped, 0 failed (after retry eligibility filtering)"
+      - "Retry eligibility UI/service slice: 90 passed; AUTH_REQUIRED and TRANSIENT_NETWORK included, OUT_OF_PERIOD, POLICY_BLOCKED, UNSUPPORTED_ACCOUNT and CONTENT_CONFLICT excluded"
       - "OneDrive identical-publish race test: 5 consecutive passes after synchronizing both target-existence checks"
       - "python -m ruff check .: passed"
       - "Targeted mypy on changed invoice collection service and dialog with foreign imports skipped: passed using --disable-error-code=unused-ignore --disable-error-code=no-any-return (the latter suppresses the Any propagated by skipped repository imports). Broad local mypy is blocked by missing optional msal_extensions/Playwright and NumPy stub/Python-version mismatch"

@@ -6,7 +6,7 @@
 
 ## Fortschreibung: gezieltes Wiederholen fehlgeschlagener Routen
 
-Der Abrufdialog merkt fehlgeschlagene aktive Verbindung-/Routenpaare des letzten Laufs und bietet eine gezielte Wiederholung an. Die Service-Schicht filtert vor dem Start auf diese aktivierten Routen; erfolgreiche Provider werden dabei nicht erneut gestartet. Nicht erneut eingeplant werden reine `OUT_OF_PERIOD`-Ergebnisse und Konfigurationsfehler, die keine Route betreffen. UI- und Service-Tests pruefen Auswahl und Isolation. Gezielt bestanden: **90 Tests**; vollstaendige Repository-Suite: **2.435 passed, 7 skipped, 0 failed**. Ruff, gezieltes MyPy fuer beide geaenderten Module, TASK_QUEUE-YAML, `git diff --check` und Diff-Secret-Musterpruefung bestehen.
+Der Abrufdialog merkt fehlgeschlagene aktive Verbindung-/Routenpaare des letzten Laufs und bietet eine gezielte Wiederholung an. Die Service-Schicht filtert vor dem Start auf diese aktivierten Routen; erfolgreiche Provider werden dabei nicht erneut gestartet. Wiederholbar sind `AUTH_REQUIRED`, `RATE_LIMITED`, `TRANSIENT_NETWORK` und `DESTINATION_UNAVAILABLE`, etwa nachdem Anmeldung, Wartezeit oder Zielordner korrigiert wurden. `OUT_OF_PERIOD`, `POLICY_BLOCKED`, `UNSUPPORTED_ACCOUNT`, Konfigurations-, Dokument- und Inhaltskonflikte bleiben ausgeschlossen. UI- und Service-Tests pruefen Auswahl und Isolation. Gezielt bestanden: **90 Tests**; nach der Retry-Eignungsfilterung erneut vollstaendig geprueft: **2.435 passed, 7 skipped, 0 failed**. Ruff, gezieltes MyPy fuer beide geaenderten Module, TASK_QUEUE-YAML, `git diff --check` und Diff-Secret-Musterpruefung bestehen.
 
 ## Fortschreibung: manuelle Review-Aufloesung
 

@@ -675,8 +675,38 @@ def test_retry_action_targets_only_routes_that_failed_last_run(
                     account_alias="billing",
                     error="OUT_OF_PERIOD: outside selected period",
                 ),
+                CollectionItemResult(
+                    source_id="opaque-three",
+                    route_key="browser_portal",
+                    connection_id="connection-three",
+                    provider_id="github",
+                    tenant_id="xw",
+                    account_alias="billing",
+                    error="POLICY_BLOCKED: Portalzugriff nicht freigegeben",
+                ),
+                CollectionItemResult(
+                    source_id="opaque-four",
+                    route_key="api_invoice",
+                    connection_id="connection-four",
+                    provider_id="mollie_fees",
+                    tenant_id="xw",
+                    account_alias="billing",
+                    error="CONTENT_CONFLICT: externe ID mit anderem Inhalt",
+                ),
             )
-        )
+        ),
+        issues=(
+            ConnectionRouteIssue(
+                connection_id="connection-five",
+                route_key="mail_pdf",
+                message="UNSUPPORTED_ACCOUNT: Route ist nicht verifiziert",
+            ),
+            ConnectionRouteIssue(
+                connection_id="connection-six",
+                route_key="mail_pdf",
+                message="TRANSIENT_NETWORK: Anbieter vorübergehend nicht erreichbar",
+            ),
+        ),
     )
     dialog._on_collection_finished(0, result)
     requested: list[set[tuple[str, str]] | None] = []
@@ -689,8 +719,12 @@ def test_retry_action_targets_only_routes_that_failed_last_run(
     assert dialog._retry_button.isEnabled()
     dialog._retry_failed_routes()
 
-    assert requested == [{("connection-one", "mail_pdf")}]
-    assert dialog._pending_retry_targets == {("connection-one", "mail_pdf")}
+    expected = {
+        ("connection-one", "mail_pdf"),
+        ("connection-six", "mail_pdf"),
+    }
+    assert requested == [expected]
+    assert dialog._pending_retry_targets == expected
 
 
 def test_manual_import_runs_in_worker_and_publishes_partial_results_on_cancel(

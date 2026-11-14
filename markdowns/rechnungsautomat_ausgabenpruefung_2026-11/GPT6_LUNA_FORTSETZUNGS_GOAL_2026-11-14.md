@@ -65,8 +65,10 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    unverifizierten Routen koennen als deaktivierte Entwuerfe lokal gespeichert werden. Fuer
    `official_api` gibt es eine maskierte Eingabe, die das Credential ausschliesslich ueber
    `SecretStore`/Windows Credential Manager sichert; die Mollie-Factory liest diesen SecretRef
-   und bekommt den gewaehlten Zeitraum. Erhalte diese Guardrails; vollstaendige
-   capability-basierte Auth-/Retryaktionen bleiben ein gesonderter offener T04-Punkt. Provider-
+   und bekommt den gewaehlten Zeitraum. Erhalte diese Guardrails. Eine routebezogene Retry-Aktion
+   fuer Auth-, Netzwerk-, Rate-Limit- und temporaere Zielordnerfehler ist umgesetzt; Policy-,
+   Konfigurations-, Dokument- und Inhaltskonflikte duerfen nicht erneut eingeplant werden.
+   Auth-Erneuerung und weitere Capability-Aktionen bleiben offen. Provider-
    Portale werden fuer `portal_hosts` bereits als HTTPS-Menue angeboten; Hostvalidierung und
    manuelle Login-/Download-Klarstellung nicht entfernen und keine Portalautomation ohne
    Live-Verifikation erfinden.

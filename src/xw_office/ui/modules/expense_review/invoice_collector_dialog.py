@@ -860,13 +860,13 @@ class InvoiceCollectorDialog(QDialog):
             for item in result.summary.items
             if item.connection_id
             and item.route_key
-            and item.error
-            and not item.error.startswith("OUT_OF_PERIOD:")
+            and _is_retryable_collection_error(item.error)
         }
         self._retry_targets.update(
             (issue.connection_id, issue.route_key)
             for issue in result.issues
             if issue.route_key != "connection_configuration"
+            and _is_retryable_collection_error(issue.message)
         )
         self._retry_button.setEnabled(bool(self._retry_targets))
         issue_count = len(result.issues)
@@ -1276,6 +1276,25 @@ def _collect_active_safely(
             route_targets=route_targets,
         )
     )
+
+
+_RETRYABLE_COLLECTION_ERRORS = {
+    InvoiceErrorCode.AUTH_REQUIRED,
+    InvoiceErrorCode.RATE_LIMITED,
+    InvoiceErrorCode.TRANSIENT_NETWORK,
+    InvoiceErrorCode.DESTINATION_UNAVAILABLE,
+}
+
+
+def _is_retryable_collection_error(message: str | None) -> bool:
+    if not message:
+        return False
+    error_code = message.split(":", 1)[0].strip()
+    try:
+        code = InvoiceErrorCode(error_code)
+    except ValueError:
+        return False
+    return code in _RETRYABLE_COLLECTION_ERRORS
 
 
 def _safe_collector_error(error: Exception) -> InvoiceCollectionError:

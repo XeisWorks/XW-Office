@@ -48,9 +48,10 @@ Contract-Tests – keine Änderung an Dialog, Orchestrator, PDF-Pipeline oder On
    höchstens ein Job. Ohne Live-verifizierte Route bleibt **„PDF manuell hinzufügen“** der
    nutzbare Weg durch dieselbe PDF-Prüfung und Ablage.
 3. **Anmeldung:** Graph kann für den Mailbox-Probe eine sichtbare Microsoft-Anmeldung öffnen.
-   Der Dialog bietet noch keine allgemeine Aktion **„Anmeldung erneuern“** oder eine
-   routebezogene Wiederaufnahme nach einem Authfehler. Authfehler werden im Ergebnis angezeigt;
-   das ist ein offener T04-Punkt.
+   Der Dialog bietet noch keine allgemeine Aktion "Anmeldung erneuern". Auth- und
+   voruebergehende Netzwerk-/Rate-Limit-/Zielordnerfehler lassen sich nach Behebung gezielt
+   erneut abrufen; Policy-, Konfigurations-, Dokument- und Inhaltskonflikte werden nicht
+   automatisch wiederholt.
 
 ## Verbindliche Produktentscheidungen
 
@@ -59,8 +60,9 @@ Contract-Tests – keine Änderung an Dialog, Orchestrator, PDF-Pipeline oder On
   `CLOUD_VERIFIED`.
 - **Route und Fallback:** Katalogstatus, Factory-Prüfung und Verbindungsaktivierung sind
   fail-closed. Graph-Mailbox-Probe, Mailbox-Eingaben und maskierte API-Credentials werden bereits aus der
-  Katalog-Auth-Capability abgeleitet. Gezielte Anmeldungserneuerung und routebezogene Retry-Aktionen
-  sowie konfigurierbare Priorität sind noch nicht umgesetzt.
+  Katalog-Auth-Capability abgeleitet. Routebezogene Wiederholung behebbarer Fehler ist umgesetzt;
+  gezielte Anmeldungserneuerung, weitere Capability-Aktionen und konfigurierbare Prioritaet
+  bleiben offen.
 - **Keine Provider-Sonderlogik in UI/Orchestrator:** Manifest und Connector-Factories sind
   explizit und die gemeinsame Pipeline ist providerunabhängig. Der aktuelle Dialog ist noch ein
   erster Slice; Auth-Erneuerung und weitere Capability-gesteuerte Aktionen bleiben offen.
