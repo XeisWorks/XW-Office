@@ -27,7 +27,8 @@ current_status:
     - "Mollie and browser connectors close their injected HTTP/session adapters"
     - "same tenant/sink/PDF hash across routes publishes once and adds hashed source provenance to the journal"
     - "collection results show safe provider/route provenance labels without raw source or external IDs"
-    - "full repository suite: 2394 passed, 7 skipped; repo Ruff, provider/queue YAML and diff checks pass"
+    - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
+    - "full repository suite: 2397 passed, 7 skipped; repo Ruff, provider/queue YAML and diff checks pass"
     - "collector/dialog MyPy: 30 source files, no issues; DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
@@ -161,6 +162,9 @@ tasks:
       - "tests/unit/test_invoice_collection_foundations.py"
       - "tests/unit/test_invoice_collection_foundations.py::test_invoice_date_extraction_requires_one_explicitly_labeled_date"
       - "tests/unit/test_invoice_collection_foundations.py::test_pipeline_sends_unknown_or_out_of_period_dates_to_review_folder"
+      - "tests/unit/test_invoice_collection_foundations.py::test_pdf_inspection_rejects_oversized_artifact"
+      - "tests/unit/test_invoice_collection_foundations.py::test_encrypted_pdf_is_typed_as_quarantined_and_preserved_locally"
+      - "tests/unit/test_invoice_collection_foundations.py::test_onedrive_sink_preflight_rejects_unwritable_target"
       - "tests/unit/test_invoice_collection_foundations.py::test_same_tenant_cross_route_duplicate_publishes_once_and_merges_safe_provenance"
     deliverables:
       - "PDF size/signature/MIME/parser/encryption validation"
@@ -291,7 +295,7 @@ tasks:
   - id: "T08"
     title: "Erste reale Routen kontrolliert verifizieren"
     priority: 8
-    status: "todo"
+    status: "blocked_external"
     depends_on: ["T05", "T06", "T07"]
     evidence: []
     deliverables:
@@ -309,13 +313,21 @@ tasks:
       - "missing real invoice in selected period"
       - "missing API entitlement"
       - "user login, 2FA or Entra consent not yet completed"
+      - "user has not yet identified the selected provider mailbox and confirmed sender domain(s); enter them only in the local dialog, then run Graph mailbox test and visible consent/login"
 
   - id: "T09"
     title: "MVP-Sicherheits-, Regressions- und Releaseprüfung"
     priority: 9
-    status: "todo"
+    status: "in_progress"
     depends_on: ["T05", "T06", "T07"]
-    evidence: []
+    evidence:
+      - "python -m pytest -q: 2397 passed, 7 skipped, 0 failed"
+      - "python -m ruff check .: passed"
+      - "python -m mypy src/xw_office/services/invoice_collection src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py: 30 source files, no issues"
+      - "Provider and task queue YAML parse: passed"
+      - "git diff --check: passed"
+      - "Added-diff secret-pattern scan: no matches"
+      - "T08 records the pending local mailbox/sender-domain clarification as blocked_external"
     deliverables:
       - "Unit, contract, UI and integration test report"
       - "Ruff, git diff --check, YAML validation and secret scan"
