@@ -402,6 +402,8 @@ tasks:
       - "Provider and task queue YAML parse: passed"
       - "git diff --check: passed"
       - "Added-diff secret-pattern scan: no matches"
+      - "Tracked-text credential scan: 0 high-confidence private-key, GitHub, Slack, AWS, OpenAI and Google credential-pattern hits"
+      - "Tracked artifact audit: 17 existing PDFs; docs/invoices files predate the collector (first history 2026-07-10) and are referenced by payment QR tests; collector changes add or modify no PDFs. Blanket repository-wide no-PDF gate remains unresolved, so T09 stays in_progress"
       - "T08 records the pending local mailbox/sender-domain clarification as blocked_external"
     deliverables:
       - "Unit, contract, UI and integration test report"
