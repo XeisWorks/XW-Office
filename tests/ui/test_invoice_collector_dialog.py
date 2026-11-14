@@ -108,6 +108,35 @@ def test_invoice_collector_dialog_loads_catalog_and_requires_active_connections(
     assert "Keine aktiven Provider-Verbindungen" in dialog._status.text()
 
 
+def test_graph_mailbox_action_is_enabled_only_for_mail_routes(
+    qtbot: object, tmp_path: Path
+) -> None:
+    dialog = InvoiceCollectorDialog(
+        tenant_id="xw",
+        connection_repository=ConnectionRepository(tmp_path / "connections.sqlite3"),
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    provider = next(
+        item for item in dialog._catalog.providers
+        if item.provider_id == "mollie_fees"
+    )
+    dialog._provider.setCurrentIndex(dialog._provider.findData(provider.provider_id))
+    mail_index = next(
+        index for index in range(dialog._route.count())
+        if dialog._route.itemData(index).method == "mail"
+    )
+    api_index = next(
+        index for index in range(dialog._route.count())
+        if dialog._route.itemData(index).method == "official_api"
+    )
+
+    dialog._route.setCurrentIndex(mail_index)
+    assert dialog._mail_test_button.isEnabled()
+
+    dialog._route.setCurrentIndex(api_index)
+    assert not dialog._mail_test_button.isEnabled()
+
+
 def test_invoice_collector_dialog_opens_only_an_existing_target_folder(
     qtbot: object, tmp_path: Path, monkeypatch: object
 ) -> None:

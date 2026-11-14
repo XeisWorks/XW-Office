@@ -41,9 +41,10 @@ current_status:
     - "official API credentials are entered masked and stored through SecretStore; the Mollie invoice factory reads only the saved secret reference"
     - "Mollie invoice pagination rejects untrusted page hosts, repeated links and excessive page counts"
     - "fatal monthly collection, Graph mailbox probe, and manual PDF import errors are sanitized before generic BackgroundWorker logging and UI display"
+    - "Graph mailbox probe action is enabled only for catalog routes whose method is mail"
     - "selected OneDrive target folder can be opened from the dialog without implying cloud sync"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
-    - "latest full repository suite after Mollie pagination and all three collector worker-boundary redaction guards: 2425 passed, 7 skipped, 0 failed; repo Ruff, Provider-/Queue-YAML, diff and added-diff secret checks pass"
+    - "latest full repository suite after Mollie pagination, collector worker-boundary redaction, and route-specific mailbox action: 2426 passed, 7 skipped, 0 failed; repo Ruff, Provider-/Queue-YAML, diff and added-diff secret checks pass"
     - "targeted MyPy for Mollie connector and dialog passes with foreign imports skipped; broad current-environment MyPy is blocked by absent optional msal_extensions/Playwright and a NumPy stub/Python-version mismatch; 30-file collector/dialog MyPy passed in the prior recorded environment"
     - "DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values (prior recorded checks)"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
@@ -230,6 +231,7 @@ tasks:
       - "tests/ui/test_expense_review_view.py"
       - "tests/ui/test_invoice_collector_dialog.py::test_collection_results_show_route_outcomes_without_external_ids (includes provenance labels)"
       - "tests/ui/test_invoice_collector_dialog.py::test_collection_results_distinguish_empty_route_from_success"
+      - "tests/ui/test_invoice_collector_dialog.py::test_graph_mailbox_action_is_enabled_only_for_mail_routes"
       - "tests/ui/test_invoice_collector_dialog.py::test_manual_import_runs_in_worker_and_publishes_partial_results_on_cancel"
       - "tests/ui/test_invoice_collector_dialog.py::test_manual_import_displays_out_of_period_documents_as_skipped"
     deliverables:
@@ -371,7 +373,7 @@ tasks:
     status: "in_progress"
     depends_on: ["T05", "T06", "T07"]
     evidence:
-      - "python -m pytest tests/ -q: 2425 passed, 7 skipped, 0 failed"
+      - "python -m pytest tests/ -q: 2426 passed, 7 skipped, 0 failed"
       - "python -m ruff check .: passed"
       - "Targeted mypy on changed Mollie connector and dialog with foreign imports skipped: passed; broad local mypy unavailable due missing optional msal_extensions/Playwright and NumPy stub/Python-version mismatch"
       - "Provider and task queue YAML parse: passed"

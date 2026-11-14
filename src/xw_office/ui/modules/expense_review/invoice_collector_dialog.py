@@ -123,6 +123,7 @@ class InvoiceCollectorDialog(QDialog):
         self._route.currentIndexChanged.connect(self._route_changed)
         self._provider_changed()
         self._build_ui()
+        self._route_changed()
         self._load_saved_connections()
         saved = str(self._settings.value("invoice_collection/target_folder") or "").strip()
         if saved:
@@ -169,6 +170,16 @@ class InvoiceCollectorDialog(QDialog):
 
     def _route_changed(self, *_args: object) -> None:
         route = self._route.currentData()
+        mail_test_button = getattr(self, "_mail_test_button", None)
+        if mail_test_button is not None:
+            mail_test_button.setEnabled(
+                route is not None
+                and route.method == "mail"
+                and not (
+                    self._mail_test_worker is not None
+                    and self._mail_test_worker.isRunning()
+                )
+            )
         self._api_token.clear()
         visible = route is not None and route.method == "official_api"
         self._api_token_label.setVisible(visible)
@@ -538,7 +549,7 @@ class InvoiceCollectorDialog(QDialog):
     def _on_mail_test_finished(self, worker: BackgroundWorker) -> None:
         if self._mail_test_worker is worker:
             self._mail_test_worker = None
-        self._mail_test_button.setEnabled(True)
+        self._route_changed()
 
     def _cancel_fetch(self) -> None:
         worker = self._fetch_worker
