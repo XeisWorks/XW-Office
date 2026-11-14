@@ -646,6 +646,53 @@ def test_collection_results_distinguish_empty_route_from_success(
     assert dialog._status.text() == "Abruf abgeschlossen; keine passenden Dokumente gefunden."
 
 
+def test_retry_action_targets_only_routes_that_failed_last_run(
+    qtbot: object, monkeypatch: object, tmp_path: Path
+) -> None:
+    dialog = InvoiceCollectorDialog(
+        tenant_id="xw",
+        connection_repository=ConnectionRepository(tmp_path / "connections.sqlite3"),
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    result = CollectionRun(
+        summary=CollectionSummary(
+            (
+                CollectionItemResult(
+                    source_id="opaque-one",
+                    route_key="mail_pdf",
+                    connection_id="connection-one",
+                    provider_id="browserstack",
+                    tenant_id="xw",
+                    account_alias="billing",
+                    error="AUTH_REQUIRED: Anmeldung erforderlich",
+                ),
+                CollectionItemResult(
+                    source_id="opaque-two",
+                    route_key="mail_pdf",
+                    connection_id="connection-two",
+                    provider_id="figma",
+                    tenant_id="xw",
+                    account_alias="billing",
+                    error="OUT_OF_PERIOD: outside selected period",
+                ),
+            )
+        )
+    )
+    dialog._on_collection_finished(0, result)
+    requested: list[set[tuple[str, str]] | None] = []
+    monkeypatch.setattr(
+        dialog,
+        "_fetch_active",
+        lambda: requested.append(dialog._pending_retry_targets),
+    )
+
+    assert dialog._retry_button.isEnabled()
+    dialog._retry_failed_routes()
+
+    assert requested == [{("connection-one", "mail_pdf")}]
+    assert dialog._pending_retry_targets == {("connection-one", "mail_pdf")}
+
+
 def test_manual_import_runs_in_worker_and_publishes_partial_results_on_cancel(
     qtbot: object, monkeypatch, tmp_path: Path
 ) -> None:

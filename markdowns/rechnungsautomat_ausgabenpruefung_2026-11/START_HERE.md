@@ -63,7 +63,7 @@ Contract-Tests – keine Änderung an Dialog, Orchestrator, PDF-Pipeline oder On
   sowie konfigurierbare Priorität sind noch nicht umgesetzt.
 - **Keine Provider-Sonderlogik in UI/Orchestrator:** Manifest und Connector-Factories sind
   explizit und die gemeinsame Pipeline ist providerunabhängig. Der aktuelle Dialog ist noch ein
-  erster Slice; Capability-gesteuerte Auth-/Retry-Aktionen bleiben teilweise offen.
+  erster Slice; Auth-Erneuerung und weitere Capability-gesteuerte Aktionen bleiben offen.
 - **Secrets:** Windows Credential Manager/keyring oder geprüfter verschlüsselter Speicher.
   Keine echten Tokens, Cookies, Passwörter, 2FA-Seeds, PDFs oder Browserprofile in Git,
   OneDrive-Sitzungsordnern, Logs oder Testartefakten.

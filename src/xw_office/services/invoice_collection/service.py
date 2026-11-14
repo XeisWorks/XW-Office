@@ -1,7 +1,7 @@
 """Application service wiring local connections to factories and orchestrator."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -69,8 +69,24 @@ class InvoiceCollectionService:
         cancel: CancelToken | None = None,
         max_workers: int = 2,
         period: DateRange | None = None,
+        route_targets: set[tuple[str, str]] | None = None,
     ) -> CollectionRun:
         active_connections, invalid_records = self.connections.list_enabled_with_issues()
+        if route_targets is not None:
+            selected_connections: list[ProviderConnection] = []
+            for connection in active_connections:
+                selected_routes = tuple(
+                    setting
+                    for setting in connection.route_settings
+                    if setting.enabled
+                    and (str(connection.connection_id), setting.route_key) in route_targets
+                )
+                if selected_routes:
+                    selected_connections.append(
+                        replace(connection, route_settings=selected_routes)
+                    )
+            active_connections = selected_connections
+            invalid_records = []
         fingerprints = {
             str(connection.connection_id): _connection_fingerprint(connection)
             for connection in active_connections

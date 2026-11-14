@@ -88,6 +88,8 @@ class InvoiceCollectorDialog(QDialog):
         self._manual_worker: BackgroundWorker | None = None
         self._review_worker: BackgroundWorker | None = None
         self._fetch_generation = 0
+        self._retry_targets: set[tuple[str, str]] = set()
+        self._pending_retry_targets: set[tuple[str, str]] | None = None
         self._folder = QLineEdit()
         self._folder.setReadOnly(True)
         self._folder.setAccessibleName("OneDrive-Zielordner")
@@ -272,6 +274,10 @@ class InvoiceCollectorDialog(QDialog):
         self._fetch_button = QPushButton("Alle aktiven Verbindungen abrufen")
         self._fetch_button.clicked.connect(self._fetch_active)
         actions.addWidget(self._fetch_button)
+        self._retry_button = QPushButton("Fehlerhafte Routen erneut abrufen")
+        self._retry_button.setEnabled(False)
+        self._retry_button.clicked.connect(self._retry_failed_routes)
+        actions.addWidget(self._retry_button)
         self._cancel_button = QPushButton("Abruf abbrechen")
         self._cancel_button.setEnabled(False)
         self._cancel_button.clicked.connect(self._cancel_fetch)
@@ -630,6 +636,8 @@ class InvoiceCollectorDialog(QDialog):
         self._status.setText("OneDrive-Ordner ausgewählt; Cloudstatus wird erst remote bestätigt.")
 
     def _fetch_active(self) -> None:
+        route_targets = self._pending_retry_targets
+        self._pending_retry_targets = None
         if self._review_worker is not None and self._review_worker.isRunning():
             return
         if self._manual_worker is not None and self._manual_worker.isRunning():
@@ -638,6 +646,22 @@ class InvoiceCollectorDialog(QDialog):
             self._status.setText("Bitte zuerst einen Zielordner auswählen.")
             return
         connections, invalid_records = self._connection_repository.list_enabled_with_issues()
+        if route_targets is not None:
+            active_routes = {
+                (str(connection.connection_id), route.route_key)
+                for connection in connections
+                for route in connection.route_settings
+                if route.enabled
+            }
+            route_targets.intersection_update(active_routes)
+            if not route_targets:
+                self._retry_targets.clear()
+                self._retry_button.setEnabled(False)
+                self._status.setText(
+                    "Die fehlgeschlagenen Routen sind nicht mehr aktiv. "
+                    "Bitte Verbindungen prüfen und erneut abrufen."
+                )
+                return
         if not connections and not invalid_records:
             self._status.setText(
                 "Keine aktiven Provider-Verbindungen eingerichtet. "
@@ -666,16 +690,23 @@ class InvoiceCollectorDialog(QDialog):
         self._fetch_generation += 1
         generation = self._fetch_generation
         self._fetch_button.setEnabled(False)
+        self._retry_button.setEnabled(False)
         self._manual_button.setEnabled(False)
         self._cancel_button.setEnabled(True)
-        self._status.setText(
-            f"{len(connections)} aktive Verbindung(en), "
-            f"{len(invalid_records)} fehlerhafte Konfiguration(en) werden geprüft …"
-        )
+        if route_targets is not None:
+            self._status.setText(
+                f"{len(route_targets)} fehlgeschlagene Route(n) werden erneut geprüft …"
+            )
+        else:
+            self._status.setText(
+                f"{len(connections)} aktive Verbindung(en), "
+                f"{len(invalid_records)} fehlerhafte Konfiguration(en) werden geprüft …"
+            )
         try:
             period = self._selected_period()
         except ValueError:
             self._fetch_button.setEnabled(True)
+            self._retry_button.setEnabled(bool(self._retry_targets))
             self._manual_button.setEnabled(True)
             self._cancel_button.setEnabled(False)
             self._status.setText("Das Enddatum muss am oder nach dem Startdatum liegen.")
@@ -684,7 +715,12 @@ class InvoiceCollectorDialog(QDialog):
         # worker itself can serve as the cooperative CancelToken.
         worker: BackgroundWorker
         worker = BackgroundWorker(
-            lambda: _collect_active_safely(service, cancel=worker, period=period)
+            lambda: _collect_active_safely(
+                service,
+                cancel=worker,
+                period=period,
+                route_targets=route_targets,
+            )
         )
         self._fetch_worker = worker
         worker.signals.result.connect(
@@ -697,6 +733,13 @@ class InvoiceCollectorDialog(QDialog):
             lambda token=generation, current=worker: self._on_fetch_finished(token, current)
         )
         worker.start()
+
+    def _retry_failed_routes(self) -> None:
+        if not self._retry_targets:
+            return
+        self._pending_retry_targets = set(self._retry_targets)
+        self._retry_button.setEnabled(False)
+        self._fetch_active()
 
     def _test_mailbox_access(self) -> None:
         route = self._route.currentData()
@@ -812,6 +855,20 @@ class InvoiceCollectorDialog(QDialog):
         if not isinstance(result, CollectionRun):
             self._status.setText("Abruf lieferte ein ungültiges Ergebnis.")
             return
+        self._retry_targets = {
+            (item.connection_id, item.route_key)
+            for item in result.summary.items
+            if item.connection_id
+            and item.route_key
+            and item.error
+            and not item.error.startswith("OUT_OF_PERIOD:")
+        }
+        self._retry_targets.update(
+            (issue.connection_id, issue.route_key)
+            for issue in result.issues
+            if issue.route_key != "connection_configuration"
+        )
+        self._retry_button.setEnabled(bool(self._retry_targets))
         issue_count = len(result.issues)
         error_count = result.summary.error_count
         successful_count = result.summary.new_count + result.summary.existing_count
@@ -911,8 +968,10 @@ class InvoiceCollectorDialog(QDialog):
         if self._fetch_worker is worker:
             self._fetch_worker = None
         if generation != self._fetch_generation:
+            self._retry_button.setEnabled(bool(self._retry_targets))
             return
         self._fetch_button.setEnabled(True)
+        self._retry_button.setEnabled(bool(self._retry_targets))
         self._manual_button.setEnabled(self._manual_worker is None)
         self._cancel_button.setEnabled(False)
         if worker.cancelled:
@@ -1207,10 +1266,15 @@ def _collect_active_safely(
     *,
     cancel: CancelToken,
     period: DateRange,
+    route_targets: set[tuple[str, str]] | None = None,
 ) -> CollectionRun:
     """Convert fatal collection failures before the generic worker logs them."""
     return _run_collector_operation_safely(
-        lambda: service.collect_active(cancel=cancel, period=period)
+        lambda: service.collect_active(
+            cancel=cancel,
+            period=period,
+            route_targets=route_targets,
+        )
     )
 
 

@@ -1234,6 +1234,59 @@ def test_collection_service_wires_saved_routes_to_factory_and_orchestrator(tmp_p
     assert repeated.summary.existing_count == 1
 
 
+def test_collection_service_retries_only_requested_active_route(tmp_path: Path) -> None:
+    first_source = _pdf(tmp_path / "first-route.pdf")
+    second_source = _pdf(tmp_path / "second-route.pdf")
+    repository = ConnectionRepository(tmp_path / "retry-connections.sqlite3")
+    first = ProviderConnection.create(
+        provider_id="fixture_one",
+        tenant_id=TenantId.XW,
+        account_alias="first",
+        route_settings=(
+            RouteSettings(route_key="manual_import", options={"connector": "fixture"}),
+        ),
+    )
+    second = ProviderConnection.create(
+        provider_id="fixture_two",
+        tenant_id=TenantId.XW,
+        account_alias="second",
+        route_settings=(
+            RouteSettings(route_key="manual_import", options={"connector": "fixture"}),
+        ),
+    )
+    repository.save(first)
+    repository.save(second)
+    created: list[str] = []
+    factories = ConnectorFactoryRegistry()
+
+    def make_connector(
+        saved: ProviderConnection, _settings: RouteSettings, _period: DateRange | None
+    ):
+        created.append(saved.provider_id)
+        source = first_source if saved.connection_id == first.connection_id else second_source
+        return ManualImportConnector(connection=saved, files=[source])
+
+    factories.register("fixture", make_connector)
+    target = tmp_path / "retry-onedrive"
+    target.mkdir()
+    service = InvoiceCollectionService(
+        connections=repository,
+        factories=factories,
+        target_root=target,
+        journal=InvoiceJournal(tmp_path / "retry-journal.sqlite3"),
+    )
+
+    run = service.collect_active(
+        route_targets={(str(first.connection_id), "manual_import")}
+    )
+
+    assert created == ["fixture_one"]
+    assert run.connection_ids == (str(first.connection_id),)
+    assert len(run.summary.items) == 1
+    assert run.summary.items[0].provider_id == "fixture_one"
+    assert run.summary.new_count == 1
+
+
 def test_service_resumes_cancelled_run_with_same_context_without_persisting_target_or_mailbox(
     tmp_path: Path,
 ) -> None:

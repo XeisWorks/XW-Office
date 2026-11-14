@@ -36,6 +36,7 @@ current_status:
     - "same tenant/sink/PDF hash across routes publishes once and adds hashed source provenance to the journal"
     - "invoice journal schema 5 migrates legacy external IDs to hashed provenance, stores review-resolution metadata and never persists new raw external IDs"
     - "review resolution requires explicit user date/type, revalidates PDF identity, publishes no-clobber, updates journal and removes old copy only after success"
+    - "retry action targets only failed active connection/route pairs from the latest run; other providers do not rerun"
     - "collection results show safe provider/route provenance labels without raw source or external IDs"
     - "saved provider connections can be selected, updated by stable ID, and disabled; re-enabling still requires verified routes"
     - "unverified connection settings can be saved locally as disabled drafts for later route verification"
@@ -47,7 +48,7 @@ current_status:
     - "selected OneDrive target folder can be opened from the dialog without implying cloud sync"
     - "selected tenant _needs_review folder can be opened only within the selected target; explicit review resolution validates, no-clobber publishes by invoice date, updates schema-5 metadata, then removes the review copy"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
-    - "latest full repository suite after journal schema 5 and review-resolution workflow: 2433 passed, 7 skipped, 0 failed; repo Ruff, Provider-/Queue-YAML, diff and added-diff secret checks pass"
+    - "latest full repository suite after selective failed-route retry: 2435 passed, 7 skipped, 0 failed; repo Ruff, Queue-YAML, changed-module MyPy, diff and added-diff secret checks pass"
     - "targeted MyPy for Mollie connector, registry and dialog passes with foreign imports skipped; broad current-environment MyPy is blocked by absent optional msal_extensions/Playwright and a NumPy stub/Python-version mismatch; 30-file collector/dialog MyPy passed in the prior recorded environment"
     - "DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values (prior recorded checks)"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
@@ -196,6 +197,7 @@ tasks:
       - "tests/unit/test_invoice_collection_foundations.py::test_invoice_journal_migrates_v4_review_metadata_columns"
       - "tests/unit/test_invoice_collection_foundations.py::test_invoice_review_resolution_moves_pdf_and_updates_journal_truthfully"
       - "tests/unit/test_invoice_collection_foundations.py::test_invoice_review_resolution_never_overwrites_archive_collision"
+      - "tests/unit/test_invoice_collection_foundations.py::test_collection_service_retries_only_requested_active_route"
     deliverables:
       - "PDF size/signature/MIME/parser/encryption validation"
       - "SHA-256, deterministic safe naming and tenant-scoped deduplication"
@@ -243,6 +245,7 @@ tasks:
       - "tests/ui/test_invoice_collector_dialog.py::test_provider_portal_menu_opens_only_https_hosts_from_catalog"
       - "tests/ui/test_invoice_collector_dialog.py::test_review_folder_action_opens_only_the_selected_tenant_review_directory"
       - "tests/ui/test_invoice_collector_dialog.py::test_dialog_resolves_review_pdf_after_explicit_date_and_type_confirmation"
+      - "tests/ui/test_invoice_collector_dialog.py::test_retry_action_targets_only_routes_that_failed_last_run"
       - "tests/unit/test_invoice_collection_foundations.py::test_registry_rejects_provider_portal_urls_instead_of_hosts"
       - "tests/ui/test_invoice_collector_dialog.py::test_manual_import_runs_in_worker_and_publishes_partial_results_on_cancel"
       - "tests/ui/test_invoice_collector_dialog.py::test_manual_import_displays_out_of_period_documents_as_skipped"
@@ -255,6 +258,7 @@ tasks:
     acceptance:
       - "Existing refresh, filters, tenant tabs, settings and supplier URLs remain unaffected"
       - "One failed connection does not abort others"
+      - "Retry after partial failure runs only the failed active route pairs"
       - "View destruction and cancellation do not leak QThreads or apply stale results"
       - "Adding a fixture provider requires no dialog/orchestrator code change"
       - "Manual import works end-to-end from UI to sink"
@@ -385,10 +389,10 @@ tasks:
     status: "in_progress"
     depends_on: ["T05", "T06", "T07"]
     evidence:
-      - "python -m pytest -q: 2433 passed, 7 skipped, 0 failed (after journal schema 5 and review-resolution workflow)"
+      - "python -m pytest -q: 2435 passed, 7 skipped, 0 failed (after selective failed-route retry)"
       - "OneDrive identical-publish race test: 5 consecutive passes after synchronizing both target-existence checks"
       - "python -m ruff check .: passed"
-      - "Targeted mypy on changed Mollie connector/registry, journal/review service and dialog with foreign imports skipped: passed using --disable-error-code=unused-ignore. Without that flag, two pre-existing unused-ignore findings remain in the dialog. Broad local mypy is blocked by missing optional msal_extensions/Playwright and NumPy stub/Python-version mismatch"
+      - "Targeted mypy on changed invoice collection service and dialog with foreign imports skipped: passed using --disable-error-code=unused-ignore --disable-error-code=no-any-return (the latter suppresses the Any propagated by skipped repository imports). Broad local mypy is blocked by missing optional msal_extensions/Playwright and NumPy stub/Python-version mismatch"
       - "Provider and task queue YAML parse: passed"
       - "git diff --check: passed"
       - "Added-diff secret-pattern scan: no matches"

@@ -75,8 +75,8 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    Diese Grenzen sind umgesetzt und getestet; neue Workergrenzen duerfen keine rohen
    Providerfehler, Tokens, signierten URLs oder Exception-Chains protokollieren.
    Graph-Mailbox-Probe und Mailbox-Eingaben folgen der Katalog-Auth-Capability `microsoft_graph_mail`;
-   geschuetzte Credential-Eingabe folgt `api_token`. Erhalte diese Capability-Steuerung. Weitere capability-basierte Auth-/Retry-/Portalaktionen
-   sind noch nicht vollstaendig umgesetzt.
+   geschuetzte Credential-Eingabe folgt `api_token`. Erhalte diese Capability-Steuerung. Eine routebezogene Wiederholung nach Teilfehlern ist umgesetzt; weitere Auth-Erneuerungs- und
+   Capability-Aktionen bleiben offen. Erhalte die routebezogene Retry-Filterung.
 4. Der Live-Mailpilot ist extern blockiert: Anbieter, Rechnungs-Mailbox und bestaetigte
    Absenderdomain(s) sind noch nicht geklaert. Frage nie nach diesen Werten oder Geheimnissen
    im Chat. Wenn der Benutzer soweit ist, gib genau eine lokale UI-Anweisung: in Finanzen >
