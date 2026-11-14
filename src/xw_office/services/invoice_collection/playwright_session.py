@@ -78,36 +78,38 @@ class PlaywrightPersistentSession:
                     InvoiceErrorCode.POLICY_BLOCKED,
                     "Browserprofil wird bereits von einem anderen Abruf verwendet",
                 ) from exc
-            if self._playwright_factory is None:
-                try:
-                    from playwright.sync_api import sync_playwright
-                except ImportError as exc:
-                    self.close()
-                    raise InvoiceCollectionError(
-                        InvoiceErrorCode.CONFIGURATION_ERROR,
-                        "Playwright ist für diese Browserroute nicht installiert",
-                    ) from exc
-                self._playwright = sync_playwright().start()
-            else:
-                self._playwright = self._playwright_factory().start()
-            if self.browser_mode in {"system_chrome_cdp", "system_chrome_existing_profile"}:
-                self._context = self._connect_system_chrome()
-            elif self.browser_mode == "playwright_chromium":
-                try:
+            try:
+                if self._playwright_factory is None:
+                    try:
+                        from playwright.sync_api import sync_playwright
+                    except ImportError as exc:
+                        raise InvoiceCollectionError(
+                            InvoiceErrorCode.CONFIGURATION_ERROR,
+                            "Playwright ist für diese Browserroute nicht installiert",
+                        ) from exc
+                    self._playwright = sync_playwright().start()
+                else:
+                    self._playwright = self._playwright_factory().start()
+                if self.browser_mode in {
+                    "system_chrome_cdp",
+                    "system_chrome_existing_profile",
+                }:
+                    self._context = self._connect_system_chrome()
+                elif self.browser_mode == "playwright_chromium":
                     self._context = self._playwright.chromium.launch_persistent_context(
                         user_data_dir=str(self.profile_dir),
                         headless=False,
                         accept_downloads=True,
                     )
-                except Exception:
-                    self.close()
-                    raise
-            else:
+                else:
+                    raise InvoiceCollectionError(
+                        InvoiceErrorCode.CONFIGURATION_ERROR,
+                        "Unbekannter Playwright-Browsermodus",
+                    )
+            except Exception:
+                # Every failed startup must release both the profile lock and runtime.
                 self.close()
-                raise InvoiceCollectionError(
-                    InvoiceErrorCode.CONFIGURATION_ERROR,
-                    "Unbekannter Playwright-Browsermodus",
-                )
+                raise
             return self._context
 
     def _connect_system_chrome(self) -> Any:
@@ -176,25 +178,62 @@ class PlaywrightPersistentSession:
     def probe(self) -> bool:
         context = self._ensure_started()
         page = context.pages[0] if context.pages else context.new_page()
-        page.goto(self.probe_url, wait_until="domcontentloaded", timeout=self.timeout_ms)
-        return bool(self.probe_callback(page))
+        self._run_portal_action(
+            page.goto,
+            self.probe_url,
+            wait_until="domcontentloaded",
+            timeout=self.timeout_ms,
+        )
+        return bool(self._run_portal_action(self.probe_callback, page))
 
     def open_login(self) -> None:
         context = self._ensure_started()
         page = context.pages[0] if context.pages else context.new_page()
-        page.goto(self.login_url, wait_until="domcontentloaded", timeout=self.timeout_ms)
+        self._run_portal_action(
+            page.goto,
+            self.login_url,
+            wait_until="domcontentloaded",
+            timeout=self.timeout_ms,
+        )
 
     def discover(self) -> list[DocumentCandidate]:
         context = self._ensure_started()
         page = context.pages[0] if context.pages else context.new_page()
-        page.goto(self.probe_url, wait_until="domcontentloaded", timeout=self.timeout_ms)
-        result = self.discover_callback(page)
+        self._run_portal_action(
+            page.goto,
+            self.probe_url,
+            wait_until="domcontentloaded",
+            timeout=self.timeout_ms,
+        )
+        result = self._run_portal_action(self.discover_callback, page)
         return list(result or ())
 
     def download(self, candidate: DocumentCandidate, destination: Path) -> None:
         context = self._ensure_started()
         page = context.pages[0] if context.pages else context.new_page()
-        self.download_callback(page, candidate, destination)
+        self._run_portal_action(self.download_callback, page, candidate, destination)
+
+    @staticmethod
+    def _run_portal_action(callback: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        try:
+            return callback(*args, **kwargs)
+        except InvoiceCollectionError as exc:
+            safe_messages = {
+                InvoiceErrorCode.AUTH_REQUIRED: "Browserroute benötigt eine Anmeldung",
+                InvoiceErrorCode.POLICY_BLOCKED: "Browserroute wurde durch eine Richtlinie blockiert",
+            }
+            message = safe_messages.get(exc.code, "Browserroute meldet einen Fehler")
+            raise InvoiceCollectionError(exc.code, message) from exc
+        except Exception as exc:  # noqa: BLE001 - vendor DOM errors vary by Playwright version
+            if "timeout" in type(exc).__name__.casefold():
+                raise InvoiceCollectionError(
+                    InvoiceErrorCode.TRANSIENT_NETWORK,
+                    "Browserroute hat das Zeitlimit überschritten",
+                ) from exc
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.PROVIDER_CHANGED,
+                "Browserroute konnte die erwartete Seite nicht verarbeiten",
+            ) from exc
 
     @staticmethod
     def save_download(page: Any, trigger: Callable[[], None], destination: Path) -> None:
@@ -238,7 +277,7 @@ class PlaywrightPersistentSession:
                 finally:
                     self._chrome_process = None
                 try:
-                    if playwright is not None and (chrome_alive or self.browser_mode == "playwright_chromium"):
+                    if playwright is not None:
                         try:
                             playwright.stop()
                         except Exception:

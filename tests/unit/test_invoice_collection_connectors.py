@@ -397,6 +397,195 @@ def test_browser_connector_resumes_only_after_route_probe_succeeds(tmp_path: Pat
     assert connector.resume_after_login() == [candidate]
 
 
+def test_playwright_fake_portal_resumes_only_after_manual_login_and_downloads_pdf(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    profile = (
+        tmp_path
+        / "local"
+        / "XeisWorks"
+        / "XW-Office"
+        / "invoice_collection"
+        / "profiles"
+        / "fixture-portal"
+    )
+    connection = _connection("fixture_portal")
+    candidate = DocumentCandidate(
+        connection=connection,
+        route_key="billing_portal",
+        source_id="fake-portal-invoice",
+        external_id=None,
+        document_type=DocumentType.EXPENSE_INVOICE,
+        original_filename="invoice.pdf",
+        document_date=date(2026, 11, 5),
+    )
+
+    class FakePage:
+        authenticated = False
+
+        def goto(self, url, **kwargs):
+            self.current_url = url
+
+        def confirm_manual_login_and_2fa(self):
+            self.authenticated = True
+
+    class FakeContext:
+        def __init__(self):
+            self.pages = [FakePage()]
+
+        def close(self):
+            return None
+
+    class FakeChromium:
+        def launch_persistent_context(self, **kwargs):
+            return FakeContext()
+
+    class FakeRuntime:
+        chromium = FakeChromium()
+
+        def start(self):
+            return self
+
+        def stop(self):
+            return None
+
+    session = PlaywrightPersistentSession(
+        profile_dir=profile,
+        login_url="https://portal.example.test/login",
+        probe_url="https://portal.example.test/invoices",
+        allowed_hosts=frozenset({"portal.example.test"}),
+        probe_callback=lambda page: page.authenticated,
+        discover_callback=lambda page: [candidate] if page.authenticated else [],
+        download_callback=lambda page, _candidate, destination: _pdf(destination),
+        playwright_factory=lambda: FakeRuntime(),
+    )
+    connector = BrowserInvoiceConnector(connection=connection, session=session)
+
+    with pytest.raises(InvoiceCollectionError) as error:
+        connector.resume_after_login()
+    assert error.value.code is InvoiceErrorCode.AUTH_REQUIRED
+
+    connector.open_login()
+    page = session._context.pages[0]
+    page.confirm_manual_login_and_2fa()
+    assert connector.resume_after_login() == [candidate]
+    artifact = connector.download(candidate, tmp_path / "workspace")
+    assert artifact.path.is_file()
+    assert artifact.path.read_bytes().startswith(b"%PDF-")
+
+    connector.close()
+    assert not profile.with_name("fixture-portal.lock").exists()
+
+
+def test_playwright_system_chrome_start_failure_releases_profile_and_runtime(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setattr("xw_office.services.invoice_collection.playwright_session._find_system_chrome", lambda: None)
+    profile = (
+        tmp_path
+        / "local"
+        / "XeisWorks"
+        / "XW-Office"
+        / "invoice_collection"
+        / "profiles"
+        / "fixture-cdp"
+    )
+    runtime = type(
+        "FakeRuntime",
+        (),
+        {"start": lambda self: self, "stop": lambda self: setattr(self, "stopped", True)},
+    )()
+    session = PlaywrightPersistentSession(
+        profile_dir=profile,
+        login_url="https://portal.example.test/login",
+        probe_url="https://portal.example.test/invoices",
+        allowed_hosts=frozenset({"portal.example.test"}),
+        probe_callback=lambda _page: True,
+        discover_callback=lambda _page: [],
+        download_callback=lambda _page, _candidate, _destination: None,
+        playwright_factory=lambda: runtime,
+        browser_mode="system_chrome_cdp",
+    )
+
+    with pytest.raises(InvoiceCollectionError) as error:
+        session.probe()
+
+    assert error.value.code is InvoiceErrorCode.CONFIGURATION_ERROR
+    assert getattr(runtime, "stopped", False) is True
+    assert not profile.with_name("fixture-cdp.lock").exists()
+
+
+@pytest.mark.parametrize(
+    ("callback", "expected_code"),
+    [
+        (
+            lambda _page: (_ for _ in ()).throw(TimeoutError("private timeout detail")),
+            InvoiceErrorCode.TRANSIENT_NETWORK,
+        ),
+        (
+            lambda _page: (_ for _ in ()).throw(RuntimeError("private page response")),
+            InvoiceErrorCode.PROVIDER_CHANGED,
+        ),
+    ],
+)
+def test_playwright_page_callbacks_return_typed_redacted_errors(
+    monkeypatch, tmp_path: Path, callback, expected_code: InvoiceErrorCode
+) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    profile = (
+        tmp_path
+        / "local"
+        / "XeisWorks"
+        / "XW-Office"
+        / "invoice_collection"
+        / "profiles"
+        / "fixture-error"
+    )
+
+    class FakePage:
+        def goto(self, _url, **_kwargs):
+            return None
+
+    class FakeContext:
+        pages = [FakePage()]
+
+        def close(self):
+            return None
+
+    class FakeChromium:
+        def launch_persistent_context(self, **_kwargs):
+            return FakeContext()
+
+    class FakeRuntime:
+        chromium = FakeChromium()
+
+        def start(self):
+            return self
+
+        def stop(self):
+            return None
+
+    session = PlaywrightPersistentSession(
+        profile_dir=profile,
+        login_url="https://portal.example.test/login",
+        probe_url="https://portal.example.test/invoices",
+        allowed_hosts=frozenset({"portal.example.test"}),
+        probe_callback=callback,
+        discover_callback=lambda _page: [],
+        download_callback=lambda _page, _candidate, _destination: None,
+        playwright_factory=lambda: FakeRuntime(),
+    )
+
+    with pytest.raises(InvoiceCollectionError) as error:
+        session.probe()
+
+    assert error.value.code is expected_code
+    assert "private" not in str(error.value)
+    session.close()
+
+
 def test_browser_connector_filters_candidates_to_requested_period(tmp_path: Path) -> None:
     from datetime import date
 
