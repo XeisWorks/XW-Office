@@ -23,6 +23,8 @@ current_status:
     - "invoice dates are parsed only from explicit labels; unknown dates go to _needs_review and known out-of-period PDFs are skipped"
     - "Graph mail discovery no longer treats receivedDateTime as invoice date or filters late-arriving invoices out"
     - "manual PDF import runs in a cancellable worker, honors the selected period, and reports out-of-period files as skipped"
+    - "invalid enabled connection rows are isolated as CONFIGURATION_ERROR while valid connections continue"
+    - "full repository suite: 2392 passed, 7 skipped; repo Ruff, provider/queue YAML and diff checks pass"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
     - "all 18 real provider accounts and 26 route behaviors; mailbox probe is not invoice-route verification"
@@ -127,6 +129,7 @@ tasks:
       - "src/xw_office/services/invoice_collection/journal.py::record_checkpoint"
       - "tests/unit/test_invoice_collection_foundations.py::test_invoice_journal_migrates_v1_and_rejects_newer_schema"
       - "tests/unit/test_invoice_collection_foundations.py::test_service_resumes_cancelled_run_with_same_context_without_persisting_target_or_mailbox"
+      - "tests/unit/test_invoice_collection_foundations.py::test_collection_isolates_invalid_saved_connection_and_keeps_valid_accounts_running"
     deliverables:
       - "Tested LOCALAPPDATA path helper for profiles, auth, journal, tmp and quarantine"
       - "Gitignore hardening as defense in depth"
@@ -183,6 +186,7 @@ tasks:
       - "tests/unit/test_invoice_collection_foundations.py::test_collection_service_wires_saved_routes_to_factory_and_orchestrator (period forwarding)"
       - "tests/unit/test_invoice_collection_foundations.py::test_orchestrator_reports_empty_route_without_source_identifiers"
       - "tests/unit/test_invoice_collection_foundations.py::test_service_resumes_cancelled_run_with_same_context_without_persisting_target_or_mailbox"
+      - "tests/unit/test_invoice_collection_foundations.py::test_collection_isolates_invalid_saved_connection_and_keeps_valid_accounts_running"
       - "tests/ui/test_expense_review_view.py"
       - "tests/ui/test_invoice_collector_dialog.py::test_collection_results_show_route_outcomes_without_external_ids"
       - "tests/ui/test_invoice_collector_dialog.py::test_collection_results_distinguish_empty_route_from_success"

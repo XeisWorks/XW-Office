@@ -1,6 +1,6 @@
 # Rechnungsautomat: Ist-Stand und Abschlussplan
 
-**Pr?fstand: 14.11.2026, `main` bis einschlie?lich `1eb15c6a`.** Diese Datei ist eine Bestandsaufnahme und ein Folgeauftrag, kein Nachweis f?r einen produktiven Rechnungsabruf. Verbindliches Zielbild bleiben `START_HERE.md`, `ARCHITEKTUR.md` und `SICHERHEIT_UND_2FA.md` in diesem Ordner. `TASK_QUEUE.yaml` ist die bestehende Implementierungs-Queue; ihre Statuswerte wurden hier nicht pauschal auf `done` gesetzt. Die j?ngsten Implementierungsschritte umfassen `3b386611`, `159e5bb5`, `f6ade5fe`, `73cc7f1a`, `2c837ba9`, `9590f9e4` und `1eb15c6a`.
+**Pr?fstand: 14.11.2026, `main` bis einschlie?lich `6dc34325`.** Diese Datei ist eine Bestandsaufnahme und ein Folgeauftrag, kein Nachweis f?r einen produktiven Rechnungsabruf. Verbindliches Zielbild bleiben `START_HERE.md`, `ARCHITEKTUR.md` und `SICHERHEIT_UND_2FA.md` in diesem Ordner. `TASK_QUEUE.yaml` ist die bestehende Implementierungs-Queue; ihre Statuswerte wurden hier nicht pauschal auf `done` gesetzt. Die j?ngsten Implementierungsschritte umfassen `3b386611`, `159e5bb5`, `f6ade5fe`, `73cc7f1a`, `2c837ba9`, `9590f9e4`, `1eb15c6a` und `6dc34325`.
 
 ## 1. Herkunft und ursprünglich gemeintes Ergebnis
 
@@ -20,7 +20,7 @@ Das Produktziel ist: In **Finanzen > Ausgabenprüfung** per Klick die **aktivier
 | Abrufadapter | Graph-Mail ist in der Desktop-App mit einer expliziten Factory verdrahtet; Mailbox- und Absenderdomain-Konfiguration wird geprüft. Mollie-API und Playwright bleiben Adapter-/Fake-Grundlage. | Graph-Zugriff technisch angebunden; keine Rechnungsroute live verifiziert |
 | Graph-Mailbox-Probe | Der Dialog öffnet einen sichtbaren MSAL-Systembrowser-Login mit `Mail.Read`; der Probe fragt höchstens eine Nachrichten-ID ab, keine Texte oder Anhänge. Token-Cache ist lokal unter `LOCALAPPDATA` und nach Tenant/Mailbox getrennt. | Zugriffstest vorhanden; bestätigt weder Anbieterregel noch Rechnungsabruf |
 | Browser-Einrichtung | `xw-invoice-collection` bietet `doctor`, `catalog`, `login`, `login-all`, `probe`. Login öffnet eine Startseite; `probe_callback=True`, `discover_callback=[]` und `download_callback=None` sind Platzhalter. | Anmeldung/Diagnose, kein Rechnungsabruf |
-| Testlauf | Vollst?ndige Repository-Suite nach dem Monatsimport-Fix: **2.391 bestanden, 7 ?bersprungen**, 0 fehlgeschlagen; repo-weites Ruff, Provider-/Queue-YAML, `git diff --check` und Secret-Musterpr?fung bestanden. | Breite lokale Regression, keine Live-Abnahme |
+| Testlauf | Vollst?ndige Repository-Suite nach den aktuellen ?nderungen: **2.392 bestanden, 7 ?bersprungen**, 0 fehlgeschlagen; repo-weites Ruff, Provider-/Queue-YAML, `git diff --check` und Secret-Musterpr?fung bestanden. | Breite lokale Regression, keine Live-Abnahme |
 
 Die optionale Abhängigkeit `invoice-collection` in `pyproject.toml` umfasst Keyring, `msal-extensions` und Playwright. Das Vorhandensein dieser Pakete beweist keine eingerichteten Konten oder erteilten Microsoft-Rechte.
 
@@ -42,9 +42,9 @@ Die optionale Abhängigkeit `invoice-collection` in `pyproject.toml` umfasst Key
 ### A. Ehrliche, sichere Bedienung herstellen
 
 - Baseline und aktuelle Katalog-/Factory-Matrix dokumentieren; `TASK_QUEUE.yaml` mit belegter Evidenz aktualisieren.
-- Bereits vorhanden: planned-Routen werden angezeigt und können nicht aktiviert werden; gespeicherte Routen werden beim Abruf erneut gegen Katalog-Maturity geprüft. Noch offen: vorhandene Alt-Connections strukturiert als `CONFIGURATION_ERROR` darstellen.
+- Bereits vorhanden: planned-Routen werden angezeigt und k?nnen nicht aktiviert werden; gespeicherte Routen werden beim Abruf erneut gegen Katalog-Maturity gepr?ft. Fehlende Katalogrouten und besch?digte gespeicherte Verbindungszeilen erscheinen als `CONFIGURATION_ERROR`; g?ltige Verbindungen laufen weiter. Belegt durch `test_collection_isolates_invalid_saved_connection_and_keeps_valid_accounts_running`.
 - Bereits vorhanden: 0 erfolgreiche Dokumente werden nicht als erfolgreicher Abruf ausgegeben; Setup-/Discovery-Exceptions sind pro Route isoliert, Locks verwenden Connection-IDs; Ergebnisse erscheinen je Route/Kandidat. Noch offen: konkrete Handlung für Auth-, Konflikt- und Policyfehler.
-- Vorhanden: PDF-Import und Sink-Preflight laufen im abbrechbaren Worker; UI-Resultate werden nur im Hauptthread aktualisiert. Die vollst?ndige Repository-Suite mit Qt-Regression besteht (2.391 passed, 7 skipped). Offen: Review-Aufl?sung und konkrete UI-Handlungen f?r Auth-, Konflikt- und Policyfehler.
+- Vorhanden: PDF-Import und Sink-Preflight laufen im abbrechbaren Worker; UI-Resultate werden nur im Hauptthread aktualisiert. Die vollst?ndige Repository-Suite mit Qt-Regression besteht (2.392 passed, 7 skipped). Offen: Review-Aufl?sung und konkrete UI-Handlungen f?r Auth-, Konflikt- und Policyfehler.
 
 ### B. Monatslauf und Datenwahrheit end-to-end
 
