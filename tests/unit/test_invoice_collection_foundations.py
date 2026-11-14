@@ -15,6 +15,7 @@ from xw_office.services.invoice_collection.connections import ConnectionReposito
 from xw_office.services.invoice_collection.domain import (
     AuthStatus,
     ConfigurationStatus,
+    DateRange,
     DocumentCandidate,
     DocumentType,
     DownloadedArtifact,
@@ -279,6 +280,38 @@ def test_orchestrator_continues_after_one_connector_failure(tmp_path: Path) -> N
     assert any(item.outcome is not None and item.outcome.value == "NEW" for item in summary.items)
 
 
+def test_orchestrator_isolates_discovery_failure_and_uses_connection_lock(
+    tmp_path: Path,
+) -> None:
+    source = _pdf(tmp_path / "after-discovery-error.pdf")
+    connection = ProviderConnection.create(
+        provider_id="fixture", tenant_id=TenantId.XW, account_alias="a"
+    )
+
+    class BrokenDiscovery:
+        route_key = "broken"
+
+        def __init__(self) -> None:
+            self.connection = connection
+
+        def discover(self) -> list[DocumentCandidate]:
+            raise RuntimeError("authorization token must not be shown")
+
+        def download(self, candidate: DocumentCandidate, workspace: Path, cancel: object = None):
+            raise AssertionError("download should not be called")
+
+    good = ManualImportConnector(connection=connection, files=[source])
+    sink_root = tmp_path / "onedrive"
+    sink_root.mkdir()
+    summary = CollectionOrchestrator(
+        DocumentPipeline(sink=OneDriveLocalSink(sink_root)), workspace_root=tmp_path
+    ).collect([BrokenDiscovery(), good])  # type: ignore[list-item]
+    assert summary.new_count == 1
+    failed = next(item for item in summary.items if item.route_key == "broken")
+    assert failed.error == "INTERNAL_ERROR: RuntimeError"
+    assert "token" not in failed.error.casefold()
+
+
 def test_orchestrator_limits_parallel_connector_workers(tmp_path: Path) -> None:
     source_one = _pdf(tmp_path / "one.pdf", "one")
     source_two = _pdf(tmp_path / "two.pdf", "two")
@@ -356,9 +389,16 @@ def test_collection_service_wires_saved_routes_to_factory_and_orchestrator(tmp_p
     )
     repository.save(connection)
     factories = ConnectorFactoryRegistry()
+    selected_period = DateRange(date(2026, 11, 1), date(2026, 11, 30))
+    received_periods: list[DateRange | None] = []
+
+    def make_connector(saved: ProviderConnection, settings: RouteSettings, period: DateRange | None):
+        received_periods.append(period)
+        return ManualImportConnector(connection=saved, files=[source])
+
     factories.register(
         "fixture",
-        lambda saved, settings: ManualImportConnector(connection=saved, files=[source]),
+        make_connector,
     )
     target = tmp_path / "onedrive"
     target.mkdir()
@@ -367,6 +407,7 @@ def test_collection_service_wires_saved_routes_to_factory_and_orchestrator(tmp_p
         factories=factories,
         target_root=target,
         journal=InvoiceJournal(tmp_path / "journal.sqlite3"),
-    ).collect_active()
+    ).collect_active(period=selected_period)
     assert run.issues == ()
     assert run.summary.new_count == 1
+    assert received_periods == [selected_period]

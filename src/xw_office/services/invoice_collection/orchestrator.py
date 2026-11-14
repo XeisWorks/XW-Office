@@ -18,6 +18,7 @@ class CollectionItemResult:
     source_id: str
     outcome: DocumentOutcome | None = None
     error: str | None = None
+    route_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -64,12 +65,21 @@ class CollectionOrchestrator:
                 for index, connector in enumerate(connector_list):
                     if cancel is not None and cancel.cancelled:
                         return CollectionSummary(tuple(results), cancelled=True)
-                    candidates = connector.discover()
-                    connection_id = "unknown"
-                    if candidates:
-                        connection_id = str(candidates[0].connection.connection_id)
+                    connection = getattr(connector, "connection", None)
+                    connection_id = str(getattr(connection, "connection_id", index))
                     lock = account_locks.setdefault(connection_id, Lock())
                     connector_workspace = workspace_path / str(index)
+                    try:
+                        candidates = connector.discover()
+                    except Exception as exc:  # noqa: BLE001 - isolate a failed route
+                        results.append(
+                            CollectionItemResult(
+                                source_id=connection_id,
+                                route_key=connector.route_key,
+                                error=_safe_error(exc),
+                            )
+                        )
+                        continue
                     futures.append(
                         executor.submit(
                             self._collect_connector,
@@ -104,10 +114,24 @@ class CollectionOrchestrator:
                         CollectionItemResult(
                             source_id=candidate.source_id,
                             outcome=processed.receipt.outcome,
+                            route_key=candidate.route_key,
                         )
                     )
                 except Exception as exc:  # noqa: BLE001 - continue independent providers
                     results.append(
-                        CollectionItemResult(source_id=candidate.source_id, error=str(exc))
+                        CollectionItemResult(
+                            source_id=candidate.source_id,
+                            route_key=candidate.route_key,
+                            error=_safe_error(exc),
+                        )
                     )
         return results
+
+
+def _safe_error(error: Exception) -> str:
+    """Expose stable application errors without leaking arbitrary connector text."""
+    from xw_office.services.invoice_collection.errors import InvoiceCollectionError
+
+    if isinstance(error, InvoiceCollectionError):
+        return f"{error.code.value}: {error}"
+    return f"INTERNAL_ERROR: {type(error).__name__}"

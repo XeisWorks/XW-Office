@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+import calendar
+from datetime import date, datetime
 import uuid
+from zoneinfo import ZoneInfo
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QDate, QSettings, Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
+    QDateEdit,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -24,6 +28,7 @@ from xw_office.core.worker import BackgroundWorker
 from xw_office.services.invoice_collection.connectors.manual_import import ManualImportConnector
 from xw_office.services.invoice_collection.connections import ConnectionRepository
 from xw_office.services.invoice_collection.domain import (
+    DateRange,
     DocumentType,
     ProviderConnection,
     RouteSettings,
@@ -72,6 +77,11 @@ class InvoiceCollectorDialog(QDialog):
         self._route = QComboBox()
         self._account_alias = QLineEdit("default")
         self._account_alias.setAccessibleName("Kontoalias")
+        now = datetime.now(ZoneInfo("Europe/Vienna")).date()
+        month_start = now.replace(day=1)
+        month_end = now.replace(day=calendar.monthrange(now.year, now.month)[1])
+        self._period_start = _date_edit(month_start)
+        self._period_end = _date_edit(month_end)
         self._document_type = QComboBox()
         for item in DocumentType:
             self._document_type.addItem(item.value, item)
@@ -134,6 +144,8 @@ class InvoiceCollectorDialog(QDialog):
         root.addLayout(folder_row)
         form = QFormLayout()
         form.addRow("Mandant", self._tenant)
+        form.addRow("Rechnungsdatum von", self._period_start)
+        form.addRow("Rechnungsdatum bis", self._period_end)
         form.addRow("Provider", self._provider)
         form.addRow("Abrufroute", self._route)
         form.addRow("Kontoalias", self._account_alias)
@@ -197,10 +209,19 @@ class InvoiceCollectorDialog(QDialog):
         self._fetch_button.setEnabled(False)
         self._cancel_button.setEnabled(True)
         self._status.setText(f"{len(connections)} aktive Verbindung(en) werden abgerufen …")
+        try:
+            period = self._selected_period()
+        except ValueError:
+            self._fetch_button.setEnabled(True)
+            self._cancel_button.setEnabled(False)
+            self._status.setText("Das Enddatum muss am oder nach dem Startdatum liegen.")
+            return
         # The closure is evaluated only after the worker has started, so the
         # worker itself can serve as the cooperative CancelToken.
         worker: BackgroundWorker
-        worker = BackgroundWorker(lambda: service.collect_active(cancel=worker))
+        worker = BackgroundWorker(
+            lambda: service.collect_active(cancel=worker, period=period)
+        )
         self._fetch_worker = worker
         worker.signals.result.connect(
             lambda result, token=generation: self._on_collection_finished(token, result)
@@ -221,6 +242,11 @@ class InvoiceCollectorDialog(QDialog):
             self._status.setText("Abruf wird abgebrochen â€¦")
             self._cancel_button.setEnabled(False)
 
+    def _selected_period(self) -> DateRange:
+        start = date.fromisoformat(self._period_start.date().toString("yyyy-MM-dd"))
+        end = date.fromisoformat(self._period_end.date().toString("yyyy-MM-dd"))
+        return DateRange(start=start, end=end)
+
     def _on_collection_finished(self, generation: int, result: object) -> None:
         if generation != self._fetch_generation:
             return
@@ -228,9 +254,26 @@ class InvoiceCollectorDialog(QDialog):
             self._status.setText("Abruf lieferte ein ungültiges Ergebnis.")
             return
         issue_count = len(result.issues)
+        error_count = sum(item.error is not None for item in result.summary.items)
+        successful_count = result.summary.new_count + result.summary.existing_count
+        if successful_count == 0 and (issue_count or error_count):
+            failures = [
+                f"{item.route_key}: {item.error}"
+                for item in result.summary.items
+                if item.error and item.route_key
+            ]
+            failures.extend(f"{item.route_key}: {item.message}" for item in result.issues)
+            detail = " | ".join(failures[:3])
+            self._status.setText(
+                f"Kein Dokument verarbeitet. {issue_count + error_count} Route(n) "
+                "konnten nicht ausgeführt werden. " + detail
+            )
+            return
         self._status.setText(
             f"Abruf beendet: {result.summary.new_count} neu, "
-            f"{result.summary.existing_count} bereits vorhanden, {issue_count} Route(n) offen."
+            f"{result.summary.existing_count} bereits vorhanden, "
+            f"{issue_count + error_count} Route(n) fehlgeschlagen. "
+            "Lokal gespeicherte Dateien bleiben SYNC_PENDING."
         )
 
     def _on_collection_error(self, generation: int, error: Exception) -> None:
@@ -258,17 +301,24 @@ class InvoiceCollectorDialog(QDialog):
         if not provider_id or not account_alias:
             self._status.setText("Provider und Kontoalias müssen ausgefüllt sein.")
             return
+        selected_route = self._route.currentData()
+        if selected_route is not None and selected_route.maturity != "verified":
+            self._status.setText(
+                "Diese Abrufroute ist noch nicht live verifiziert und kann nicht aktiviert werden. "
+                "Nutzen Sie den manuellen PDF-Import."
+            )
+            return
         connection = ProviderConnection.create(
             provider_id=provider_id,
             tenant_id=TenantId(str(self._tenant.currentData())),
             account_alias=account_alias,
             route_settings=(
                 RouteSettings(
-                    route_key=str(self._route.currentData().route_key),
-                    options={"connector": str(self._route.currentData().connector)},
+                    route_key=str(selected_route.route_key),
+                    options={"connector": str(selected_route.connector)},
                 ),
             )
-            if self._route.currentData() is not None
+            if selected_route is not None
             else (),
         )
         self._connection_repository.save(connection)
@@ -332,3 +382,10 @@ def _is_writable_directory(path: Path) -> bool:
         return path.is_dir() and bool(path.stat().st_mode & 0o200)
     except OSError:
         return False
+
+
+def _date_edit(value: date) -> QDateEdit:
+    edit = QDateEdit(QDate(value.year, value.month, value.day))
+    edit.setCalendarPopup(True)
+    edit.setDisplayFormat("dd.MM.yyyy")
+    return edit

@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from xw_office.services.invoice_collection.connections import ConnectionRepository
-from xw_office.services.invoice_collection.domain import ProviderConnection
+from xw_office.services.invoice_collection.domain import DateRange, ProviderConnection
+from xw_office.services.invoice_collection.errors import InvoiceCollectionError
 from xw_office.services.invoice_collection.factories import ConnectorFactoryRegistry
 from xw_office.services.invoice_collection.journal import InvoiceJournal
 from xw_office.services.invoice_collection.orchestrator import (
@@ -54,6 +55,7 @@ class InvoiceCollectionService:
         *,
         cancel: CancelToken | None = None,
         max_workers: int = 2,
+        period: DateRange | None = None,
     ) -> CollectionRun:
         sink = OneDriveLocalSink(self.target_root)
         pipeline = DocumentPipeline(sink=sink, journal=self.journal)
@@ -69,14 +71,19 @@ class InvoiceCollectionService:
                 try:
                     connector_key = str(route.options.get("connector") or route.route_key)
                     connectors.append(
-                        self.factories.create(connector_key, connection, route)
+                        self.factories.create(connector_key, connection, route, period)
                     )
                 except Exception as exc:  # noqa: BLE001 - route-local setup issue
+                    message = (
+                        f"{exc.code.value}: {exc}"
+                        if isinstance(exc, InvoiceCollectionError)
+                        else f"INTERNAL_ERROR: {type(exc).__name__}"
+                    )
                     issues.append(
                         ConnectionRouteIssue(
                             connection_id=str(connection.connection_id),
                             route_key=route.route_key,
-                            message=str(exc),
+                            message=message,
                         )
                     )
         return CollectionRun(

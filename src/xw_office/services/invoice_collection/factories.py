@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from xw_office.services.invoice_collection.domain import ProviderConnection, RouteSettings
+from xw_office.services.invoice_collection.domain import DateRange, ProviderConnection, RouteSettings
 from xw_office.services.invoice_collection.errors import (
     InvoiceCollectionError,
     InvoiceErrorCode,
@@ -11,7 +11,9 @@ from xw_office.services.invoice_collection.errors import (
 from xw_office.services.invoice_collection.ports import InvoiceConnector
 
 
-ConnectorFactory = Callable[[ProviderConnection, RouteSettings], InvoiceConnector]
+ConnectorFactory = Callable[
+    [ProviderConnection, RouteSettings, DateRange | None], InvoiceConnector
+]
 
 
 class ConnectorFactoryRegistry:
@@ -33,6 +35,7 @@ class ConnectorFactoryRegistry:
         key: str,
         connection: ProviderConnection,
         settings: RouteSettings,
+        period: DateRange | None = None,
     ) -> InvoiceConnector:
         try:
             factory = self._factories[key]
@@ -41,7 +44,7 @@ class ConnectorFactoryRegistry:
                 InvoiceErrorCode.CONFIGURATION_ERROR,
                 f"Keine Connector-Factory für aktive Route: {key}",
             ) from exc
-        return factory(connection, settings)
+        return factory(connection, settings, period)
 
     def keys(self) -> tuple[str, ...]:
         return tuple(sorted(self._factories))
