@@ -1,6 +1,6 @@
 # Rechnungsautomat: Ist-Stand und Abschlussplan
 
-**Prüfstand: 14.11.2026, `main` bis einschließlich `73cc7f1a`.** Diese Datei ist eine Bestandsaufnahme und ein Folgeauftrag, kein Nachweis für einen produktiven Rechnungsabruf. Verbindliches Zielbild bleiben `START_HERE.md`, `ARCHITEKTUR.md` und `SICHERHEIT_UND_2FA.md` in diesem Ordner. `TASK_QUEUE.yaml` ist die bestehende Implementierungs-Queue; ihre Statuswerte wurden hier nicht pauschal auf `done` gesetzt. Die letzten Implementierungsschritte sind `3b386611`, `159e5bb5`, `f6ade5fe` und `73cc7f1a`.
+**Prüfstand: 14.11.2026, `main` bis einschließlich `9590f9e4`.** Diese Datei ist eine Bestandsaufnahme und ein Folgeauftrag, kein Nachweis für einen produktiven Rechnungsabruf. Verbindliches Zielbild bleiben `START_HERE.md`, `ARCHITEKTUR.md` und `SICHERHEIT_UND_2FA.md` in diesem Ordner. `TASK_QUEUE.yaml` ist die bestehende Implementierungs-Queue; ihre Statuswerte wurden hier nicht pauschal auf `done` gesetzt. Die jüngsten Implementierungsschritte umfassen `3b386611`, `159e5bb5`, `f6ade5fe`, `73cc7f1a`, `2c837ba9` und `9590f9e4`.
 
 ## 1. Herkunft und ursprünglich gemeintes Ergebnis
 
