@@ -42,9 +42,13 @@ class DocumentSink(Protocol):
 
     def publish(self, document: ValidatedDocument, source_path: Path) -> SinkReceipt: ...
 
+    def confirm_existing(self, relative_path: Path, sha256: str) -> SinkReceipt | None: ...
+
 
 class DocumentJournal(Protocol):
     def has_hash(self, *, tenant_id: str, sink_id: str, sha256: str) -> bool: ...
+
+    def find_by_hash(self, *, tenant_id: str, sink_id: str, sha256: str) -> Path | None: ...
 
     def has_external_id(
         self,

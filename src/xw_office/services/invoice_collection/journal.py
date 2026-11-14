@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from dataclasses import dataclass
 import hashlib
 import json
 import sqlite3
@@ -16,6 +17,17 @@ from xw_office.services.invoice_collection.domain import (
     SinkReceipt,
     ValidatedDocument,
 )
+
+
+@dataclass(frozen=True)
+class DocumentProvenance:
+    """Non-sensitive source attribution; source identifiers are one-way fingerprints."""
+
+    connection_id: str
+    provider_id: str
+    route_key: str
+    source_id_hash: str
+    external_id_hash: str | None
 
 
 class InvoiceJournal:
@@ -47,9 +59,9 @@ class InvoiceJournal:
                     current_version = int(version_row["value"])
                 except (TypeError, ValueError) as exc:
                     raise RuntimeError("invoice journal schema version is invalid") from exc
-                if current_version > 2:
+                if current_version > 3:
                     raise RuntimeError(
-                        f"invoice journal schema {current_version} is newer than supported schema 2"
+                        f"invoice journal schema {current_version} is newer than supported schema 3"
                     )
             connection.executescript(
                 """
@@ -74,6 +86,18 @@ class InvoiceJournal:
                 );
                 CREATE INDEX IF NOT EXISTS idx_documents_external
                     ON documents (connection_id, route_key, external_id);
+                CREATE TABLE IF NOT EXISTS document_provenance (
+                    document_id TEXT NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+                    connection_id TEXT NOT NULL,
+                    provider_id TEXT NOT NULL,
+                    route_key TEXT NOT NULL,
+                    source_id_hash TEXT NOT NULL,
+                    external_id_hash TEXT,
+                    observed_at TEXT NOT NULL,
+                    PRIMARY KEY (document_id, connection_id, route_key, source_id_hash)
+                );
+                CREATE INDEX IF NOT EXISTS idx_document_provenance_external
+                    ON document_provenance (connection_id, route_key, external_id_hash);
                 CREATE TABLE IF NOT EXISTS collection_runs (
                     run_id TEXT PRIMARY KEY,
                     status TEXT NOT NULL,
@@ -112,7 +136,7 @@ class InvoiceJournal:
                 """
             )
             connection.execute(
-                "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '2') "
+                "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '3') "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
             )
 
@@ -260,6 +284,45 @@ class InvoiceJournal:
             ).fetchone()
             return row is not None
 
+    def find_by_hash(
+        self, *, tenant_id: str, sink_id: str, sha256: str
+    ) -> Path | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT relative_path FROM documents "
+                "WHERE tenant_id=? AND sink_id=? AND sha256=? LIMIT 1",
+                (tenant_id, sink_id, sha256),
+            ).fetchone()
+        return Path(str(row["relative_path"])) if row else None
+
+    def list_provenance(
+        self, *, tenant_id: str, sink_id: str, sha256: str
+    ) -> tuple[DocumentProvenance, ...]:
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT p.connection_id, p.provider_id, p.route_key,
+                       p.source_id_hash, p.external_id_hash
+                FROM document_provenance AS p
+                JOIN documents AS d ON d.document_id=p.document_id
+                WHERE d.tenant_id=? AND d.sink_id=? AND d.sha256=?
+                ORDER BY p.provider_id, p.route_key, p.connection_id
+                """,
+                (tenant_id, sink_id, sha256),
+            ).fetchall()
+        return tuple(
+            DocumentProvenance(
+                connection_id=str(row["connection_id"]),
+                provider_id=str(row["provider_id"]),
+                route_key=str(row["route_key"]),
+                source_id_hash=str(row["source_id_hash"]),
+                external_id_hash=(
+                    str(row["external_id_hash"]) if row["external_id_hash"] else None
+                ),
+            )
+            for row in rows
+        )
+
     def has_external_id(
         self,
         *,
@@ -272,6 +335,18 @@ class InvoiceJournal:
                 "SELECT sha256, outcome FROM documents "
                 "WHERE connection_id=? AND route_key=? AND external_id=? LIMIT 1",
                 (connection_id, route_key, external_id),
+            ).fetchone()
+            if row is not None:
+                return str(row["sha256"]), str(row["outcome"])
+            external_hash = hashlib.sha256(external_id.encode("utf-8")).hexdigest()
+            row = connection.execute(
+                """
+                SELECT d.sha256, d.outcome
+                FROM document_provenance AS p
+                JOIN documents AS d ON d.document_id=p.document_id
+                WHERE p.connection_id=? AND p.route_key=? AND p.external_id_hash=? LIMIT 1
+                """,
+                (connection_id, route_key, external_hash),
             ).fetchone()
             return (str(row["sha256"]), str(row["outcome"])) if row else None
 
@@ -320,7 +395,30 @@ class InvoiceJournal:
             ).fetchone()
             if row is None:
                 raise RuntimeError("journal document insert could not be resolved")
-            return str(row["document_id"])
+            resolved_id = str(row["document_id"])
+            external_id_hash = (
+                hashlib.sha256(candidate.external_id.encode("utf-8")).hexdigest()
+                if candidate.external_id
+                else None
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO document_provenance(
+                    document_id, connection_id, provider_id, route_key,
+                    source_id_hash, external_id_hash, observed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    resolved_id,
+                    str(candidate.connection.connection_id),
+                    candidate.connection.provider_id,
+                    candidate.route_key,
+                    source_fingerprint,
+                    external_id_hash,
+                    document.validated_at.isoformat(),
+                ),
+            )
+            return resolved_id
 
 
 def _now() -> str:

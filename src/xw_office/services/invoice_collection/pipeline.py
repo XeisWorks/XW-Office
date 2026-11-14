@@ -88,7 +88,16 @@ class DocumentPipeline:
                     InvoiceErrorCode.CONTENT_CONFLICT,
                     "Externe Dokument-ID wurde bereits mit anderem Inhalt verarbeitet",
                 )
-        relative_path = build_relative_path(candidate, sha256=digest)
+        existing_relative_path = (
+            self.journal.find_by_hash(
+                tenant_id=candidate.connection.tenant_id.value,
+                sink_id=self.sink.sink_id,
+                sha256=digest,
+            )
+            if self.journal is not None
+            else None
+        )
+        relative_path = existing_relative_path or build_relative_path(candidate, sha256=digest)
         document = ValidatedDocument(
             candidate=candidate,
             sha256=digest,
@@ -97,7 +106,13 @@ class DocumentPipeline:
             relative_path=relative_path,
             validated_at=utc_now(),
         )
-        receipt = self.sink.publish(document, artifact.path)
+        receipt = (
+            self.sink.confirm_existing(relative_path, digest)
+            if existing_relative_path is not None
+            else None
+        )
+        if receipt is None:
+            receipt = self.sink.publish(document, artifact.path)
         if review_reason:
             receipt = replace(receipt, review_reason=review_reason)
         if self.journal is not None:

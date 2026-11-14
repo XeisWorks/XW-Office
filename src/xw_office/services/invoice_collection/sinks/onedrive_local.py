@@ -35,6 +35,21 @@ class OneDriveLocalSink:
         except OSError as exc:
             raise DestinationError("OneDrive-Zielordner konnte nicht getestet werden") from exc
 
+    def confirm_existing(self, relative_path: Path, sha256: str) -> SinkReceipt | None:
+        """Confirm a journal-known target before suppressing a cross-route duplicate."""
+        target = self._safe_target(relative_path)
+        if not target.exists():
+            return None
+        existing_hash = _sha256(target)
+        if existing_hash != sha256:
+            raise DestinationError("Journalziel enthält einen abweichenden Inhalt")
+        return SinkReceipt(
+            outcome=DocumentOutcome.ALREADY_PRESENT,
+            sync_status=SyncStatus.SYNC_PENDING,
+            target_path=target,
+            sha256=existing_hash,
+        )
+
     def publish(self, document: ValidatedDocument, source_path: Path) -> SinkReceipt:
         self.preflight()
         target = self._safe_target(document.relative_path)

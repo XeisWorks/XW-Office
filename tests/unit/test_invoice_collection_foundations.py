@@ -18,6 +18,7 @@ from xw_office.services.invoice_collection.domain import (
     ConfigurationStatus,
     DateRange,
     DocumentCandidate,
+    DocumentOutcome,
     DocumentType,
     DownloadedArtifact,
     ProviderConnection,
@@ -305,9 +306,10 @@ def test_invoice_journal_migrates_v1_and_rejects_newer_schema(tmp_path: Path) ->
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )
         }
-    assert version == "2"
+    assert version == "3"
     assert "collection_runs" in tables
     assert "collection_checkpoints" in tables
+    assert "document_provenance" in tables
     assert migrated.path == old_path
 
     newer_path = tmp_path / "newer-journal.sqlite3"
@@ -316,7 +318,7 @@ def test_invoice_journal_migrates_v1_and_rejects_newer_schema(tmp_path: Path) ->
             "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
         connection.execute(
-            "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '3')"
+            "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '4')"
         )
     with pytest.raises(RuntimeError, match="newer than supported"):
         InvoiceJournal(newer_path)
@@ -343,6 +345,78 @@ def test_manual_import_uses_pipeline_and_is_idempotent(tmp_path: Path) -> None:
     assert second.receipt.outcome.value == "ALREADY_PRESENT"
     assert first.receipt.target_path == second.receipt.target_path
     assert first.receipt.target_path.read_bytes() == source.read_bytes()
+
+
+def test_same_tenant_cross_route_duplicate_publishes_once_and_merges_safe_provenance(
+    tmp_path: Path,
+) -> None:
+    source = _pdf(tmp_path / "invoice.pdf", "Invoice date: 2026-11-05")
+    conflicting_source = _pdf(tmp_path / "changed.pdf", "Invoice date: 2026-11-06")
+    destination = tmp_path / "onedrive"
+    destination.mkdir()
+    journal_path = tmp_path / "journal.sqlite3"
+    journal = InvoiceJournal(journal_path)
+    pipeline = DocumentPipeline(
+        sink=OneDriveLocalSink(destination),
+        journal=journal,
+    )
+    mail_connection = ProviderConnection.create(
+        provider_id="browserstack",
+        tenant_id=TenantId.XW,
+        account_alias="billing",
+    )
+    api_connection = ProviderConnection.create(
+        provider_id="mollie_fees",
+        tenant_id=TenantId.XW,
+        account_alias="fees",
+    )
+    mail_candidate = DocumentCandidate(
+        connection=mail_connection,
+        route_key="mail_pdf",
+        source_id="opaque-mail-source",
+        external_id=None,
+        document_type=DocumentType.EXPENSE_INVOICE,
+        original_filename="invoice.pdf",
+        document_date=date(2026, 11, 5),
+    )
+    api_candidate = DocumentCandidate(
+        connection=api_connection,
+        route_key="invoices_api",
+        source_id="opaque-api-source",
+        external_id="private-api-resource-id",
+        document_type=DocumentType.FEE_INVOICE,
+        original_filename="invoice.pdf",
+        document_date=date(2026, 11, 5),
+    )
+
+    first = pipeline.process(DownloadedArtifact(mail_candidate, source))
+    duplicate = pipeline.process(DownloadedArtifact(api_candidate, source))
+
+    assert first.receipt.outcome is DocumentOutcome.NEW
+    assert duplicate.receipt.outcome is DocumentOutcome.ALREADY_PRESENT
+    assert first.receipt.target_path == duplicate.receipt.target_path
+    assert len(list(destination.rglob("*.pdf"))) == 1
+    provenance = journal.list_provenance(
+        tenant_id=TenantId.XW.value,
+        sink_id=OneDriveLocalSink.sink_id,
+        sha256=first.document.sha256,
+    )
+    assert {item.route_key for item in provenance} == {"mail_pdf", "invoices_api"}
+    assert all("private-api-resource-id" not in item.source_id_hash for item in provenance)
+    assert b"private-api-resource-id" not in journal_path.read_bytes()
+
+    changed_api_candidate = DocumentCandidate(
+        connection=api_connection,
+        route_key="invoices_api",
+        source_id="changed-api-source",
+        external_id="private-api-resource-id",
+        document_type=DocumentType.FEE_INVOICE,
+        original_filename="invoice.pdf",
+        document_date=date(2026, 11, 6),
+    )
+    with pytest.raises(InvoiceCollectionError) as error:
+        pipeline.process(DownloadedArtifact(changed_api_candidate, conflicting_source))
+    assert error.value.code is InvoiceErrorCode.CONTENT_CONFLICT
 
 
 def test_same_content_is_not_deduplicated_across_tenants(tmp_path: Path) -> None:
