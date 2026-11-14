@@ -46,7 +46,7 @@ current_status:
     - "selected OneDrive target folder can be opened from the dialog without implying cloud sync"
     - "selected tenant _needs_review folder can be opened only within the selected target, with manual-review and no-sync wording"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
-    - "latest full repository suite after Mollie pagination, collector worker-boundary redaction, catalog-driven portal actions and deterministic OneDrive race fixture: 2428 passed, 7 skipped, 0 failed; repo Ruff, Provider-/Queue-YAML, diff and added-diff secret checks pass"
+    - "latest full repository suite after tenant review-folder action: 2429 passed, 7 skipped, 0 failed; repo Ruff, Provider-/Queue-YAML, diff and added-diff secret checks pass"
     - "targeted MyPy for Mollie connector, registry and dialog passes with foreign imports skipped; broad current-environment MyPy is blocked by absent optional msal_extensions/Playwright and a NumPy stub/Python-version mismatch; 30-file collector/dialog MyPy passed in the prior recorded environment"
     - "DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values (prior recorded checks)"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
