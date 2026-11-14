@@ -2,6 +2,8 @@
 
 **Pruefstand: 14.11.2026, `main` einschliesslich Implementierung `dbcac683`.** Diese Datei ist eine Bestandsaufnahme und ein Folgeauftrag, kein Nachweis fuer einen produktiven Rechnungsabruf. Verbindliches Zielbild bleiben `START_HERE.md`, `ARCHITEKTUR.md` und `SICHERHEIT_UND_2FA.md` in diesem Ordner. `TASK_QUEUE.yaml` ist die bestehende Implementierungs-Queue; ihre Statuswerte wurden hier nicht pauschal auf `done` gesetzt. Die juengsten Schritte sind Cross-Route-Deduplizierung `0c5274c7`, sichere Quellenanzeige `2d152f3c`, Quarantaene-Status `f13de57a` und Playwright-Lifecycle/Fehlerklassifikation `dbcac683`.
 
+**Aktueller persoenlicher Blocker:** Der Benutzer hat am 14.11.2026 bestaetigt, dass Anbieter-Mailbox und bestaetigte Absenderdomain(s) erst geklaert werden muessen. Bis dahin kein Graph-Live-Probe und keine echte Mailrouten-Verifikation; T08 bleibt `blocked_external`. Fuer die naechste Umsetzung mit GPT-6-Luna ist der auf den heutigen Code zugeschnittene Auftrag in [GPT6_LUNA_FORTSETZUNGS_GOAL_2026-11-14.md](GPT6_LUNA_FORTSETZUNGS_GOAL_2026-11-14.md) massgeblich. Der unten stehende fruehere Initialauftrag ist nur Historie und soll nicht erneut zum kompletten Neuaufbau fuehren.
+
 ## 1. Herkunft und ursprünglich gemeintes Ergebnis
 
 Der konkrete frühere Chat war in den lokal verfügbaren Codex-Sitzungen nicht eindeutig auffindbar. Die am **07.11.2026** erstellte Planungs-Commitfolge belegt das Vorhaben im Repository: `4f5d7acb` („plan secure one-click invoice collector with 2FA and OneDrive“), danach `caf041f1` (modularisierte Planung) und die Implementierungs-Commits ab `b39041fd`. Ein Link oder Wortlaut des ursprünglichen Chats lässt sich daraus nicht ableiten.
