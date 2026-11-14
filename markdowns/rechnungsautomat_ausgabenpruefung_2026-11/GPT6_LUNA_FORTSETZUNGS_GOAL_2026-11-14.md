@@ -36,11 +36,11 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
 
 1. Pruefe T01-T09 gegen den aktuellen Code und die Queue. Aktualisiere Status/Evidenz nur,
    wenn sie durch vorhandenen Code, erfolgreiche Pruefungen oder echte Live-Evidenz gedeckt ist.
-2. Untersuche den Graph-Downloadpfad auf harte Byte-Grenzen waehrend des Empfangs. Falls
-   `httpx` die komplette Antwort vor dem Groessencheck puffert, implementiere begrenztes
-   Streaming fuer rohe und JSON/Base64-Anhaenge, mit sauberem Response-Close und typed Fehlern.
-   Behandle Content-Length nur als Vorabhinweis, nie als einzige Grenze. Fuege passende Tests
-   hinzu und fuehre sie aus.
+2. Der Graph-Downloadpfad hat seit Commit `1de41866` begrenztes Streaming fuer rohe und
+   JSON/Base64-Anhaenge, eine berechnete Base64-Obergrenze und eine 64-KiB-Grenze fuer
+   JSON-Metadaten. `Content-Length` ist nur ein Vorabhinweis. Erhalte dies und pruefe die
+   Implementierung samt Tests, bevor du den Task als erledigt betrachtest; erfinde keine
+   zweite Downloadstrategie.
 3. Pruefe die Dialog-, Journal-, Wiederaufnahme- und Fehlerpfade auf noch fehlende MVP-
    Bedienhandlungen. Implementiere nur konkret belegte, providerunabhaengige Luecken.
    Insbesondere keine erfundenen Mail-Absenderregeln, Portal-Selektoren, API-Rechte oder
