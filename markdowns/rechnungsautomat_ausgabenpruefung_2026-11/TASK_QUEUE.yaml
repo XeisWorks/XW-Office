@@ -34,9 +34,10 @@ current_status:
     - "Mollie and browser connectors close their injected HTTP/session adapters"
     - "Playwright session cleans failed startup, retains visible/manual login, and returns redacted typed timeout/provider-change errors"
     - "same tenant/sink/PDF hash across routes publishes once and adds hashed source provenance to the journal"
+    - "invoice journal schema 4 migrates legacy external IDs to hashed provenance and never persists new raw external IDs"
     - "collection results show safe provider/route provenance labels without raw source or external IDs"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
-    - "full repository suite after Graph/OneDrive hardening and bounded Mollie PDF streaming: 2413 passed, 7 skipped, 0 failed; repo Ruff, provider/queue YAML, collector MyPy and diff checks pass"
+    - "full repository suite after invoice-journal schema 4 privacy migration: 2414 passed, 7 skipped, 0 failed; repo Ruff, provider/queue YAML, collector MyPy and diff checks pass"
     - "collector/dialog MyPy: 30 source files, no issues; DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
@@ -142,6 +143,8 @@ tasks:
       - "src/xw_office/services/invoice_collection/journal.py::record_checkpoint"
       - "python -m mypy src/xw_office/services/invoice_collection src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py"
       - "tests/unit/test_invoice_collection_foundations.py::test_invoice_journal_migrates_v1_and_rejects_newer_schema"
+      - "tests/unit/test_invoice_collection_foundations.py::test_invoice_journal_migrates_legacy_external_ids_to_hashes"
+      - "tests/unit/test_invoice_collection_foundations.py::test_external_id_with_different_hash_is_a_conflict (hash-only lookup; no raw ID stored)"
       - "tests/unit/test_invoice_collection_foundations.py::test_service_resumes_cancelled_run_with_same_context_without_persisting_target_or_mailbox"
       - "tests/unit/test_invoice_collection_foundations.py::test_collection_isolates_invalid_saved_connection_and_keeps_valid_accounts_running"
     deliverables:

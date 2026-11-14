@@ -4,6 +4,12 @@
 
 **Aktueller persoenlicher Blocker:** Der Benutzer hat am 14.11.2026 bestaetigt, dass Anbieter-Mailbox und bestaetigte Absenderdomain(s) erst geklaert werden muessen. Bis dahin kein Graph-Live-Probe und keine echte Mailrouten-Verifikation; T08 bleibt `blocked_external`. Fuer die naechste Umsetzung mit GPT-6-Luna ist der auf den heutigen Code zugeschnittene Auftrag in [GPT6_LUNA_FORTSETZUNGS_GOAL_2026-11-14.md](GPT6_LUNA_FORTSETZUNGS_GOAL_2026-11-14.md) massgeblich. Der unten stehende fruehere Initialauftrag ist nur Historie und soll nicht erneut zum kompletten Neuaufbau fuehren.
 
+## Fortschreibung: externe Rechnungs-IDs im Journal
+
+Beim Abschlussaudit wurde festgestellt, dass `documents.external_id` neue externe Rechnungs-IDs trotz bereits vorhandener Hash-Provenienz zusaetzlich im Klartext speicherte. Das Journal nutzt jetzt Schema 4: neue Dokumentzeilen schreiben dort keine externe ID mehr; `has_external_id()` arbeitet ueber den SHA-256-Fingerprint in `document_provenance`. Die Migration uebernimmt vorhandene Schema-1-bis-3-Klartextwerte in gehashte Provenienz und leert anschliessend die Spalte, sodass die Inhaltskonflikterkennung erhalten bleibt. Abgedeckt durch Tests fuer neue Klartextfreiheit, Hash-Lookup/Konflikterkennung und Schema-3-Migration. Der gezielte Foundation-Lauf besteht mit **37 passed**. Eine SQLite-Migration garantiert keine physische Loeschung alter Datenseiten oder Sicherungskopien; sie entfernt den Wert aus dem aktiven Datenbankschema und dem aktuellen Datensatz.
+
+Die volle Repository-Suite nach der Migration besteht mit **2.414 passed, 7 skipped, 0 failed** (eine externe Starlette/httpx-Deprecation-Warnung). Repo-weites Ruff, Collector-MyPy (30 Dateien), Provider-/Queue-YAML, `git diff --check` und der hinzugefuegte Diff-Secret-Mustercheck bestehen.
+
 ## Fortschreibung: begrenzter Graph-Anhangsdownload
 
 Die Nachrichtenabfrage verwendet ausserdem `hasAttachments eq true`, damit Graph Nachrichten ohne nicht-inline Anhaenge vor dem Expand herausfiltert. Microsoft dokumentiert OData-Queryparameter fuer [List messages](https://learn.microsoft.com/en-us/graph/api/user-list-messages?view=graph-rest-1.0); `hasAttachments` ist laut [Message-Ressource](https://learn.microsoft.com/en-us/graph/api/resources/message?view=graph-rest-1.0) bei Inline-only-Nachrichten `false`, die der Connector ohnehin nicht als Rechnungsanhaenge verarbeitet.

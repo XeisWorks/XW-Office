@@ -534,7 +534,7 @@ def test_invoice_journal_migrates_v1_and_rejects_newer_schema(tmp_path: Path) ->
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )
         }
-    assert version == "3"
+    assert version == "4"
     assert "collection_runs" in tables
     assert "collection_checkpoints" in tables
     assert "document_provenance" in tables
@@ -546,7 +546,7 @@ def test_invoice_journal_migrates_v1_and_rejects_newer_schema(tmp_path: Path) ->
             "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
         connection.execute(
-            "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '4')"
+            "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '5')"
         )
     with pytest.raises(RuntimeError, match="newer than supported"):
         InvoiceJournal(newer_path)
@@ -741,6 +741,16 @@ def test_external_id_with_different_hash_is_a_conflict(tmp_path: Path) -> None:
             _candidate(connection, source_id="one", external_id="invoice-1"), first_source
         )
     )
+    assert b"invoice-1" not in (tmp_path / "journal.sqlite3").read_bytes()
+    with sqlite3.connect(tmp_path / "journal.sqlite3") as db:
+        assert db.execute(
+            "SELECT external_id FROM documents"
+        ).fetchone()[0] is None
+    assert journal.has_external_id(
+        connection_id=str(connection.connection_id),
+        route_key="manual_import",
+        external_id="invoice-1",
+    ) is not None
     with pytest.raises(InvoiceCollectionError) as error:
         pipeline.process(
             DownloadedArtifact(
@@ -748,6 +758,41 @@ def test_external_id_with_different_hash_is_a_conflict(tmp_path: Path) -> None:
             )
         )
     assert error.value.code == InvoiceErrorCode.CONTENT_CONFLICT
+
+
+def test_invoice_journal_migrates_legacy_external_ids_to_hashes(tmp_path: Path) -> None:
+    path = tmp_path / "legacy-journal.sqlite3"
+    InvoiceJournal(path)
+    connection = _foundation_connection()
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "INSERT INTO documents(document_id, tenant_id, connection_id, provider_id, "
+            "route_key, external_id, sha256, sink_id, relative_path, outcome, sync_status, "
+            "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "legacy-doc", "xw", str(connection.connection_id), "fixture", "invoices_api",
+                "legacy-private-id", "a" * 64, "local", "invoice.pdf", "NEW",
+                "SYNC_PENDING", "2026-11-14T00:00:00+00:00",
+            ),
+        )
+        db.execute(
+            "UPDATE schema_meta SET value='3' WHERE key='schema_version'"
+        )
+
+    migrated = InvoiceJournal(path)
+
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT external_id FROM documents WHERE document_id='legacy-doc'"
+        ).fetchone()[0] is None
+        assert db.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0] == "4"
+    assert migrated.has_external_id(
+        connection_id=str(connection.connection_id),
+        route_key="invoices_api",
+        external_id="legacy-private-id",
+    ) == ("a" * 64, "NEW")
 
 
 def test_orchestrator_continues_after_one_connector_failure(tmp_path: Path) -> None:

@@ -54,14 +54,15 @@ class InvoiceJournal:
             version_row = connection.execute(
                 "SELECT value FROM schema_meta WHERE key='schema_version'"
             ).fetchone()
+            current_version = 0
             if version_row is not None:
                 try:
                     current_version = int(version_row["value"])
                 except (TypeError, ValueError) as exc:
                     raise RuntimeError("invoice journal schema version is invalid") from exc
-                if current_version > 3:
+                if current_version > 4:
                     raise RuntimeError(
-                        f"invoice journal schema {current_version} is newer than supported schema 3"
+                        f"invoice journal schema {current_version} is newer than supported schema 4"
                     )
             connection.executescript(
                 """
@@ -135,8 +136,40 @@ class InvoiceJournal:
                 );
                 """
             )
+            if current_version < 4:
+                legacy_rows = connection.execute(
+                    "SELECT document_id, connection_id, provider_id, route_key, external_id "
+                    "FROM documents WHERE external_id IS NOT NULL"
+                ).fetchall()
+                for legacy_row in legacy_rows:
+                    external_id = str(legacy_row["external_id"])
+                    if external_id:
+                        document_id = str(legacy_row["document_id"])
+                        source_hash = hashlib.sha256(
+                            f"legacy-external-id:{document_id}".encode("utf-8")
+                        ).hexdigest()
+                        connection.execute(
+                            """
+                            INSERT OR IGNORE INTO document_provenance(
+                                document_id, connection_id, provider_id, route_key,
+                                source_id_hash, external_id_hash, observed_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                document_id,
+                                str(legacy_row["connection_id"]),
+                                str(legacy_row["provider_id"]),
+                                str(legacy_row["route_key"]),
+                                source_hash,
+                                hashlib.sha256(external_id.encode("utf-8")).hexdigest(),
+                                _now(),
+                            ),
+                        )
+                connection.execute(
+                    "UPDATE documents SET external_id=NULL WHERE external_id IS NOT NULL"
+                )
             connection.execute(
-                "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '3') "
+                "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '4') "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
             )
 
@@ -331,13 +364,6 @@ class InvoiceJournal:
         external_id: str,
     ) -> tuple[str, str] | None:
         with self._lock, self._connect() as connection:
-            row = connection.execute(
-                "SELECT sha256, outcome FROM documents "
-                "WHERE connection_id=? AND route_key=? AND external_id=? LIMIT 1",
-                (connection_id, route_key, external_id),
-            ).fetchone()
-            if row is not None:
-                return str(row["sha256"]), str(row["outcome"])
             external_hash = hashlib.sha256(external_id.encode("utf-8")).hexdigest()
             row = connection.execute(
                 """
@@ -376,7 +402,7 @@ class InvoiceJournal:
                     str(candidate.connection.connection_id),
                     candidate.connection.provider_id,
                     candidate.route_key,
-                    candidate.external_id,
+                    None,
                     document.sha256,
                     sink_id,
                     document.relative_path.as_posix(),

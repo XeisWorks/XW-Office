@@ -1,6 +1,6 @@
 # Fortsetzungs-Goal fuer GPT-6-Luna
 
-**Stand:** 14.11.2026
+**Stand:** 14.11.2026 (Journal-Datenschutzmigration ergaenzt)
 **Repository:** `XeisWorks/XW-Office`, Branch `main`
 **Ausgangslage:** Die technische MVP-Grundlage ist weitgehend implementiert und lokal getestet. Der erste echte Rechnungsabruf ist noch nicht verifiziert. Der Benutzer hat bestaetigt, dass Anbieter-Mailbox und Absenderdomain(s) noch geklaert werden muessen.
 
@@ -54,7 +54,10 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    divergierende Zielinhalte sind gezielt getestet. Der Mollie-PDF-Download ist ebenso auf 25 MiB
    begrenzt und gestreamt. Pruefe diese vorhandenen Schutzmassnahmen gegen Code und Tests, statt
    sie neu zu bauen. Der Browseradapter hat generische Fake-Portal-Tests, aber keine echten
-   Anbieter-Callbacks.
+   Anbieter-Callbacks. Das Journal verwendet Schema 4: neue Dokumente speichern keine rohen
+   `external_id`-Werte in `documents`; vorhandene Schema-1-bis-3-Werte werden in gehashte
+   Provenienz migriert und aus der aktiven Spalte entfernt. Erhalte die Hash-basierte
+   Konflikterkennung und fuehre keinen Klartext-Fallback wieder ein.
 4. Der Live-Mailpilot ist extern blockiert: Anbieter, Rechnungs-Mailbox und bestaetigte
    Absenderdomain(s) sind noch nicht geklaert. Frage nie nach diesen Werten oder Geheimnissen
    im Chat. Wenn der Benutzer soweit ist, gib genau eine lokale UI-Anweisung: in Finanzen >
