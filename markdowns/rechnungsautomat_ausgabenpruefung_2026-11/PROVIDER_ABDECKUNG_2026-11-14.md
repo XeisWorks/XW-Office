@@ -34,7 +34,7 @@ Alle unten genannten Konten bleiben bis zur lokalen Einrichtung und Liveprüfung
 
 ## Tools und Abonnements als Testmittel
 
-Figma ist fuer diesen Backend-/PySide6-Task ohne Designreferenz kein notwendiges Implementierungswerkzeug. BrowserStack eignet sich nicht fuer die native PySide-Oberflaeche und wurde nicht eingebunden. Slack und GitHub MCP-Tools waren in dieser Sitzung wegen eines Handshake-Fehlers nicht erreichbar; die lokale `gh`-Issue-/PR-Suche ergab keine passenden Treffer. Eine private Slack-Suche wurde nicht ausgefuehrt; keine Slack-Nachricht wurde gesendet. Fuer CodeScene ist in der verfuegbaren Toolliste keine Integration vorhanden. CodeScene und BrowserStack koennen bei einer spaeteren passenden Web-/Portal-Teststrecke erneut geprueft werden.
+Figma ist fuer diesen Backend-/PySide6-Task ohne Designreferenz kein notwendiges Implementierungswerkzeug. BrowserStack eignet sich nicht fuer die native PySide-Oberflaeche und wurde nicht eingebunden. Slack und GitHub MCP-Tools waren in dieser Sitzung wegen eines Handshake-Fehlers nicht erreichbar; die lokale `gh`-Issue-/PR-Suche ergab keine passenden Treffer. Eine private Slack-Suche wurde nicht ausgefuehrt; keine Slack-Nachricht wurde gesendet. Fuer CodeScene ist in der verfuegbaren Toolliste keine Integration vorhanden. CodeScene und BrowserStack koennen bei einer spaeteren passenden Web-/Portal-Teststrecke erneut geprueft werden. Railway-MCP ist verfuegbar; der Collector bleibt eine lokale PySide6-App mit DPAPI-geschuetztem OAuth-Cache, lokalem Browserprofil und OneDrive-Syncordner. Ein Railway-Deployment ist nicht Teil des spezifizierten Desktop-Releases und ersetzt keine Live-Routenverifikation.
 
 ## Verifikationsregeln
 
