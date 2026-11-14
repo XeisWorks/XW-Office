@@ -25,7 +25,7 @@ current_status:
     - "manual PDF import runs in a cancellable worker, honors the selected period, and reports out-of-period files as skipped"
     - "invalid enabled connection rows are isolated as CONFIGURATION_ERROR while valid connections continue"
     - "full repository suite: 2392 passed, 7 skipped; repo Ruff, provider/queue YAML and diff checks pass"
-    - "collector/dialog MyPy: 30 source files, no issues; DPAPI roundtrip and CLI doctor pass in current Windows environment"
+    - "collector/dialog MyPy: 30 source files, no issues; DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
     - "all 18 real provider accounts and 26 route behaviors; mailbox probe is not invoice-route verification"
