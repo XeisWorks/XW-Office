@@ -120,6 +120,7 @@ def test_collection_results_show_route_outcomes_without_external_ids(
                     tenant_id="xw",
                     account_alias="design",
                     display_name="figma-invoice.pdf",
+                    provenance=("figma/mail_pdf", "mollie_fees/invoices_api"),
                 ),
             )
         ),
@@ -137,7 +138,7 @@ def test_collection_results_show_route_outcomes_without_external_ids(
 
     dialog._on_collection_finished(0, result)
 
-    assert dialog._table.columnCount() == 5
+    assert dialog._table.columnCount() == 6
     assert dialog._table.rowCount() == 5
     assert dialog._table.item(0, 0).text() == "browserstack / billing"
     assert dialog._table.item(0, 1).text() == "mail_pdf"
@@ -145,6 +146,7 @@ def test_collection_results_show_route_outcomes_without_external_ids(
     assert dialog._table.item(1, 4).text() == "AUTH_REQUIRED: Anmeldung nötig"
     assert dialog._table.item(2, 4).text() == "CONTENT_CONFLICT"
     assert dialog._table.item(3, 4).text() == "ALREADY_PRESENT"
+    assert dialog._table.item(3, 5).text() == "figma/mail_pdf · mollie_fees/invoices_api"
     assert dialog._table.item(4, 4).text().startswith("UNSUPPORTED_ACCOUNT:")
     visible_text = " ".join(
         dialog._table.item(row, column).text()
@@ -153,6 +155,7 @@ def test_collection_results_show_route_outcomes_without_external_ids(
     )
     assert "private-external-id" not in visible_text
     assert "another-private-id" not in visible_text
+    assert "private-api-resource-id" not in visible_text
 
 
 def test_collection_results_distinguish_empty_route_from_success(

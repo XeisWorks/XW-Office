@@ -26,6 +26,7 @@ class CollectionItemResult:
     account_alias: str | None = None
     display_name: str | None = None
     review_reason: str | None = None
+    provenance: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -177,6 +178,20 @@ class CollectionOrchestrator:
                             route_key=candidate.route_key,
                             source_id=candidate.source_id,
                         )
+                    provenance: tuple[str, ...] = ()
+                    if self.journal is not None:
+                        provenance = tuple(
+                            sorted(
+                                {
+                                    f"{source.provider_id}/{source.route_key}"
+                                    for source in self.journal.list_provenance(
+                                        tenant_id=candidate.connection.tenant_id.value,
+                                        sink_id=self.pipeline.sink.sink_id,
+                                        sha256=processed.document.sha256,
+                                    )
+                                }
+                            )
+                        )
                     results.append(
                         CollectionItemResult(
                             source_id=candidate.source_id,
@@ -188,6 +203,7 @@ class CollectionOrchestrator:
                             account_alias=candidate.connection.account_alias,
                             display_name=candidate.original_filename,
                             review_reason=processed.receipt.review_reason,
+                            provenance=provenance,
                         )
                     )
                 except Exception as exc:  # noqa: BLE001 - continue independent providers

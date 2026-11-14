@@ -419,6 +419,64 @@ def test_same_tenant_cross_route_duplicate_publishes_once_and_merges_safe_proven
     assert error.value.code is InvoiceErrorCode.CONTENT_CONFLICT
 
 
+def test_orchestrator_returns_safe_provenance_route_labels_for_duplicate(
+    tmp_path: Path,
+) -> None:
+    source = _pdf(tmp_path / "invoice.pdf", "Invoice date: 2026-11-05")
+    destination = tmp_path / "onedrive"
+    destination.mkdir()
+    journal = InvoiceJournal(tmp_path / "journal.sqlite3")
+    pipeline = DocumentPipeline(sink=OneDriveLocalSink(destination), journal=journal)
+    mail_connection = ProviderConnection.create(
+        provider_id="browserstack", tenant_id=TenantId.XW, account_alias="billing"
+    )
+    api_connection = ProviderConnection.create(
+        provider_id="mollie_fees", tenant_id=TenantId.XW, account_alias="fees"
+    )
+
+    class FixtureConnector:
+        route_key = "fixture"
+
+        def __init__(self, candidate: DocumentCandidate) -> None:
+            self.connection = candidate.connection
+            self.candidate = candidate
+
+        def discover(self) -> list[DocumentCandidate]:
+            return [self.candidate]
+
+        def download(self, candidate, workspace, cancel=None):
+            return DownloadedArtifact(candidate=candidate, path=source)
+
+    mail_candidate = DocumentCandidate(
+        connection=mail_connection,
+        route_key="mail_pdf",
+        source_id="opaque-mail-id",
+        external_id=None,
+        document_type=DocumentType.EXPENSE_INVOICE,
+        original_filename="invoice.pdf",
+        document_date=date(2026, 11, 5),
+    )
+    api_candidate = DocumentCandidate(
+        connection=api_connection,
+        route_key="invoices_api",
+        source_id="opaque-api-id",
+        external_id="private-api-resource-id",
+        document_type=DocumentType.FEE_INVOICE,
+        original_filename="invoice.pdf",
+        document_date=date(2026, 11, 5),
+    )
+    orchestrator = CollectionOrchestrator(pipeline, journal=journal)
+
+    orchestrator.collect([FixtureConnector(mail_candidate)])
+    result = orchestrator.collect([FixtureConnector(api_candidate)])
+
+    assert result.items[0].provenance == (
+        "browserstack/mail_pdf",
+        "mollie_fees/invoices_api",
+    )
+    assert "private-api-resource-id" not in result.items[0].provenance
+
+
 def test_same_content_is_not_deduplicated_across_tenants(tmp_path: Path) -> None:
     source = _pdf(tmp_path / "source.pdf")
     destination = tmp_path / "onedrive"

@@ -98,9 +98,9 @@ class InvoiceCollectorDialog(QDialog):
         self._document_type = QComboBox()
         for item in DocumentType:
             self._document_type.addItem(item.value, item)
-        self._table = QTableWidget(0, 5)
+        self._table = QTableWidget(0, 6)
         self._table.setHorizontalHeaderLabels(
-            ["Provider/Konto", "Route", "Mandant", "Datei", "Ergebnis"]
+            ["Provider/Konto", "Route", "Mandant", "Datei", "Ergebnis", "Belegquellen"]
         )
         self._table.horizontalHeader().setStretchLastSection(True)
         self._load_catalog()
@@ -394,6 +394,7 @@ class InvoiceCollectorDialog(QDialog):
                 tenant_id=item.tenant_id,
                 display_name=item.display_name,
                 outcome=outcome,
+                provenance=item.provenance,
             )
         for issue in result.issues:
             self._append_collection_result(
@@ -403,6 +404,7 @@ class InvoiceCollectorDialog(QDialog):
                 tenant_id=issue.tenant_id,
                 display_name=None,
                 outcome=issue.message,
+                provenance=(),
             )
         if successful_count == 0 and (issue_count or error_count):
             self._status.setText(
@@ -437,6 +439,7 @@ class InvoiceCollectorDialog(QDialog):
         tenant_id: str | None,
         display_name: str | None,
         outcome: str,
+        provenance: tuple[str, ...] = (),
     ) -> None:
         row = self._table.rowCount()
         self._table.insertRow(row)
@@ -449,6 +452,7 @@ class InvoiceCollectorDialog(QDialog):
             tenant_id or "—",
             display_name or "—",
             outcome,
+            " · ".join(provenance) if provenance else "—",
         ]
         for column, value in enumerate(values):
             self._table.setItem(row, column, QTableWidgetItem(value))
