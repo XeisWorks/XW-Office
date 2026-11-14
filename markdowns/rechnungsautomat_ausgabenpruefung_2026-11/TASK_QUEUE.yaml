@@ -25,6 +25,7 @@ current_status:
     - "manual PDF import runs in a cancellable worker, honors the selected period, and reports out-of-period files as skipped"
     - "invalid enabled connection rows are isolated as CONFIGURATION_ERROR while valid connections continue"
     - "full repository suite: 2392 passed, 7 skipped; repo Ruff, provider/queue YAML and diff checks pass"
+    - "collector/dialog MyPy: 30 source files, no issues; DPAPI roundtrip and CLI doctor pass in current Windows environment"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
     - "all 18 real provider accounts and 26 route behaviors; mailbox probe is not invoice-route verification"
@@ -127,6 +128,7 @@ tasks:
       - "tests/unit/test_invoice_collection_foundations.py"
       - "src/xw_office/services/invoice_collection/journal.py::begin_or_resume_run"
       - "src/xw_office/services/invoice_collection/journal.py::record_checkpoint"
+      - "python -m mypy src/xw_office/services/invoice_collection src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py"
       - "tests/unit/test_invoice_collection_foundations.py::test_invoice_journal_migrates_v1_and_rejects_newer_schema"
       - "tests/unit/test_invoice_collection_foundations.py::test_service_resumes_cancelled_run_with_same_context_without_persisting_target_or_mailbox"
       - "tests/unit/test_invoice_collection_foundations.py::test_collection_isolates_invalid_saved_connection_and_keeps_valid_accounts_running"
