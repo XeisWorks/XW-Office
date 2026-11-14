@@ -132,9 +132,19 @@ def test_graph_mailbox_action_is_enabled_only_for_mail_routes(
 
     dialog._route.setCurrentIndex(mail_index)
     assert dialog._mail_test_button.isEnabled()
+    assert not dialog._mailbox.isHidden()
+    assert not dialog._sender_domains.isHidden()
+    assert not dialog._mailbox_label.isHidden()
+    assert not dialog._sender_domains_label.isHidden()
+    assert dialog._api_token.isHidden()
 
     dialog._route.setCurrentIndex(api_index)
     assert not dialog._mail_test_button.isEnabled()
+    assert dialog._mailbox.isHidden()
+    assert dialog._sender_domains.isHidden()
+    assert dialog._mailbox_label.isHidden()
+    assert dialog._sender_domains_label.isHidden()
+    assert not dialog._api_token.isHidden()
 
 
 def test_provider_portal_menu_opens_only_https_hosts_from_catalog(

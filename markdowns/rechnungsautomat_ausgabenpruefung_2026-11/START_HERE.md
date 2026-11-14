@@ -58,11 +58,12 @@ Contract-Tests – keine Änderung an Dialog, Orchestrator, PDF-Pipeline oder On
   OneDrive-Business-Syncordner. Lokal gespeichert bedeutet `SYNC_PENDING`, nicht
   `CLOUD_VERIFIED`.
 - **Route und Fallback:** Katalogstatus, Factory-Prüfung und Verbindungsaktivierung sind
-  fail-closed. Konfigurierbare Priorität und Capability-gesteuerte Auth-/Retry-Aktionen sind
-  Zielarchitektur, aber im Dialog noch nicht vollständig umgesetzt.
+  fail-closed. Graph-Mailbox-Probe, Mailbox-Eingaben und maskierte API-Credentials werden bereits aus der
+  Katalog-Auth-Capability abgeleitet. Gezielte Anmeldungserneuerung und routebezogene Retry-Aktionen
+  sowie konfigurierbare Priorität sind noch nicht umgesetzt.
 - **Keine Provider-Sonderlogik in UI/Orchestrator:** Manifest und Connector-Factories sind
   explizit und die gemeinsame Pipeline ist providerunabhängig. Der aktuelle Dialog ist noch ein
-  erster Slice; Capability-gesteuerte Aktionen bleiben offen.
+  erster Slice; Capability-gesteuerte Auth-/Retry-Aktionen bleiben teilweise offen.
 - **Secrets:** Windows Credential Manager/keyring oder geprüfter verschlüsselter Speicher.
   Keine echten Tokens, Cookies, Passwörter, 2FA-Seeds, PDFs oder Browserprofile in Git,
   OneDrive-Sitzungsordnern, Logs oder Testartefakten.

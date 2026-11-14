@@ -16,6 +16,12 @@ from xw_office.services.invoice_collection.errors import (
 
 
 @dataclass(frozen=True)
+class RouteCapabilities:
+    mailbox_probe: bool = False
+    protected_credential: bool = False
+
+
+@dataclass(frozen=True)
 class RouteManifest:
     route_key: str
     method: str
@@ -25,6 +31,14 @@ class RouteManifest:
     allowed_hosts: tuple[str, ...] = ()
     auth: str | None = None
     required_scope: str | None = None
+
+    @property
+    def capabilities(self) -> RouteCapabilities:
+        """Expose supported setup actions from the declared auth mechanism."""
+        return RouteCapabilities(
+            mailbox_probe=self.auth == "microsoft_graph_mail",
+            protected_credential=self.auth == "api_token",
+        )
 
 
 @dataclass(frozen=True)

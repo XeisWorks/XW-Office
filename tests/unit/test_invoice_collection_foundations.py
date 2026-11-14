@@ -116,6 +116,13 @@ def test_registry_parses_secret_free_catalog() -> None:
     )
     codescene = next(provider for provider in catalog.providers if provider.provider_id == "codescene")
     assert codescene.portal_hosts == ("codescene.com", "billing.stripe.com")
+    mollie = next(provider for provider in catalog.providers if provider.provider_id == "mollie_fees")
+    mail_route = next(route for route in mollie.routes if route.auth == "microsoft_graph_mail")
+    api_route = next(route for route in mollie.routes if route.auth == "api_token")
+    assert mail_route.capabilities.mailbox_probe
+    assert not mail_route.capabilities.protected_credential
+    assert api_route.capabilities.protected_credential
+    assert not api_route.capabilities.mailbox_probe
 
 
 def test_registry_rejects_provider_portal_urls_instead_of_hosts(tmp_path: Path) -> None:

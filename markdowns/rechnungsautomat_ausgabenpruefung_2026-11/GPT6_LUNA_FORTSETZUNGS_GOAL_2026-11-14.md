@@ -1,6 +1,6 @@
 # Fortsetzungs-Goal fuer GPT-6-Luna
 
-**Stand:** 14.11.2026 (Fehlerredaktion, kataloggesteuerte Portale, Tool-Recherche und Vollsuite 2.429/7 und mandantenspezifische Prüfablage ergaenzt)
+**Stand:** 14.11.2026 (Fehlerredaktion, kataloggesteuerte Portale, Tool-Recherche und Vollsuite 2.429/7 und mandantenspezifische Prüfablage und Auth-Capabilities ergaenzt)
 **Repository:** `XeisWorks/XW-Office`, Branch `main`
 **Ausgangslage:** Die technische MVP-Grundlage ist weitgehend implementiert und lokal getestet. Der erste echte Rechnungsabruf ist noch nicht verifiziert. Der Benutzer hat bestaetigt, dass Anbieter-Mailbox und Absenderdomain(s) noch geklaert werden muessen.
 
@@ -72,8 +72,8 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    Probe und manueller PDF-Import redigieren fatale Fehler vor Worker-Logging und UI-Ausgabe.
    Diese Grenzen sind umgesetzt und getestet; neue Workergrenzen duerfen keine rohen
    Providerfehler, Tokens, signierten URLs oder Exception-Chains protokollieren.
-   Der Graph-Mailbox-Probe-Button ist nur fuer Routen mit Katalogmethode `mail` aktiv; erhalte
-   diese methodenbasierte UI-Sperre. Weitere capability-basierte Auth-/Retry-/Portalaktionen
+   Graph-Mailbox-Probe und Mailbox-Eingaben folgen der Katalog-Auth-Capability `microsoft_graph_mail`;
+   geschuetzte Credential-Eingabe folgt `api_token`. Erhalte diese Capability-Steuerung. Weitere capability-basierte Auth-/Retry-/Portalaktionen
    sind noch nicht vollstaendig umgesetzt.
 4. Der Live-Mailpilot ist extern blockiert: Anbieter, Rechnungs-Mailbox und bestaetigte
    Absenderdomain(s) sind noch nicht geklaert. Frage nie nach diesen Werten oder Geheimnissen

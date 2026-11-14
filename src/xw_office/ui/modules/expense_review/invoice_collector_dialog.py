@@ -96,9 +96,11 @@ class InvoiceCollectorDialog(QDialog):
         self._account_alias = QLineEdit("default")
         self._account_alias.setAccessibleName("Kontoalias")
         self._mailbox = QLineEdit()
+        self._mailbox_label = QLabel("Graph-Mailbox")
         self._mailbox.setPlaceholderText("Postfach für Lieferantenbelege")
         self._mailbox.setAccessibleName("Microsoft Graph Rechnungs-Postfach")
         self._sender_domains = QLineEdit()
+        self._sender_domains_label = QLabel("Bestätigte Absenderdomains")
         self._sender_domains.setPlaceholderText("Nur bestätigte Domains, kommasepariert")
         self._sender_domains.setAccessibleName("Bestätigte Rechnungs-Absenderdomains")
         now = datetime.now(ZoneInfo("Europe/Vienna")).date()
@@ -176,20 +178,25 @@ class InvoiceCollectorDialog(QDialog):
 
     def _route_changed(self, *_args: object) -> None:
         route = self._route.currentData()
+        capabilities = route.capabilities if route is not None else None
         mail_test_button = getattr(self, "_mail_test_button", None)
         if mail_test_button is not None:
             mail_test_button.setEnabled(
-                route is not None
-                and route.method == "mail"
+                capabilities is not None
+                and capabilities.mailbox_probe
                 and not (
                     self._mail_test_worker is not None
                     and self._mail_test_worker.isRunning()
                 )
             )
         self._api_token.clear()
-        visible = route is not None and route.method == "official_api"
+        visible = capabilities is not None and capabilities.protected_credential
         self._api_token_label.setVisible(visible)
         self._api_token.setVisible(visible)
+        self._mailbox.setVisible(bool(capabilities and capabilities.mailbox_probe))
+        self._sender_domains.setVisible(bool(capabilities and capabilities.mailbox_probe))
+        self._mailbox_label.setVisible(bool(capabilities and capabilities.mailbox_probe))
+        self._sender_domains_label.setVisible(bool(capabilities and capabilities.mailbox_probe))
         scope = route.required_scope if route is not None else None
         self._api_token_label.setText(
             f"API-Zugang ({scope})" if scope else "API-Zugang"
@@ -240,8 +247,8 @@ class InvoiceCollectorDialog(QDialog):
         form.addRow("Provider", self._provider)
         form.addRow("Abrufroute", self._route)
         form.addRow("Kontoalias", self._account_alias)
-        form.addRow("Graph-Mailbox", self._mailbox)
-        form.addRow("Bestätigte Absenderdomains", self._sender_domains)
+        form.addRow(self._mailbox_label, self._mailbox)
+        form.addRow(self._sender_domains_label, self._sender_domains)
         form.addRow("Dokumenttyp", self._document_type)
         form.addRow(self._api_token_label, self._api_token)
         root.addLayout(form)
@@ -449,7 +456,7 @@ class InvoiceCollectorDialog(QDialog):
                         "Die Verbindung kann erst aktiviert werden, wenn alle aktiven Routen live verifiziert sind."
                     )
                     return
-                if route.method == "official_api":
+                if route.capabilities.protected_credential:
                     try:
                         if not settings.secret_ref:
                             raise ValueError("missing secret reference")
@@ -541,7 +548,7 @@ class InvoiceCollectorDialog(QDialog):
         route = self._route.currentData()
         mailbox = self._mailbox.text().strip()
         domains = _parse_sender_domains(self._sender_domains.text())
-        if route is None or route.method != "mail":
+        if route is None or not route.capabilities.mailbox_probe:
             self._status.setText("Bitte zuerst eine Mailroute auswählen.")
             return
         if not _looks_like_mailbox(mailbox) or not domains:
@@ -779,7 +786,7 @@ class InvoiceCollectorDialog(QDialog):
             return
         route_verified = selected_route.maturity == "verified"
         route_options = {"connector": str(selected_route.connector)}
-        if selected_route.method == "mail":
+        if selected_route.capabilities.mailbox_probe:
             mailbox = self._mailbox.text().strip()
             domains = _parse_sender_domains(self._sender_domains.text())
             if not _looks_like_mailbox(mailbox) or not domains:
@@ -811,7 +818,7 @@ class InvoiceCollectorDialog(QDialog):
         previous_setting = route_settings_by_key.get(str(selected_route.route_key))
         secret_ref = previous_setting.secret_ref if previous_setting is not None else None
         credential_ready = True
-        if selected_route.method == "official_api":
+        if selected_route.capabilities.protected_credential:
             api_token = self._api_token.text().strip()
             if api_token:
                 secret_ref = secret_ref or (
