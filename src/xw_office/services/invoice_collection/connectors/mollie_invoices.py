@@ -91,6 +91,11 @@ class MollieInvoicesConnector:
         self.api.download_invoice_pdf(invoice, destination)
         return DownloadedArtifact(candidate=candidate, path=destination)
 
+    def close(self) -> None:
+        close = getattr(self.api, "close", None)
+        if callable(close):
+            close()
+
 
 class MollieInvoicesHttpClient:
     """Small, read-only HTTP client; token is held only in memory by the caller."""

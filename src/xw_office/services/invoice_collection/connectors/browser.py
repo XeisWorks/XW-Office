@@ -80,6 +80,11 @@ class BrowserInvoiceConnector:
         self.session.download(candidate, destination)
         return DownloadedArtifact(candidate=candidate, path=destination)
 
+    def close(self) -> None:
+        close = getattr(self.session, "close", None)
+        if callable(close):
+            close()
+
 
 def _in_period(value: date | None, start: date | None, end: date | None) -> bool:
     """Keep unknown portal dates for manual review, but enforce known bounds."""

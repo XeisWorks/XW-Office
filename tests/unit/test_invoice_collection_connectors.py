@@ -296,13 +296,19 @@ def test_mollie_http_client_retries_rate_limit_with_bounded_backoff() -> None:
 
 def test_mollie_connector_sends_fee_invoice_through_common_pipeline(tmp_path: Path) -> None:
     class FakeApi:
+        closed = False
+
         def list_invoices(self):
             return [{"id": "inv-1", "date": "2026-11-05", "currency": "EUR"}]
 
         def download_invoice_pdf(self, invoice, destination: Path) -> None:
             _pdf(destination)
 
-    connector = MollieInvoicesConnector(connection=_connection("mollie_fees"), api=FakeApi())
+        def close(self) -> None:
+            self.closed = True
+
+    api = FakeApi()
+    connector = MollieInvoicesConnector(connection=_connection("mollie_fees"), api=api)
     candidates = connector.discover()
     assert candidates[0].document_type is DocumentType.FEE_INVOICE
     artifact = connector.download(candidates[0], tmp_path / "workspace")
@@ -311,6 +317,8 @@ def test_mollie_connector_sends_fee_invoice_through_common_pipeline(tmp_path: Pa
     result = DocumentPipeline(sink=OneDriveLocalSink(destination)).process(artifact)
     assert result.receipt.outcome.value == "NEW"
     assert result.receipt.target_path.exists()
+    connector.close()
+    assert api.closed is True
 
 
 class _BrowserSession:
@@ -318,6 +326,7 @@ class _BrowserSession:
         self.candidate = candidate
         self.root = root
         self.login_opened = False
+        self.closed = False
 
     def probe(self) -> bool:
         return False
@@ -330,6 +339,9 @@ class _BrowserSession:
 
     def download(self, candidate: DocumentCandidate, destination: Path) -> None:
         _pdf(destination)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def test_browser_connector_keeps_login_and_download_injected(tmp_path: Path) -> None:
@@ -347,6 +359,8 @@ def test_browser_connector_keeps_login_and_download_injected(tmp_path: Path) -> 
     connector.open_login()
     assert session.login_opened is True
     assert connector.download(candidate, tmp_path / "workspace").path.exists()
+    connector.close()
+    assert session.closed is True
 
 
 def test_browser_connector_resumes_only_after_route_probe_succeeds(tmp_path: Path) -> None:
