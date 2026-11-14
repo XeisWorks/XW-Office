@@ -44,6 +44,7 @@ from xw_office.services.invoice_collection.errors import (
 from xw_office.services.invoice_collection.journal import InvoiceJournal
 from xw_office.services.invoice_collection.bootstrap import build_connector_factories
 from xw_office.services.invoice_collection.pipeline import DocumentPipeline
+from xw_office.services.invoice_collection.ports import CancelToken
 from xw_office.services.invoice_collection.registry import ProviderCatalog
 from xw_office.services.invoice_collection.security import ensure_invoice_collection_dirs
 from xw_office.services.invoice_collection.service import InvoiceCollectionService, CollectionRun
@@ -439,7 +440,7 @@ class InvoiceCollectorDialog(QDialog):
         # worker itself can serve as the cooperative CancelToken.
         worker: BackgroundWorker
         worker = BackgroundWorker(
-            lambda: service.collect_active(cancel=worker, period=period)
+            lambda: _collect_active_safely(service, cancel=worker, period=period)
         )
         self._fetch_worker = worker
         worker.signals.result.connect(
@@ -497,10 +498,15 @@ class InvoiceCollectorDialog(QDialog):
                     raise RuntimeError("Mailbox-Probe wird vom Connector nicht unterstützt")
                 probe_method()
                 return True
+            except Exception as exc:  # noqa: BLE001 - keep provider details out of worker logs
+                raise _safe_collector_error(exc) from None
             finally:
                 close_method = getattr(connector, "close", None)
                 if callable(close_method):
-                    close_method()
+                    try:
+                        close_method()
+                    except Exception as exc:  # noqa: BLE001 - cleanup errors can contain URLs
+                        raise _safe_collector_error(exc) from None
 
         worker = BackgroundWorker(probe)
         self._mail_test_worker = worker
@@ -516,16 +522,16 @@ class InvoiceCollectorDialog(QDialog):
             )
 
     def _on_mail_test_error(self, error: Exception) -> None:
-        message = str(error)
-        if "msal-extensions" in message:
+        safe_error = _safe_collector_error(error)
+        if safe_error.code is InvoiceErrorCode.CONFIGURATION_ERROR:
             self._status.setText(
-                "Geschützter Microsoft-Token-Cache fehlt. Installiere das optionale "
-                "Paket xw-office[invoice-collection] und starte den Test erneut."
+                "Mailbox-Test nicht eingerichtet. Prüfe die optionale MSAL-/DPAPI-Laufzeit "
+                "und das Paket xw-office[invoice-collection]."
             )
-        elif "keyring" in message:
-            self._status.setText("Windows Credential Manager ist für diese Verbindung nicht verfügbar.")
         else:
-            self._status.setText(f"Mailbox-Test fehlgeschlagen: {type(error).__name__}")
+            self._status.setText(
+                f"Mailbox-Test fehlgeschlagen ({safe_error.code.value}): {safe_error}"
+            )
 
     def _on_mail_test_finished(self, worker: BackgroundWorker) -> None:
         if self._mail_test_worker is worker:
@@ -652,7 +658,10 @@ class InvoiceCollectorDialog(QDialog):
     def _on_collection_error(self, generation: int, error: Exception) -> None:
         if generation != self._fetch_generation:
             return
-        self._status.setText(f"Abruf fehlgeschlagen: {error}")
+        safe_error = _safe_collector_error(error)
+        self._status.setText(
+            f"Abruf fehlgeschlagen ({safe_error.code.value}): {safe_error}"
+        )
 
     def _on_fetch_finished(self, generation: int, worker: BackgroundWorker) -> None:
         if self._fetch_worker is worker:
@@ -927,6 +936,37 @@ class InvoiceCollectorDialog(QDialog):
         ]
         for column, value in enumerate(values):
             self._table.setItem(row, column, QTableWidgetItem(value))
+
+
+def _collect_active_safely(
+    service: InvoiceCollectionService,
+    *,
+    cancel: CancelToken,
+    period: DateRange,
+) -> CollectionRun:
+    """Convert unexpected boundary errors before the generic worker logs them."""
+    try:
+        return service.collect_active(cancel=cancel, period=period)
+    except Exception as exc:  # noqa: BLE001 - exceptions may contain secrets or signed URLs
+        raise _safe_collector_error(exc) from None
+
+
+def _safe_collector_error(error: Exception) -> InvoiceCollectionError:
+    """Preserve a stable error code while replacing untrusted exception text."""
+    code = (
+        error.code
+        if isinstance(error, InvoiceCollectionError)
+        else InvoiceErrorCode.INTERNAL_ERROR
+    )
+    message = {
+        InvoiceErrorCode.CONFIGURATION_ERROR: "Lokale Collector-Konfiguration ist unvollständig",
+        InvoiceErrorCode.DESTINATION_UNAVAILABLE: "Der ausgewählte Zielordner ist nicht verfügbar",
+        InvoiceErrorCode.AUTH_REQUIRED: "Anmeldung oder Zustimmung ist erforderlich",
+        InvoiceErrorCode.RATE_LIMITED: "Der Anbieter begrenzt Anfragen; bitte später erneut versuchen",
+        InvoiceErrorCode.TRANSIENT_NETWORK: "Der Anbieter ist vorübergehend nicht erreichbar",
+        InvoiceErrorCode.POLICY_BLOCKED: "Die Anbieterregel blockiert diesen Zugriff",
+    }.get(code, "Der Vorgang konnte nicht sicher abgeschlossen werden")
+    return InvoiceCollectionError(code, message)
 
 
 def _run_manual_import(

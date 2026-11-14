@@ -1,6 +1,6 @@
 # Fortsetzungs-Goal fuer GPT-6-Luna
 
-**Stand:** 14.11.2026 (Pagination-Guard und Vollsuite 2.423/7 ergaenzt)
+**Stand:** 14.11.2026 (Fehlerredaktion, Tool-Recherche und Vollsuite 2.425/7 ergaenzt)
 **Repository:** `XeisWorks/XW-Office`, Branch `main`
 **Ausgangslage:** Die technische MVP-Grundlage ist weitgehend implementiert und lokal getestet. Der erste echte Rechnungsabruf ist noch nicht verifiziert. Der Benutzer hat bestaetigt, dass Anbieter-Mailbox und Absenderdomain(s) noch geklaert werden muessen.
 
@@ -65,6 +65,10 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    `SecretStore`/Windows Credential Manager sichert; die Mollie-Factory liest diesen SecretRef
    und bekommt den gewaehlten Zeitraum. Erhalte diese Guardrails; vollstaendige
    capability-basierte Auth-/Retry-/Portalaktionen bleiben ein gesonderter offener T04-Punkt.
+   Der allgemeine `BackgroundWorker` protokolliert Ausnahme-Text. Collector-Lauf- und Graph-
+   Mailbox-Probe-Fehler muessen vor Worker-Logging und UI-Ausgabe redigiert werden. Diese
+   Grenzfaelle sind inzwischen umgesetzt und getestet; neue Workergrenzen duerfen keine rohen
+   Providerfehler, Tokens, signierten URLs oder Exception-Chains protokollieren.
 4. Der Live-Mailpilot ist extern blockiert: Anbieter, Rechnungs-Mailbox und bestaetigte
    Absenderdomain(s) sind noch nicht geklaert. Frage nie nach diesen Werten oder Geheimnissen
    im Chat. Wenn der Benutzer soweit ist, gib genau eine lokale UI-Anweisung: in Finanzen >

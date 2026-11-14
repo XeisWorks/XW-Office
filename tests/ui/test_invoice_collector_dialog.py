@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from threading import Event
 from dataclasses import replace
+from datetime import date
+
+import pytest
 
 from PySide6.QtCore import QDate
 from PySide6.QtWidgets import QFileDialog
@@ -11,11 +14,13 @@ from xw_office.core.app_paths import default_invoice_target_dir
 from xw_office.ui.modules.expense_review import invoice_collector_dialog as dialog_module
 from xw_office.services.invoice_collection.connections import ConnectionRepository
 from xw_office.services.invoice_collection.domain import (
+    DateRange,
     DocumentOutcome,
     ProviderConnection,
     RouteSettings,
     TenantId,
 )
+from xw_office.services.invoice_collection.errors import InvoiceCollectionError, InvoiceErrorCode
 from xw_office.services.invoice_collection.orchestrator import (
     CollectionItemResult,
     CollectionSummary,
@@ -23,6 +28,7 @@ from xw_office.services.invoice_collection.orchestrator import (
 from xw_office.services.invoice_collection.service import CollectionRun, ConnectionRouteIssue
 from xw_office.ui.modules.expense_review.invoice_collector_dialog import (
     InvoiceCollectorDialog,
+    _collect_active_safely,
     _looks_like_mailbox,
     _parse_sender_domains,
 )
@@ -33,6 +39,49 @@ def test_default_invoice_target_uses_current_windows_profile(monkeypatch, tmp_pa
     assert default_invoice_target_dir() == (
         tmp_path / "Bernhard Holl" / "OneDrive - XeisWorks" / "00 Finanzmanagement" / "02 Belege"
     )
+
+
+def test_collection_worker_boundary_redacts_exception_text_before_logging() -> None:
+    class BrokenService:
+        def collect_active(self, **_kwargs: object) -> object:
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.AUTH_REQUIRED,
+                "Bearer secret-token from https://provider.example.test/?signed=secret",
+            )
+
+    with pytest.raises(InvoiceCollectionError) as raised:
+        _collect_active_safely(
+            BrokenService(),  # type: ignore[arg-type]
+            cancel=object(),  # type: ignore[arg-type]
+            period=DateRange(date(2026, 11, 1), date(2026, 11, 30)),
+        )
+
+    assert raised.value.code is InvoiceErrorCode.AUTH_REQUIRED
+    assert "secret-token" not in str(raised.value)
+    assert "signed=secret" not in str(raised.value)
+    assert raised.value.__suppress_context__ is True
+
+
+def test_collector_error_status_redacts_untrusted_provider_text(
+    qtbot: object, tmp_path: Path
+) -> None:
+    dialog = InvoiceCollectorDialog(
+        tenant_id="xw",
+        connection_repository=ConnectionRepository(tmp_path / "connections.sqlite3"),
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    dialog._fetch_generation = 3
+    provider_error = RuntimeError(
+        "Bearer secret-token https://provider.example.test/?signed=secret"
+    )
+
+    dialog._on_collection_error(3, provider_error)
+    assert "secret-token" not in dialog._status.text()
+    assert "signed=secret" not in dialog._status.text()
+
+    dialog._on_mail_test_error(provider_error)
+    assert "secret-token" not in dialog._status.text()
+    assert "signed=secret" not in dialog._status.text()
 
 
 def test_invoice_collector_dialog_loads_catalog_and_requires_active_connections(
