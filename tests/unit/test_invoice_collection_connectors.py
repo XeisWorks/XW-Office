@@ -453,6 +453,56 @@ def test_mollie_http_client_paginates_and_rejects_untrusted_pdf_host(
     assert len(requests) == 2
 
 
+def test_mollie_http_client_stops_on_repeated_page_link() -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={
+                "_embedded": {"invoices": []},
+                "_links": {"next": {"href": "https://api.mollie.com/page-2"}},
+            },
+        )
+
+    client = MollieInvoicesHttpClient(
+        "read-only-token",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(InvoiceCollectionError) as error:
+        client.list_invoices()
+
+    assert error.value.code is InvoiceErrorCode.PROVIDER_CHANGED
+    assert requests == ["/v2/invoices", "/page-2"]
+
+
+def test_mollie_http_client_rejects_untrusted_pagination_host() -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(
+            200,
+            json={
+                "_embedded": {"invoices": []},
+                "_links": {"next": {"href": "https://attacker.example.test/steal"}},
+            },
+        )
+
+    client = MollieInvoicesHttpClient(
+        "read-only-token",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(InvoiceCollectionError) as error:
+        client.list_invoices()
+
+    assert error.value.code is InvoiceErrorCode.POLICY_BLOCKED
+    assert requests == ["https://api.mollie.com/v2/invoices?limit=100"]
+
+
 def test_mollie_pdf_download_streams_with_size_limit_and_closes_response(
     tmp_path: Path,
 ) -> None:

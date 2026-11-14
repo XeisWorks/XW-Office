@@ -39,10 +39,12 @@ current_status:
     - "saved provider connections can be selected, updated by stable ID, and disabled; re-enabling still requires verified routes"
     - "unverified connection settings can be saved locally as disabled drafts for later route verification"
     - "official API credentials are entered masked and stored through SecretStore; the Mollie invoice factory reads only the saved secret reference"
+    - "Mollie invoice pagination rejects untrusted page hosts, repeated links and excessive page counts"
     - "selected OneDrive target folder can be opened from the dialog without implying cloud sync"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
-    - "full repository suite after journal privacy migration, saved-connection UI, protected API credential entry and Mollie factory wiring: 2421 passed, 7 skipped, 0 failed; repo Ruff, provider/queue YAML, collector MyPy and diff checks pass"
-    - "collector/dialog MyPy: 30 source files, no issues; DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values"
+    - "latest full repository suite after Mollie pagination guard: 2423 passed, 7 skipped, 0 failed; repo Ruff, Provider-/Queue-YAML, diff and added-diff secret checks pass"
+    - "targeted MyPy for the changed Mollie connector passes; broader current-environment MyPy is blocked by absent optional msal_extensions/Playwright and a NumPy stub/Python-version mismatch; 30-file collector/dialog MyPy passed in the prior recorded environment"
+    - "DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values (prior recorded checks)"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
     - "all 18 real provider accounts and 26 route behaviors; mailbox probe is not invoice-route verification"
@@ -296,6 +298,8 @@ tasks:
       - "tests/unit/test_invoice_collection_connectors.py::test_mollie_connector_sends_fee_invoice_through_common_pipeline (also verifies adapter close)"
       - "tests/unit/test_invoice_collection_connectors.py::test_mollie_pdf_download_streams_with_size_limit_and_closes_response"
       - "tests/unit/test_invoice_collection_connectors.py::test_mollie_pdf_download_retries_rate_limit"
+      - "tests/unit/test_invoice_collection_connectors.py::test_mollie_http_client_stops_on_repeated_page_link"
+      - "tests/unit/test_invoice_collection_connectors.py::test_mollie_http_client_rejects_untrusted_pagination_host"
       - "tests/unit/test_invoice_collection_foundations.py::test_same_tenant_cross_route_duplicate_publishes_once_and_merges_safe_provenance (shared-pipeline cross-route dedup proof)"
     deliverables:
       - "Dedicated SecretRef for minimal invoices.read credential"
@@ -366,9 +370,9 @@ tasks:
     status: "in_progress"
     depends_on: ["T05", "T06", "T07"]
     evidence:
-      - "python -m pytest -q: 2421 passed, 7 skipped, 0 failed"
+      - "python -m pytest tests/ -q: 2423 passed, 7 skipped, 0 failed"
       - "python -m ruff check .: passed"
-      - "python -m mypy src/xw_office/services/invoice_collection src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py: 30 source files, no issues"
+      - "Targeted mypy on changed Mollie connector: passed; broad local mypy unavailable due missing optional msal_extensions/Playwright and NumPy stub/Python-version mismatch"
       - "Provider and task queue YAML parse: passed"
       - "git diff --check: passed"
       - "Added-diff secret-pattern scan: no matches"

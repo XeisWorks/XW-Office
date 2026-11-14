@@ -8,7 +8,7 @@
 
 Beim Abschlussaudit wurde festgestellt, dass `documents.external_id` neue externe Rechnungs-IDs trotz bereits vorhandener Hash-Provenienz zusaetzlich im Klartext speicherte. Das Journal nutzt jetzt Schema 4: neue Dokumentzeilen schreiben dort keine externe ID mehr; `has_external_id()` arbeitet ueber den SHA-256-Fingerprint in `document_provenance`. Die Migration uebernimmt vorhandene Schema-1-bis-3-Klartextwerte in gehashte Provenienz und leert anschliessend die Spalte, sodass die Inhaltskonflikterkennung erhalten bleibt. Abgedeckt durch Tests fuer neue Klartextfreiheit, Hash-Lookup/Konflikterkennung und Schema-3-Migration. Der gezielte Foundation-Lauf besteht mit **37 passed**. Eine SQLite-Migration garantiert keine physische Loeschung alter Datenseiten oder Sicherungskopien; sie entfernt den Wert aus dem aktiven Datenbankschema und dem aktuellen Datensatz.
 
-Die volle Repository-Suite nach Journal-Migration, Verbindungsverwaltung, geschuetzter API-Credential-Eingabe und Mollie-Factory besteht mit **2.421 passed, 7 skipped, 0 failed** (eine externe Starlette/httpx-Deprecation-Warnung). Repo-weites Ruff, Collector-MyPy (30 Dateien), Provider-/Queue-YAML, `git diff --check` und der Diff-Secret-Mustercheck bestehen.
+Die volle Repository-Suite nach Journal-Migration, Verbindungsverwaltung, geschuetzter API-Credential-Eingabe, Mollie-Factory und Pagination-Guard besteht mit **2.423 passed, 7 skipped, 0 failed**. Repo-weites Ruff, Provider-/Queue-YAML, `git diff --check`, der Diff-Secret-Mustercheck und ein gezielter MyPy-Lauf fuer den geaenderten Mollie-Connector bestehen. Der breite lokale MyPy-Lauf war in dieser Umgebung wegen fehlender optionaler Pakete (`msal_extensions`, Playwright) und eines NumPy-Stub/Python-Versionskonflikts nicht ausfuehrbar.
 
 ## Fortschreibung: gespeicherte Verbindungen und Zielordner
 
@@ -35,6 +35,10 @@ Der OneDrive-Sink verwendete zuvor einen Tempnamen aus Dateiname und Prozess-ID;
 ## Fortschreibung: begrenzter Mollie-PDF-Abruf
 
 Der Mollie-PDF-Download liest den HTTP-Body jetzt gestreamt mit einem konfigurierbaren Limit (standardmaessig 25 MiB); `Content-Length` ist nur eine fruehe Ablehnung, die Bytezaehlung begrenzt den tatsaechlichen Empfang. Der Response wird auch bei Groessen- und Lesefehlern geschlossen; die Zieldatei wird erst nach vollstaendigem Empfang geschrieben. Der bestehende Rate-Limit-/Timeout-Retry gilt auch fuer den Stream, und nicht erlaubte Hosts werden vor dem Request blockiert. Connector-Tests fuer Oversize/Response-Close, Retry und Hostallowlist bestehen. Die vollstaendige Repository-Suite besteht nach Graph-/OneDrive-Haertung und Mollie-Streaming mit **2.413 bestanden, 7 uebersprungen, 0 fehlgeschlagen**.
+
+## Fortschreibung: sichere Mollie-Pagination
+
+Der Rechnungslisten-Connector stoppt nun wiederholte `next`-Links und Pagination nach 1.000 Seiten mit einem typisierten `PROVIDER_CHANGED`-Fehler. Die bestehende Host-/Scheme-Allowlist prueft jeden Folgelink vor dem HTTP-Aufruf; ein Test belegt, dass eine fremde Domain keinen zweiten Request ausloest. Fehlerhafte `_links`-Strukturen werden defensiv behandelt. Gezielt bestanden: vier Mollie-HTTP-Client-Tests; volle Suite **2.423 passed, 7 skipped, 0 failed**. Der Patch beweist weiterhin keinen Live-Zugriff auf ein Mollie-Konto.
 
 ## 1. Herkunft und ursprünglich gemeintes Ergebnis
 

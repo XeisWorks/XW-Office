@@ -103,6 +103,7 @@ class MollieInvoicesHttpClient:
 
     _PDF_CHUNK_BYTES = 64 * 1024
     _DEFAULT_MAX_PDF_BYTES = 25 * 1024 * 1024
+    _MAX_INVOICE_PAGES = 1000
 
     def __init__(
         self,
@@ -129,7 +130,14 @@ class MollieInvoicesHttpClient:
         invoices: list[dict[str, Any]] = []
         url: str | None = f"{self._base_url}/v2/invoices"
         first_page = True
+        seen_urls: set[str] = set()
         while url:
+            if url in seen_urls or len(seen_urls) >= self._MAX_INVOICE_PAGES:
+                raise InvoiceCollectionError(
+                    InvoiceErrorCode.PROVIDER_CHANGED,
+                    "Mollie-Invoices API lieferte eine wiederholte oder zu lange Pagination",
+                )
+            seen_urls.add(url)
             response = self._request("GET", url, params={"limit": 100} if first_page else None)
             first_page = False
             payload = response.json()
@@ -137,11 +145,8 @@ class MollieInvoicesHttpClient:
             page = embedded.get("invoices") if isinstance(embedded, dict) else []
             if isinstance(page, list):
                 invoices.extend(item for item in page if isinstance(item, dict))
-            next_link = (
-                ((payload.get("_links") or {}).get("next") or {})
-                if isinstance(payload, dict)
-                else {}
-            )
+            links = payload.get("_links") if isinstance(payload, dict) else None
+            next_link = links.get("next") if isinstance(links, dict) else None
             next_url = next_link.get("href") if isinstance(next_link, dict) else None
             url = str(next_url) if next_url else None
         return invoices
