@@ -38,10 +38,10 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    wenn sie durch vorhandenen Code, erfolgreiche Pruefungen oder echte Live-Evidenz gedeckt ist.
 2. Der Graph-Downloadpfad hat seit Commit `1de41866` begrenztes Streaming fuer rohe und
    JSON/Base64-Anhaenge, eine berechnete Base64-Obergrenze und eine 64-KiB-Grenze fuer
-   JSON-Metadaten. `Content-Length` ist nur ein Vorabhinweis. Erhalte dies und pruefe die
-   Implementierung samt Tests, bevor du den Task als erledigt betrachtest; erfinde keine
-   zweite Downloadstrategie. Graph-Nachrichtenseiten werden ausserdem inkrementell iteriert,
-   damit der gesamte Mailboxscan nicht als Nachrichtenliste im Speicher verbleibt.
+   JSON-Metadaten. `Content-Length` ist nur ein Vorabhinweis. Graph-Nachrichtenseiten werden
+   inkrementell iteriert, und wiederholte `nextLink`s enden mit einem typisierten Routenfehler.
+   Erhalte diese Regeln und pruefe die Implementierung samt Tests, bevor du den Task als
+   erledigt betrachtest; erfinde keine zweite Downloadstrategie.
 3. Pruefe die Dialog-, Journal-, Wiederaufnahme- und Fehlerpfade auf noch fehlende MVP-
    Bedienhandlungen. Implementiere nur konkret belegte, providerunabhaengige Luecken.
    Insbesondere keine erfundenen Mail-Absenderregeln, Portal-Selektoren, API-Rechte oder

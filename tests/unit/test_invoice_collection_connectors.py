@@ -252,6 +252,34 @@ def test_graph_reader_stops_oversized_stream_and_closes_response(tmp_path: Path)
     assert not destination.parent.exists()
 
 
+def test_graph_reader_stops_when_graph_repeats_a_page_link() -> None:
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        return httpx.Response(
+            200,
+            json={
+                "value": [],
+                "@odata.nextLink": "https://graph.microsoft.com/v1.0/loop",
+            },
+        )
+
+    reader = GraphMailAttachmentReader(
+        mailbox="billing@example.test",
+        token_provider=CallbackGraphTokenProvider(lambda: "test-token"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    with pytest.raises(InvoiceCollectionError) as error:
+        list(reader.list_messages())
+
+    assert error.value.code is InvoiceErrorCode.TRANSIENT_NETWORK
+    assert requests == [
+        "/v1.0/users/billing@example.test/messages",
+        "/v1.0/loop",
+    ]
+
+
 def test_graph_reader_rejects_json_base64_above_decoded_limit(tmp_path: Path) -> None:
     encoded = base64.b64encode(b"123456789").decode("ascii")
 

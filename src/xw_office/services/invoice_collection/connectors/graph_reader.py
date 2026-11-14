@@ -44,7 +44,14 @@ class GraphMailAttachmentReader:
             "?$select=id,receivedDateTime,sender&$expand=attachments"
             "($select=id,name,contentType,size,isInline)&$top=100"
         )
+        seen_page_links: set[str] = set()
         while url:
+            if url in seen_page_links:
+                raise InvoiceCollectionError(
+                    InvoiceErrorCode.TRANSIENT_NETWORK,
+                    "Microsoft Graph hat einen wiederholten Seitenlink geliefert",
+                )
+            seen_page_links.add(url)
             payload = self._request("GET", url).json()
             for raw in payload.get("value") or []:
                 if not isinstance(raw, dict):
