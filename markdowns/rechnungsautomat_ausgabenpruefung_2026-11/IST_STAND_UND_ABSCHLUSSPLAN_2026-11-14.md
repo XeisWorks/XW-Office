@@ -1,6 +1,6 @@
 # Rechnungsautomat: Ist-Stand und Abschlussplan
 
-**Prüfstand: 14.11.2026, `main` bis einschließlich `9590f9e4`.** Diese Datei ist eine Bestandsaufnahme und ein Folgeauftrag, kein Nachweis für einen produktiven Rechnungsabruf. Verbindliches Zielbild bleiben `START_HERE.md`, `ARCHITEKTUR.md` und `SICHERHEIT_UND_2FA.md` in diesem Ordner. `TASK_QUEUE.yaml` ist die bestehende Implementierungs-Queue; ihre Statuswerte wurden hier nicht pauschal auf `done` gesetzt. Die jüngsten Implementierungsschritte umfassen `3b386611`, `159e5bb5`, `f6ade5fe`, `73cc7f1a`, `2c837ba9` und `9590f9e4`.
+**Pr?fstand: 14.11.2026, `main` bis einschlie?lich `1eb15c6a`.** Diese Datei ist eine Bestandsaufnahme und ein Folgeauftrag, kein Nachweis f?r einen produktiven Rechnungsabruf. Verbindliches Zielbild bleiben `START_HERE.md`, `ARCHITEKTUR.md` und `SICHERHEIT_UND_2FA.md` in diesem Ordner. `TASK_QUEUE.yaml` ist die bestehende Implementierungs-Queue; ihre Statuswerte wurden hier nicht pauschal auf `done` gesetzt. Die j?ngsten Implementierungsschritte umfassen `3b386611`, `159e5bb5`, `f6ade5fe`, `73cc7f1a`, `2c837ba9`, `9590f9e4` und `1eb15c6a`.
 
 ## 1. Herkunft und ursprünglich gemeintes Ergebnis
 
@@ -16,11 +16,11 @@ Das Produktziel ist: In **Finanzen > Ausgabenprüfung** per Klick die **aktivier
 | Katalog | `PROVIDER_REGISTRY.yaml`: 18 Anbieter und 26 Routen; Details in `PROVIDER_ABDECKUNG_2026-11-14.md`. Die automatisierten Rechnungsrouten sind nicht live verifiziert. | Planung, keine Live-Zusage |
 | Monatslauf | Der Dialog bietet Start-/Enddatum und vorbelegt den aktuellen Kalendermonat in `Europe/Vienna`; der Zeitraum wird bis zu den Factory-Connectors durchgereicht. | Lokal verdrahtet; Datumssemantik ist je Route noch nicht durchgehend verifiziert |
 | Lokale Basis | Domain-Typen, Registry-Parser, Connection-Repository, SQLite-Journal, `LOCALAPPDATA`-Pfade, PDF-Validierung, Hash-/Dateinamenlogik, Secret- und Auth-Grenzen sind implementiert. | Technische Grundlage |
-| Manueller Import | PDF-Auswahl im Dialog läuft durch `ManualImportConnector`, `DocumentPipeline` und `OneDriveLocalSink`; lokale Ablage meldet `SYNC_PENDING`. | Lokal getestet; echte OneDrive-Synchronisation nicht remote bestätigt |
+| Manueller Import | PDF-Auswahl im abbrechbaren Worker l?uft durch `ManualImportConnector`, `DocumentPipeline` und `OneDriveLocalSink`. Der gew?hlte Rechnungszeitraum wird gepr?ft; au?erhalb liegende Belege werden als ?bersprungen ausgewiesen. Lokale Ablage meldet `SYNC_PENDING`. | Lokal getestet; echte OneDrive-Synchronisation nicht remote best?tigt |
 | Abrufadapter | Graph-Mail ist in der Desktop-App mit einer expliziten Factory verdrahtet; Mailbox- und Absenderdomain-Konfiguration wird geprüft. Mollie-API und Playwright bleiben Adapter-/Fake-Grundlage. | Graph-Zugriff technisch angebunden; keine Rechnungsroute live verifiziert |
 | Graph-Mailbox-Probe | Der Dialog öffnet einen sichtbaren MSAL-Systembrowser-Login mit `Mail.Read`; der Probe fragt höchstens eine Nachrichten-ID ab, keine Texte oder Anhänge. Token-Cache ist lokal unter `LOCALAPPDATA` und nach Tenant/Mailbox getrennt. | Zugriffstest vorhanden; bestätigt weder Anbieterregel noch Rechnungsabruf |
 | Browser-Einrichtung | `xw-invoice-collection` bietet `doctor`, `catalog`, `login`, `login-all`, `probe`. Login öffnet eine Startseite; `probe_callback=True`, `discover_callback=[]` und `download_callback=None` sind Platzhalter. | Anmeldung/Diagnose, kein Rechnungsabruf |
-| Testlauf | Aktueller gezielter Lauf: **80 Collector-Unit-/UI-Tests bestanden**; Ruff, Queue-YAML und `git diff --check` bestanden. MyPy konnte wegen fehlender optionaler Umgebungsabhängigkeiten/-Stubs (`msal_extensions`, `truststore`, PyYAML-Stubs) nicht vollständig laufen. | Lokale Regression, keine Live-Abnahme |
+| Testlauf | Vollst?ndige Repository-Suite nach dem Monatsimport-Fix: **2.391 bestanden, 7 ?bersprungen**, 0 fehlgeschlagen; repo-weites Ruff, Provider-/Queue-YAML, `git diff --check` und Secret-Musterpr?fung bestanden. | Breite lokale Regression, keine Live-Abnahme |
 
 Die optionale Abhängigkeit `invoice-collection` in `pyproject.toml` umfasst Keyring, `msal-extensions` und Playwright. Das Vorhandensein dieser Pakete beweist keine eingerichteten Konten oder erteilten Microsoft-Rechte.
 
@@ -44,7 +44,7 @@ Die optionale Abhängigkeit `invoice-collection` in `pyproject.toml` umfasst Key
 - Baseline und aktuelle Katalog-/Factory-Matrix dokumentieren; `TASK_QUEUE.yaml` mit belegter Evidenz aktualisieren.
 - Bereits vorhanden: planned-Routen werden angezeigt und können nicht aktiviert werden; gespeicherte Routen werden beim Abruf erneut gegen Katalog-Maturity geprüft. Noch offen: vorhandene Alt-Connections strukturiert als `CONFIGURATION_ERROR` darstellen.
 - Bereits vorhanden: 0 erfolgreiche Dokumente werden nicht als erfolgreicher Abruf ausgegeben; Setup-/Discovery-Exceptions sind pro Route isoliert, Locks verwenden Connection-IDs; Ergebnisse erscheinen je Route/Kandidat. Noch offen: konkrete Handlung für Auth-, Konflikt- und Policyfehler.
-- Vorhanden: PDF-Import und Sink-Preflight laufen im abbrechbaren Worker; UI-Resultate werden nur im Hauptthread aktualisiert. Offen: Worker-/Fehlerpfade im vollständigen Qt-Regressionslauf und Review-Auflösung.
+- Vorhanden: PDF-Import und Sink-Preflight laufen im abbrechbaren Worker; UI-Resultate werden nur im Hauptthread aktualisiert. Die vollst?ndige Repository-Suite mit Qt-Regression besteht (2.391 passed, 7 skipped). Offen: Review-Aufl?sung und konkrete UI-Handlungen f?r Auth-, Konflikt- und Policyfehler.
 
 ### B. Monatslauf und Datenwahrheit end-to-end
 
