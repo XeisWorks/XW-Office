@@ -25,7 +25,8 @@ current_status:
     - "manual PDF import runs in a cancellable worker, honors the selected period, and reports out-of-period files as skipped"
     - "invalid enabled connection rows are isolated as CONFIGURATION_ERROR while valid connections continue"
     - "Mollie and browser connectors close their injected HTTP/session adapters"
-    - "full repository suite: 2392 passed, 7 skipped; repo Ruff, provider/queue YAML and diff checks pass"
+    - "same tenant/sink/PDF hash across routes publishes once and adds hashed source provenance to the journal"
+    - "full repository suite: 2393 passed, 7 skipped; repo Ruff, provider/queue YAML and diff checks pass"
     - "collector/dialog MyPy: 30 source files, no issues; DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
@@ -159,6 +160,7 @@ tasks:
       - "tests/unit/test_invoice_collection_foundations.py"
       - "tests/unit/test_invoice_collection_foundations.py::test_invoice_date_extraction_requires_one_explicitly_labeled_date"
       - "tests/unit/test_invoice_collection_foundations.py::test_pipeline_sends_unknown_or_out_of_period_dates_to_review_folder"
+      - "tests/unit/test_invoice_collection_foundations.py::test_same_tenant_cross_route_duplicate_publishes_once_and_merges_safe_provenance"
     deliverables:
       - "PDF size/signature/MIME/parser/encryption validation"
       - "SHA-256, deterministic safe naming and tenant-scoped deduplication"
@@ -248,6 +250,7 @@ tasks:
       - "src/xw_office/services/invoice_collection/connectors/mollie_invoices.py"
       - "tests/unit/test_invoice_collection_connectors.py"
       - "tests/unit/test_invoice_collection_connectors.py::test_mollie_connector_sends_fee_invoice_through_common_pipeline (also verifies adapter close)"
+      - "tests/unit/test_invoice_collection_foundations.py::test_same_tenant_cross_route_duplicate_publishes_once_and_merges_safe_provenance (shared-pipeline cross-route dedup proof)"
     deliverables:
       - "Dedicated SecretRef for minimal invoices.read credential"
       - "Paginated list/get/download connector with host/redirect policy"
