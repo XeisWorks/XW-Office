@@ -156,6 +156,8 @@ tasks:
       - "src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py"
       - "src/xw_office/services/invoice_collection/orchestrator.py"
       - "tests/ui/test_invoice_collector_dialog.py"
+      - "tests/ui/test_invoice_collector_dialog.py::test_invoice_collector_dialog_refuses_to_enable_unverified_route"
+      - "tests/unit/test_invoice_collection_foundations.py::test_collection_service_blocks_saved_route_that_catalog_marks_planned"
       - "tests/unit/test_invoice_collection_foundations.py::test_orchestrator_honors_cooperative_cancellation_before_start"
       - "tests/unit/test_invoice_collection_foundations.py::test_orchestrator_isolates_discovery_failure_and_uses_connection_lock"
       - "tests/unit/test_invoice_collection_foundations.py::test_collection_service_wires_saved_routes_to_factory_and_orchestrator (period forwarding)"

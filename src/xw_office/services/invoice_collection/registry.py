@@ -38,6 +38,12 @@ class ProviderCatalog:
     schema_version: int
     providers: tuple[ProviderManifest, ...]
 
+    def route(self, provider_id: str, route_key: str) -> RouteManifest | None:
+        provider = next((item for item in self.providers if item.provider_id == provider_id), None)
+        if provider is None:
+            return None
+        return next((item for item in provider.routes if item.route_key == route_key), None)
+
     @classmethod
     def from_yaml(cls, path: Path) -> "ProviderCatalog":
         payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}

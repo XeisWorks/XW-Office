@@ -33,7 +33,11 @@ from xw_office.services.invoice_collection.factories import ConnectorFactoryRegi
 from xw_office.services.invoice_collection.journal import InvoiceJournal
 from xw_office.services.invoice_collection.pipeline import DocumentPipeline
 from xw_office.services.invoice_collection.pdf_validation import inspect_pdf
-from xw_office.services.invoice_collection.registry import ProviderCatalog
+from xw_office.services.invoice_collection.registry import (
+    ProviderCatalog,
+    ProviderManifest,
+    RouteManifest,
+)
 from xw_office.services.invoice_collection.security import redact_sensitive_text
 from xw_office.services.invoice_collection.sinks.onedrive_local import OneDriveLocalSink
 from xw_office.services.invoice_collection.orchestrator import CollectionOrchestrator
@@ -411,3 +415,51 @@ def test_collection_service_wires_saved_routes_to_factory_and_orchestrator(tmp_p
     assert run.issues == ()
     assert run.summary.new_count == 1
     assert received_periods == [selected_period]
+
+
+def test_collection_service_blocks_saved_route_that_catalog_marks_planned(tmp_path: Path) -> None:
+    repository = ConnectionRepository(tmp_path / "connections.sqlite3")
+    connection = ProviderConnection.create(
+        provider_id="fixture",
+        tenant_id=TenantId.XW,
+        account_alias="billing",
+        route_settings=(
+            RouteSettings(route_key="mail_pdf", options={"connector": "fixture"}),
+        ),
+    )
+    repository.save(connection)
+    factories = ConnectorFactoryRegistry()
+    factories.register("fixture", lambda *_args: pytest.fail("planned route factory invoked"))
+    catalog = ProviderCatalog(
+        schema_version=2,
+        providers=(
+            ProviderManifest(
+                provider_id="fixture",
+                label="Fixture",
+                category="expense",
+                supported_tenants=frozenset({"xw"}),
+                document_types=frozenset({"expense_invoice"}),
+                routes=(
+                    RouteManifest(
+                        route_key="mail_pdf",
+                        method="mail",
+                        connector="graph_mail_attachment",
+                        priority=10,
+                        maturity="planned",
+                    ),
+                ),
+            ),
+        ),
+    )
+    target = tmp_path / "onedrive"
+    target.mkdir()
+    run = InvoiceCollectionService(
+        connections=repository,
+        factories=factories,
+        target_root=target,
+        journal=InvoiceJournal(tmp_path / "journal.sqlite3"),
+        catalog=catalog,
+    ).collect_active()
+    assert run.summary.items == ()
+    assert len(run.issues) == 1
+    assert run.issues[0].message.startswith("UNSUPPORTED_ACCOUNT:")

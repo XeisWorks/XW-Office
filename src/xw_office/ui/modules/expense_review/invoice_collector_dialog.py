@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import calendar
 from datetime import date, datetime
+import re
 import uuid
 from zoneinfo import ZoneInfo
 
@@ -77,6 +78,12 @@ class InvoiceCollectorDialog(QDialog):
         self._route = QComboBox()
         self._account_alias = QLineEdit("default")
         self._account_alias.setAccessibleName("Kontoalias")
+        self._mailbox = QLineEdit()
+        self._mailbox.setPlaceholderText("Postfach für Lieferantenbelege")
+        self._mailbox.setAccessibleName("Microsoft Graph Rechnungs-Postfach")
+        self._sender_domains = QLineEdit()
+        self._sender_domains.setPlaceholderText("Nur bestätigte Domains, kommasepariert")
+        self._sender_domains.setAccessibleName("Bestätigte Rechnungs-Absenderdomains")
         now = datetime.now(ZoneInfo("Europe/Vienna")).date()
         month_start = now.replace(day=1)
         month_end = now.replace(day=calendar.monthrange(now.year, now.month)[1])
@@ -149,6 +156,8 @@ class InvoiceCollectorDialog(QDialog):
         form.addRow("Provider", self._provider)
         form.addRow("Abrufroute", self._route)
         form.addRow("Kontoalias", self._account_alias)
+        form.addRow("Graph-Mailbox", self._mailbox)
+        form.addRow("Bestätigte Absenderdomains", self._sender_domains)
         form.addRow("Dokumenttyp", self._document_type)
         root.addLayout(form)
         actions = QHBoxLayout()
@@ -201,6 +210,7 @@ class InvoiceCollectorDialog(QDialog):
                 factories=ConnectorFactoryRegistry(),
                 target_root=Path(self._folder.text()),
                 journal=InvoiceJournal(),
+                catalog=getattr(self, "_catalog", None),
             )
         if self._fetch_worker is not None and self._fetch_worker.isRunning():
             return
@@ -308,12 +318,29 @@ class InvoiceCollectorDialog(QDialog):
                 "Sie können Belege über den manuellen PDF-Import ablegen."
             )
             return
-        if selected_route is not None and selected_route.maturity != "verified":
+        if selected_route.maturity != "verified":
             self._status.setText(
                 "Diese Abrufroute ist noch nicht live verifiziert und kann nicht aktiviert werden. "
                 "Nutzen Sie den manuellen PDF-Import."
             )
             return
+        route_options = {"connector": str(selected_route.connector)}
+        if selected_route.method == "mail":
+            mailbox = self._mailbox.text().strip()
+            domains = _parse_sender_domains(self._sender_domains.text())
+            if not _looks_like_mailbox(mailbox) or not domains:
+                self._status.setText(
+                    "Für Mailabruf müssen ein Rechnungs-Postfach und mindestens eine "
+                    "bestätigte Absenderdomain eingetragen sein."
+                )
+                return
+            route_options.update(
+                {
+                    "mailbox": mailbox,
+                    "sender_domains": ",".join(sorted(domains)),
+                }
+            )
+        route_options["document_type"] = str(self._document_type.currentData().value)
         connection = ProviderConnection.create(
             provider_id=provider_id,
             tenant_id=TenantId(str(self._tenant.currentData())),
@@ -321,11 +348,9 @@ class InvoiceCollectorDialog(QDialog):
             route_settings=(
                 RouteSettings(
                     route_key=str(selected_route.route_key),
-                    options={"connector": str(selected_route.connector)},
+                    options=route_options,
                 ),
-            )
-            if selected_route is not None
-            else (),
+            ),
         )
         self._connection_repository.save(connection)
         self._status.setText("Verbindung lokal gespeichert; Secretwerte werden separat hinterlegt.")
@@ -395,3 +420,16 @@ def _date_edit(value: date) -> QDateEdit:
     edit.setCalendarPopup(True)
     edit.setDisplayFormat("dd.MM.yyyy")
     return edit
+
+
+def _looks_like_mailbox(value: str) -> bool:
+    local, separator, domain = value.partition("@")
+    return bool(separator and local and "." in domain and not any(ch.isspace() for ch in value))
+
+
+def _parse_sender_domains(value: str) -> frozenset[str]:
+    domains = {part.strip().casefold().lstrip("@") for part in value.split(",")}
+    domains.discard("")
+    if any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", item) for item in domains):
+        return frozenset()
+    return frozenset(domains)
