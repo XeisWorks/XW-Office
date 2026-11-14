@@ -79,6 +79,8 @@ def test_graph_mail_connector_requires_real_pdf_attachment_and_stable_ids(tmp_pa
         connection=_connection(),
         reader=reader,
         policy=MailMatchPolicy(sender_domains=frozenset({"billing.example.test"})),
+        start=date(2026, 10, 1),
+        end=date(2026, 10, 31),
     )
     candidates = connector.discover()
     assert len(candidates) == 1
@@ -88,6 +90,7 @@ def test_graph_mail_connector_requires_real_pdf_attachment_and_stable_ids(tmp_pa
     assert reader.downloads == [("message-1", "pdf-1")]
     assert candidates[0].document_date is None
     assert candidates[0].metadata["received_at"] == "2026-11-05T10:00:00Z"
+    assert candidates[0].metadata["selected_period_start"] == "2026-10-01"
 
 
 def test_graph_mail_connector_fails_closed_without_verified_sender_domains(

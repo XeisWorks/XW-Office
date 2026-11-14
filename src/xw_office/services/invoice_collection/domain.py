@@ -151,6 +151,7 @@ class SinkReceipt:
     sync_status: SyncStatus
     target_path: Path
     sha256: str
+    review_reason: str | None = None
 
 
 def utc_now() -> datetime:

@@ -355,12 +355,18 @@ class InvoiceCollectorDialog(QDialog):
             self._status.setText("Abruf lieferte ein ungültiges Ergebnis.")
             return
         issue_count = len(result.issues)
-        error_count = sum(item.error is not None for item in result.summary.items)
+        error_count = result.summary.error_count
         successful_count = result.summary.new_count + result.summary.existing_count
         self._table.setRowCount(0)
         for item in result.summary.items:
             if item.error:
-                outcome = item.error
+                outcome = (
+                    "Außerhalb des gewählten Zeitraums"
+                    if item.error.startswith("OUT_OF_PERIOD:")
+                    else item.error
+                )
+            elif item.review_reason:
+                outcome = f"NEEDS_REVIEW: {item.review_reason}"
             elif item.outcome is not None:
                 outcome = item.outcome.value
             else:
@@ -390,12 +396,18 @@ class InvoiceCollectorDialog(QDialog):
             return
         if successful_count == 0:
             prefix = "Lauf fortgesetzt" if result.resumed else "Abruf abgeschlossen"
-            self._status.setText(f"{prefix}; keine passenden Dokumente gefunden.")
+            out_of_period = result.summary.out_of_period_count
+            filtered = f" {out_of_period} Dokument(e) lagen außerhalb des Zeitraums." if out_of_period else ""
+            self._status.setText(
+                f"{prefix}; keine passenden Dokumente gefunden.{filtered}"
+            )
             return
         prefix = "Lauf fortgesetzt" if result.resumed else "Abruf beendet"
         self._status.setText(
             f"{prefix}: {result.summary.new_count} neu, "
             f"{result.summary.existing_count} bereits vorhanden, "
+            f"{result.summary.review_count} zur Prüfung, "
+            f"{result.summary.out_of_period_count} außerhalb Zeitraum, "
             f"{issue_count + error_count} Route(n) fehlgeschlagen. "
             "Lokal gespeicherte Dateien bleiben SYNC_PENDING."
         )
@@ -524,7 +536,12 @@ class InvoiceCollectorDialog(QDialog):
                 for candidate in connector.discover():
                     artifact = connector.download(candidate, workspace)
                     result = pipeline.process(artifact)
-                    self._append_result(candidate.original_filename, result.receipt.outcome.value)
+                    outcome = (
+                        f"NEEDS_REVIEW: {result.receipt.review_reason}"
+                        if result.receipt.review_reason
+                        else result.receipt.outcome.value
+                    )
+                    self._append_result(candidate.original_filename, outcome)
             finally:
                 for child in workspace.glob("*"):
                     child.unlink(missing_ok=True)

@@ -25,6 +25,7 @@ class CollectionItemResult:
     tenant_id: str | None = None
     account_alias: str | None = None
     display_name: str | None = None
+    review_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,24 @@ class CollectionSummary:
     @property
     def existing_count(self) -> int:
         return sum(item.outcome is DocumentOutcome.ALREADY_PRESENT for item in self.items)
+
+    @property
+    def review_count(self) -> int:
+        return sum(item.review_reason is not None for item in self.items)
+
+    @property
+    def out_of_period_count(self) -> int:
+        return sum(
+            item.error is not None and item.error.startswith("OUT_OF_PERIOD:")
+            for item in self.items
+        )
+
+    @property
+    def error_count(self) -> int:
+        return sum(
+            item.error is not None and not item.error.startswith("OUT_OF_PERIOD:")
+            for item in self.items
+        )
 
 
 class CollectionOrchestrator:
@@ -168,6 +187,7 @@ class CollectionOrchestrator:
                             tenant_id=candidate.connection.tenant_id.value,
                             account_alias=candidate.connection.account_alias,
                             display_name=candidate.original_filename,
+                            review_reason=processed.receipt.review_reason,
                         )
                     )
                 except Exception as exc:  # noqa: BLE001 - continue independent providers

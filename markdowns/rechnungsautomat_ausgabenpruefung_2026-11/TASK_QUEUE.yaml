@@ -20,10 +20,12 @@ current_status:
     - "empty discovery is distinct from successful document processing"
     - "local SQLite run journal stores status, context fingerprints, route states and hashed candidate checkpoints"
     - "matching interrupted runs resume on the next click; completed runs start a new run and rely on idempotent publishing"
+    - "invoice dates are parsed only from explicit labels; unknown dates go to _needs_review and known out-of-period PDFs are skipped"
+    - "Graph mail discovery no longer treats receivedDateTime as invoice date or filters late-arriving invoices out"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
     - "all 18 real provider accounts and 26 route behaviors; mailbox probe is not invoice-route verification"
-    - "invoice-date extraction and unknown-date review for Graph mail attachments"
+    - "live provider-specific extraction coverage and user review/resolve workflow for _needs_review documents"
     - "remote OneDrive cloud confirmation"
     - "see PROVIDER_ABDECKUNG_2026-11-14.md for provider-by-provider relevance and next proof"
 
@@ -144,9 +146,12 @@ tasks:
     evidence:
       - "src/xw_office/services/invoice_collection/pdf_validation.py"
       - "src/xw_office/services/invoice_collection/pipeline.py"
+      - "src/xw_office/services/invoice_collection/invoice_date.py"
       - "src/xw_office/services/invoice_collection/sinks/onedrive_local.py"
       - "src/xw_office/services/invoice_collection/connectors/manual_import.py"
       - "tests/unit/test_invoice_collection_foundations.py"
+      - "tests/unit/test_invoice_collection_foundations.py::test_invoice_date_extraction_requires_one_explicitly_labeled_date"
+      - "tests/unit/test_invoice_collection_foundations.py::test_pipeline_sends_unknown_or_out_of_period_dates_to_review_folder"
     deliverables:
       - "PDF size/signature/MIME/parser/encryption validation"
       - "SHA-256, deterministic safe naming and tenant-scoped deduplication"
@@ -207,6 +212,7 @@ tasks:
       - "src/xw_office/services/invoice_collection/connectors/graph_reader.py::probe_mailbox"
       - "tests/unit/test_invoice_collection_connectors.py"
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_connector_fails_closed_without_verified_sender_domains"
+      - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_connector_requires_real_pdf_attachment_and_stable_ids (receipt date is not invoice-period filter)"
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_factory_wires_local_connection_settings_and_selected_period"
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_reader_mailbox_probe_reads_only_one_message_id"
       - "src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py::_test_mailbox_access"

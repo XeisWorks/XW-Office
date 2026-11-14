@@ -6,7 +6,7 @@ flow and never follows links found in messages.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any, Iterable, Protocol
 
@@ -62,7 +62,7 @@ class GraphMailAttachmentConnector:
     def discover(self) -> list[DocumentCandidate]:
         candidates: list[DocumentCandidate] = []
         for message in self.reader.list_messages():
-            if not self.policy.accepts(message) or not _in_period(message, self.start, self.end):
+            if not self.policy.accepts(message):
                 continue
             message_id = str(message.get("id") or "").strip()
             if not message_id:
@@ -87,6 +87,8 @@ class GraphMailAttachmentConnector:
                             "message_id": message_id,
                             "attachment_id": attachment_id,
                             "received_at": str(message.get("received_at") or ""),
+                            "selected_period_start": self.start.isoformat() if self.start else "",
+                            "selected_period_end": self.end.isoformat() if self.end else "",
                         },
                     )
                 )
@@ -125,25 +127,3 @@ def _looks_like_pdf(attachment: dict[str, Any]) -> bool:
     name = str(attachment.get("name") or "").casefold()
     content_type = str(attachment.get("content_type") or "").casefold()
     return content_type == "application/pdf" or name.endswith(".pdf")
-
-
-def _in_period(message: dict[str, Any], start: date | None, end: date | None) -> bool:
-    received = _parse_date(message.get("received_at"))
-    if received is None:
-        return True
-    return (start is None or received >= start) and (end is None or received <= end)
-
-
-def _parse_date(value: Any) -> date | None:
-    if isinstance(value, date) and not isinstance(value, datetime):
-        return value
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
-    except ValueError:
-        try:
-            return date.fromisoformat(text[:10])
-        except ValueError:
-            return None

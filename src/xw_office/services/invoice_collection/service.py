@@ -81,7 +81,9 @@ class InvoiceCollectionService:
             connection_fingerprints=fingerprints,
         )
         sink = OneDriveLocalSink(self.target_root)
-        pipeline = DocumentPipeline(sink=sink, journal=self.journal, run_id=run_id)
+        pipeline = DocumentPipeline(
+            sink=sink, journal=self.journal, run_id=run_id, period=period
+        )
         orchestrator = CollectionOrchestrator(
             pipeline,
             workspace_root=None,
@@ -146,10 +148,18 @@ class InvoiceCollectionService:
             elif issue is not None:
                 status = _error_route_status(issue.message)
                 error_code = issue.message.split(":", 1)[0]
-            elif any(item.error for item in route_items):
+            elif any(
+                item.error and not item.error.startswith("OUT_OF_PERIOD:")
+                for item in route_items
+            ):
                 status = "PARTIAL" if any(item.outcome for item in route_items) else "FAILED"
                 error_code = next(
-                    (item.error.split(":", 1)[0] for item in route_items if item.error), None
+                    (
+                        item.error.split(":", 1)[0]
+                        for item in route_items
+                        if item.error and not item.error.startswith("OUT_OF_PERIOD:")
+                    ),
+                    None,
                 )
             elif route_items and all(item.outcome is None for item in route_items):
                 status = "NO_DOCUMENTS"
@@ -165,7 +175,7 @@ class InvoiceCollectionService:
                 error_code=error_code,
             )
 
-        has_errors = bool(issues) or any(item.error for item in summary.items)
+        has_errors = bool(issues) or summary.error_count > 0
         if summary.cancelled:
             run_status = RunStatus.CANCELLED
         elif not route_context:

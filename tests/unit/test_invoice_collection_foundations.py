@@ -32,6 +32,7 @@ from xw_office.services.invoice_collection.errors import (
 )
 from xw_office.services.invoice_collection.factories import ConnectorFactoryRegistry
 from xw_office.services.invoice_collection.journal import InvoiceJournal
+from xw_office.services.invoice_collection.invoice_date import extract_invoice_date_from_text
 from xw_office.services.invoice_collection.pipeline import DocumentPipeline
 from xw_office.services.invoice_collection.pdf_validation import inspect_pdf
 from xw_office.services.invoice_collection.registry import (
@@ -200,6 +201,88 @@ def test_pipeline_quarantines_invalid_artifact(tmp_path: Path) -> None:
         )
     assert not source.exists()
     assert list((tmp_path / "quarantine").glob("broken.pdf"))
+
+
+def test_invoice_date_extraction_requires_one_explicitly_labeled_date() -> None:
+    assert extract_invoice_date_from_text("Rechnungsdatum: 31.10.2026") == date(2026, 10, 31)
+    assert extract_invoice_date_from_text("Invoice date: 2026-11-02") == date(2026, 11, 2)
+    assert (
+        extract_invoice_date_from_text(
+            "Invoice date: 2026-11-02\nRechnungsdatum: 2026-11-03"
+        )
+        is None
+    )
+    assert extract_invoice_date_from_text("Payment due: 2026-11-02") is None
+
+
+def test_pipeline_sends_unknown_or_out_of_period_dates_to_review_folder(tmp_path: Path) -> None:
+    destination = tmp_path / "onedrive"
+    destination.mkdir()
+    connection = ProviderConnection.create(
+        provider_id="fixture", tenant_id=TenantId.XW, account_alias="billing"
+    )
+    candidate_without_date = DocumentCandidate(
+        connection=connection,
+        route_key="mail_pdf",
+        source_id="message:attachment",
+        external_id="message:attachment",
+        document_type=DocumentType.EXPENSE_INVOICE,
+        original_filename="invoice.pdf",
+    )
+    unknown_source = _pdf(tmp_path / "unknown.pdf", "Invoice amount 25 EUR")
+    pipeline = DocumentPipeline(
+        sink=OneDriveLocalSink(destination),
+        quarantine_root=tmp_path / "quarantine",
+        period=DateRange(date(2026, 11, 1), date(2026, 11, 30)),
+    )
+
+    unknown_result = pipeline.process(
+        DownloadedArtifact(candidate_without_date, unknown_source)
+    )
+    assert unknown_result.receipt.review_reason == "Rechnungsdatum ungeklärt"
+    assert "_needs_review" in unknown_result.receipt.target_path.parts
+    assert "11" not in unknown_result.receipt.target_path.parts
+
+    october_candidate = _candidate(connection, source_id="late-october")
+    october_candidate = DocumentCandidate(
+        connection=october_candidate.connection,
+        route_key=october_candidate.route_key,
+        source_id=october_candidate.source_id,
+        external_id=october_candidate.external_id,
+        document_type=october_candidate.document_type,
+        original_filename=october_candidate.original_filename,
+        document_date=date(2026, 10, 31),
+    )
+    october_source = _pdf(tmp_path / "october.pdf", "Rechnungsdatum: 31.10.2026")
+    with pytest.raises(InvoiceCollectionError) as error:
+        pipeline.process(DownloadedArtifact(october_candidate, october_source))
+    assert error.value.code is InvoiceErrorCode.OUT_OF_PERIOD
+    assert not list(destination.rglob("*october*"))
+
+    october_target = tmp_path / "october-onedrive"
+    october_target.mkdir()
+    october_pipeline = DocumentPipeline(
+        sink=OneDriveLocalSink(october_target),
+        quarantine_root=tmp_path / "quarantine",
+        period=DateRange(date(2026, 10, 1), date(2026, 10, 31)),
+    )
+    october_archive_result = october_pipeline.process(
+        DownloadedArtifact(
+            DocumentCandidate(
+                connection=connection,
+                route_key="mail_pdf",
+                source_id="late-october-extracted",
+                external_id="late-october-extracted",
+                document_type=DocumentType.EXPENSE_INVOICE,
+                original_filename="october.pdf",
+            ),
+            october_source,
+        )
+    )
+    assert october_archive_result.receipt.review_reason is None
+    assert october_archive_result.document.candidate.document_date == date(2026, 10, 31)
+    relative_target = october_archive_result.receipt.target_path.relative_to(october_target)
+    assert relative_target.parts[1:3] == ("2026", "10")
 
 
 def test_invoice_journal_migrates_v1_and_rejects_newer_schema(tmp_path: Path) -> None:

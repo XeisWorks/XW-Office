@@ -1,7 +1,6 @@
 """Deterministic, traversal-safe archive names."""
 from __future__ import annotations
 
-from datetime import date
 import re
 import unicodedata
 from pathlib import Path
@@ -34,16 +33,17 @@ def build_relative_path(
     candidate: DocumentCandidate,
     *,
     sha256: str,
-    fallback_date: date,
 ) -> Path:
-    document_date = candidate.document_date or fallback_date
     provider = safe_component(candidate.connection.provider_id)
     tenant = safe_component(candidate.connection.tenant_id.value)
     account = safe_component(candidate.connection.account_alias)
     kind = safe_component(candidate.document_type.value)
     external = safe_component(candidate.external_id or sha256[:8], fallback=sha256[:8])
-    filename = (
-        f"{document_date:%Y-%m-%d}__{provider}__{account}__{kind}__"
-        f"{external}__{sha256[:8]}.pdf"
-    )
+    document_date = candidate.document_date
+    date_prefix = document_date.isoformat() if document_date else "date-unknown"
+    filename = f"{date_prefix}__{provider}__{account}__{kind}__{external}__{sha256[:8]}.pdf"
+    if candidate.metadata.get("review_reason"):
+        return Path(tenant) / "_needs_review" / provider / filename
+    if document_date is None:
+        raise ValueError("document without date must be marked for review")
     return Path(tenant) / f"{document_date:%Y}" / f"{document_date:%m}" / provider / filename

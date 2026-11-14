@@ -38,7 +38,7 @@ BrowserStack, Figma und Slack können eigene Belegquellen sein; ihre Abos sind k
 
 ## Verifikationsregeln
 
-- Mail: konkrete Absenderdomain, Mailbox/Alias und PDF-Anhang am echten Konto belegen. Leere Sender-Allowlist muss ablehnen. Eingangszeit ist Provenienz und kein Rechnungsdatum.
+- Mail: konkrete Absenderdomain, Mailbox/Alias und PDF-Anhang am echten Konto belegen. Leere Sender-Allowlist muss ablehnen. Eingangszeit ist Provenienz und kein Rechnungsdatum. Der Collector parst derzeit genau ein explizit beschriftetes Datum aus den ersten drei PDF-Textseiten; fehlendes/mehrdeutiges Datum landet unter `_needs_review`, bekannte Daten außerhalb des gewählten Zeitraums werden übersprungen. Vor `verified` muss diese Erkennung mit echten Anbieterbelegen geprüft werden.
 - API: dokumentierter Read-Scope, zugelassener Host, echte PDF-Antwort, Account-/Dokumenttyp und wiederholbarer Lauf.
 - Browser: Anbieterbedingungen und erlaubte sichtbare Anmeldung prüfen; echter Download ohne CAPTCHA-/MFA-/Bot-Umgehung.
 - Pro Route: echtes Dokument, korrekte Mandantenzuordnung, Datumstyp, idempotenter Wiederholungslauf, Auth-Fehlerverhalten und redigierte Logs belegen, bevor `verified` gesetzt wird.

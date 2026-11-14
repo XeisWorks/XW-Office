@@ -1,13 +1,13 @@
 """Shared validate/hash/deduplicate/publish pipeline."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, replace
 import hashlib
 from pathlib import Path
 import shutil
 
 from xw_office.services.invoice_collection.domain import (
+    DateRange,
     DownloadedArtifact,
     SinkReceipt,
     ValidatedDocument,
@@ -19,6 +19,7 @@ from xw_office.services.invoice_collection.errors import (
     InvoiceErrorCode,
 )
 from xw_office.services.invoice_collection.journal import InvoiceJournal
+from xw_office.services.invoice_collection.invoice_date import extract_invoice_date_from_pdf
 from xw_office.services.invoice_collection.naming import build_relative_path
 from xw_office.services.invoice_collection.pdf_validation import inspect_pdf
 from xw_office.services.invoice_collection.ports import DocumentSink
@@ -40,11 +41,13 @@ class DocumentPipeline:
         sink: DocumentSink,
         journal: InvoiceJournal | None = None,
         run_id: str | None = None,
+        period: DateRange | None = None,
         quarantine_root: Path | None = None,
     ) -> None:
         self.sink = sink
         self.journal = journal
         self.run_id = run_id
+        self.period = period
         self.quarantine_root = quarantine_root or ensure_invoice_collection_dirs()["quarantine"]
 
     def process(self, artifact: DownloadedArtifact) -> PipelineResult:
@@ -55,6 +58,25 @@ class DocumentPipeline:
             raise
         digest = _sha256(artifact.path)
         candidate = artifact.candidate
+        review_reason: str | None = None
+        document_date = candidate.document_date or extract_invoice_date_from_pdf(artifact.path)
+        if document_date is None:
+            review_reason = "Rechnungsdatum ungeklärt"
+        elif self.period is not None and not (
+            self.period.start <= document_date <= self.period.end
+        ):
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.OUT_OF_PERIOD,
+                "Rechnungsdatum liegt außerhalb des gewählten Zeitraums",
+            )
+        candidate = replace(
+            candidate,
+            document_date=document_date,
+            metadata={
+                **candidate.metadata,
+                **({"review_reason": review_reason} if review_reason else {}),
+            },
+        )
         if self.journal is not None and candidate.external_id:
             previous = self.journal.has_external_id(
                 connection_id=str(candidate.connection.connection_id),
@@ -66,7 +88,7 @@ class DocumentPipeline:
                     InvoiceErrorCode.CONTENT_CONFLICT,
                     "Externe Dokument-ID wurde bereits mit anderem Inhalt verarbeitet",
                 )
-        relative_path = build_relative_path(candidate, sha256=digest, fallback_date=date.today())
+        relative_path = build_relative_path(candidate, sha256=digest)
         document = ValidatedDocument(
             candidate=candidate,
             sha256=digest,
@@ -76,6 +98,8 @@ class DocumentPipeline:
             validated_at=utc_now(),
         )
         receipt = self.sink.publish(document, artifact.path)
+        if review_reason:
+            receipt = replace(receipt, review_reason=review_reason)
         if self.journal is not None:
             document_id = self.journal.record_document(
                 document=document, sink_id=self.sink.sink_id, receipt=receipt
