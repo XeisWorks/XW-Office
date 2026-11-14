@@ -302,6 +302,12 @@ class InvoiceCollectorDialog(QDialog):
             self._status.setText("Provider und Kontoalias müssen ausgefüllt sein.")
             return
         selected_route = self._route.currentData()
+        if selected_route is None:
+            self._status.setText(
+                "Für diesen Provider ist noch keine automatisierte Route verfügbar. "
+                "Sie können Belege über den manuellen PDF-Import ablegen."
+            )
+            return
         if selected_route is not None and selected_route.maturity != "verified":
             self._status.setText(
                 "Diese Abrufroute ist noch nicht live verifiziert und kann nicht aktiviert werden. "

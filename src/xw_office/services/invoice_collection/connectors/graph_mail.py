@@ -34,7 +34,7 @@ class MailMatchPolicy:
 
     def accepts(self, message: dict[str, Any]) -> bool:
         if not self.sender_domains:
-            return True
+            return False
         domain = str(message.get("sender_domain") or "").strip().casefold()
         return domain in self.sender_domains
 
@@ -81,8 +81,13 @@ class GraphMailAttachmentConnector:
                         external_id=f"{message_id}:{attachment_id}",
                         document_type=self.policy.document_type,
                         original_filename=str(attachment.get("name") or "attachment.pdf"),
-                        document_date=_parse_date(message.get("received_at")),
-                        metadata={"message_id": message_id, "attachment_id": attachment_id},
+                        # Receipt time is retrieval provenance, not an invoice date.
+                        document_date=None,
+                        metadata={
+                            "message_id": message_id,
+                            "attachment_id": attachment_id,
+                            "received_at": str(message.get("received_at") or ""),
+                        },
                     )
                 )
         return candidates

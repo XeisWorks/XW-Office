@@ -71,8 +71,8 @@ def test_registry_parses_secret_free_catalog() -> None:
     catalog = ProviderCatalog.from_yaml(
         root / "markdowns" / "rechnungsautomat_ausgabenpruefung_2026-11" / "PROVIDER_REGISTRY.yaml"
     )
-    assert len(catalog.providers) == 15
-    assert sum(len(provider.routes) for provider in catalog.providers) == 24
+    assert len(catalog.providers) == 18
+    assert sum(len(provider.routes) for provider in catalog.providers) == 26
     assert all(
         route.maturity == "planned"
         for provider in catalog.providers

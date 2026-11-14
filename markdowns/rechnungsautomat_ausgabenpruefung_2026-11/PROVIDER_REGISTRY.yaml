@@ -483,6 +483,70 @@ providers:
     official_docs:
       - "https://docs.business.amazon.com/docs/invoices-api-reference"
 
+  - id: "figma"
+    manifest_version: 1
+    label: "Figma – Abonnement"
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["expense_invoice", "receipt", "credit_note"]
+    portal_hosts: ["figma.com"]
+    manual_import_supported: true
+    guidance: >-
+      Figma Admin-Billing zeigt Invoice History und PDF-Downloads. Admin-Rechte und den
+      konkreten Konto-/Plan-Typ vor einer Live-Route prüfen; keine Stripe-Download-URL raten.
+    routes:
+      - id: "mail_pdf"
+        method: "mail"
+        connector: "graph_mail_attachment"
+        priority: 10
+        maturity: "planned"
+        auth: "microsoft_graph_mail"
+        matching_policy: "requires_verified_sender_and_attachment_fixture"
+        fallback_on: ["NO_DOCUMENTS", "UNSUPPORTED_ACCOUNT"]
+        verification: *verification_requirements
+    official_docs:
+      - "https://help.figma.com/hc/en-us/articles/360040532093-Manage-payment-and-invoice-details"
+
+  - id: "slack"
+    manifest_version: 1
+    label: "Slack – Workspace-Abo"
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["expense_invoice", "receipt", "credit_note"]
+    portal_hosts: ["slack.com"]
+    manual_import_supported: true
+    guidance: >-
+      Billing History stellt Monatsabrechnungen bereit. Dokumentart (Rechnung gegenüber
+      Kartenabrechnung) und Workspace-Owner-Rechte je Konto prüfen; bis dahin manueller Import.
+    routes:
+      - id: "mail_pdf"
+        method: "mail"
+        connector: "graph_mail_attachment"
+        priority: 10
+        maturity: "planned"
+        auth: "microsoft_graph_mail"
+        matching_policy: "requires_verified_sender_and_attachment_fixture"
+        fallback_on: ["NO_DOCUMENTS", "UNSUPPORTED_ACCOUNT"]
+        verification: *verification_requirements
+    official_docs:
+      - "https://slack.com/help/articles/218915087-Manage-your-Slack-plan-and-billing-details"
+
+  - id: "codescene"
+    manifest_version: 1
+    label: "CodeScene – Abo / CodeHealth MCP"
+    category: "expense"
+    supported_tenants: ["xw", "wuedara"]
+    document_types: ["expense_invoice", "receipt", "credit_note"]
+    portal_hosts: ["codescene.com", "billing.stripe.com"]
+    manual_import_supported: true
+    guidance: >-
+      CodeScene nutzt je nach Produkt einen Stripe-Kundenbereich mit E-Mail-Link. Keine
+      Magic-Link-Mail automatisiert öffnen; Rechnung vorerst manuell herunterladen/importieren.
+    routes: []
+    official_docs:
+      - "https://helpcenter.codescene.com/help/articles/8654612-how-to-manage-or-cancel-your-mcp-subscription"
+      - "https://helpcenter.codescene.com/help/articles/8583447-how-to-update-your-billing-and-payment-information"
+
 optional_aggregators:
   - id: "getmyinvoices"
     enabled: false

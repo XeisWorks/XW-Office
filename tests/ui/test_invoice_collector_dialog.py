@@ -22,7 +22,7 @@ def test_invoice_collector_dialog_loads_catalog_and_requires_active_connections(
         connection_repository=ConnectionRepository(tmp_path / "connections.sqlite3"),
     )
     qtbot.addWidget(dialog)  # type: ignore[attr-defined]
-    assert dialog._provider.count() == 15
+    assert dialog._provider.count() == 18
     dialog._set_folder(tmp_path)
     dialog._fetch_active()
     assert "Keine aktiven Provider-Verbindungen" in dialog._status.text()
@@ -36,3 +36,16 @@ def test_invoice_collector_dialog_refuses_to_enable_unverified_route(qtbot: obje
     dialog._save_connection()
     assert repository.list_enabled() == []
     assert "nicht live verifiziert" in dialog._status.text()
+
+
+def test_invoice_collector_dialog_does_not_save_provider_without_automated_route(
+    qtbot: object, tmp_path: Path
+) -> None:
+    repository = ConnectionRepository(tmp_path / "connections.sqlite3")
+    dialog = InvoiceCollectorDialog(tenant_id="xw", connection_repository=repository)
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    index = dialog._provider.findData("codescene")
+    dialog._provider.setCurrentIndex(index)
+    dialog._save_connection()
+    assert repository.list_enabled() == []
+    assert "keine automatisierte Route" in dialog._status.text()

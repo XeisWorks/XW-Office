@@ -82,6 +82,15 @@ def test_graph_mail_connector_requires_real_pdf_attachment_and_stable_ids(tmp_pa
     artifact = connector.download(candidates[0], tmp_path / "workspace")
     assert artifact.path.exists()
     assert reader.downloads == [("message-1", "pdf-1")]
+    assert candidates[0].document_date is None
+    assert candidates[0].metadata["received_at"] == "2026-11-05T10:00:00Z"
+
+
+def test_graph_mail_connector_fails_closed_without_verified_sender_domains(
+    tmp_path: Path,
+) -> None:
+    connector = GraphMailAttachmentConnector(connection=_connection(), reader=_MailReader(tmp_path))
+    assert connector.discover() == []
 
 
 def test_graph_reader_paginates_and_downloads_attachment_bytes(tmp_path: Path) -> None:

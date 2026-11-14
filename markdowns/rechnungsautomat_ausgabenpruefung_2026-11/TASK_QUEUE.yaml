@@ -15,6 +15,7 @@ current_status:
   not_live_verified:
     - "all real provider accounts and portal DOMs"
     - "remote OneDrive cloud confirmation"
+    - "18 catalog providers / 26 routes remain planned or manual; see PROVIDER_ABDECKUNG_2026-11-14.md"
 
 mvp_scope:
   required:
@@ -183,6 +184,7 @@ tasks:
       - "src/xw_office/services/invoice_collection/connectors/graph_reader.py"
       - "src/xw_office/services/invoice_collection/connectors/graph_mail.py"
       - "tests/unit/test_invoice_collection_connectors.py"
+      - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_connector_fails_closed_without_verified_sender_domains"
     deliverables:
       - "UI-visible delegated sign-in with minimal required mail scopes"
       - "DPAPI-protected MSAL cache outside repo and migration/reauth decision"
@@ -284,7 +286,9 @@ tasks:
     priority: 10
     status: "todo"
     depends_on: ["T09"]
-    evidence: []
+    evidence:
+      - "markdowns/rechnungsautomat_ausgabenpruefung_2026-11/PROVIDER_ABDECKUNG_2026-11-14.md"
+      - "markdowns/rechnungsautomat_ausgabenpruefung_2026-11/PROVIDER_REGISTRY.yaml (BrowserStack, Figma, Slack, CodeScene)"
     deliverables:
       - "One small provider/route batch per change set"
       - "Coverage report for BrowserStack, Anthropic, Google Cloud, Stripe, Railway, GitHub, Perplexity, OpenAI, Google AI, Microsoft 365 and Amazon Business"
