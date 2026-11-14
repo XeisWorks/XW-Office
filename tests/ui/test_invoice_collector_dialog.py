@@ -196,6 +196,42 @@ def test_invoice_collector_dialog_opens_only_an_existing_target_folder(
     assert "nicht verfügbar" in dialog._status.text()
 
 
+def test_review_folder_action_opens_only_the_selected_tenant_review_directory(
+    qtbot: object, tmp_path: Path, monkeypatch: object
+) -> None:
+    dialog = InvoiceCollectorDialog(
+        tenant_id="xw",
+        connection_repository=ConnectionRepository(tmp_path / "connections.sqlite3"),
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    target = tmp_path / "onedrive"
+    review_folder = target / "xw" / "_needs_review"
+    review_folder.mkdir(parents=True)
+    opened: list[Path] = []
+    monkeypatch.setattr(
+        dialog_module.QDesktopServices,
+        "openUrl",
+        lambda url: opened.append(Path(url.toLocalFile())) or True,
+    )
+    dialog._set_folder(target)
+
+    dialog._open_review_folder()
+
+    assert opened == [review_folder.resolve()]
+    assert "manuell" in dialog._status.text()
+    assert "nicht bestätigt" in dialog._status.text()
+
+    dialog._tenant.setCurrentIndex(dialog._tenant.findData("wuedara"))
+    dialog._open_review_folder()
+    assert opened == [review_folder.resolve()]
+    assert "keine Prüfablage" in dialog._status.text()
+
+    dialog._folder.clear()
+    dialog._open_review_folder()
+    assert opened == [review_folder.resolve()]
+    assert "Zielordner auswählen" in dialog._status.text()
+
+
 def test_invoice_collector_dialog_saves_unverified_route_as_disabled_draft(
     qtbot: object, tmp_path: Path
 ) -> None:

@@ -226,6 +226,9 @@ class InvoiceCollectorDialog(QDialog):
         open_folder = QPushButton("Ordner öffnen")
         open_folder.clicked.connect(self._open_folder)
         folder_row.addWidget(open_folder)
+        self._review_folder_button = QPushButton("Prüfablage öffnen")
+        self._review_folder_button.clicked.connect(self._open_review_folder)
+        folder_row.addWidget(self._review_folder_button)
         root.addLayout(folder_row)
         form = QFormLayout()
         self._saved_connections = QComboBox()
@@ -323,6 +326,34 @@ class InvoiceCollectorDialog(QDialog):
             return
         self._status.setText(
             "OneDrive-Ordner geöffnet. Der Cloud-Syncstatus wird dadurch nicht bestätigt."
+        )
+
+    def _open_review_folder(self) -> None:
+        folder_text = self._folder.text().strip()
+        if not folder_text:
+            self._status.setText("Bitte zuerst einen Zielordner auswählen.")
+            return
+        target_root = Path(folder_text).expanduser()
+        tenant_id = str(self._tenant.currentData() or "")
+        if tenant_id not in {tenant.value for tenant in TenantId}:
+            self._status.setText("Der ausgewählte Mandant ist ungültig.")
+            return
+        root = target_root.resolve(strict=False)
+        review_folder = (root / tenant_id / "_needs_review").resolve(strict=False)
+        try:
+            review_folder.relative_to(root)
+        except ValueError:
+            self._status.setText("Die Prüfablage liegt außerhalb des Zielordners.")
+            return
+        if not review_folder.is_dir():
+            self._status.setText("Für diesen Mandanten ist noch keine Prüfablage vorhanden.")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(review_folder))):
+            self._status.setText("Die Prüfablage konnte nicht geöffnet werden.")
+            return
+        self._status.setText(
+            "Prüfablage geöffnet. Datum und Belegart müssen manuell geprüft werden; "
+            "der Cloud-Syncstatus wird dadurch nicht bestätigt."
         )
 
     def _load_saved_connections(self, *, select_id: str | None = None) -> None:
