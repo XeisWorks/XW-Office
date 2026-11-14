@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import date
 
 import pytest
+import fitz
 
 from PySide6.QtCore import QDate
 from PySide6.QtWidgets import QFileDialog
@@ -15,7 +16,10 @@ from xw_office.ui.modules.expense_review import invoice_collector_dialog as dial
 from xw_office.services.invoice_collection.connections import ConnectionRepository
 from xw_office.services.invoice_collection.domain import (
     DateRange,
+    DocumentCandidate,
     DocumentOutcome,
+    DocumentType,
+    DownloadedArtifact,
     ProviderConnection,
     RouteSettings,
     TenantId,
@@ -26,6 +30,9 @@ from xw_office.services.invoice_collection.orchestrator import (
     CollectionSummary,
 )
 from xw_office.services.invoice_collection.service import CollectionRun, ConnectionRouteIssue
+from xw_office.services.invoice_collection.journal import InvoiceJournal
+from xw_office.services.invoice_collection.pipeline import DocumentPipeline
+from xw_office.services.invoice_collection.sinks.onedrive_local import OneDriveLocalSink
 from xw_office.ui.modules.expense_review.invoice_collector_dialog import (
     InvoiceCollectorDialog,
     _collect_active_safely,
@@ -240,6 +247,83 @@ def test_review_folder_action_opens_only_the_selected_tenant_review_directory(
     dialog._open_review_folder()
     assert opened == [review_folder.resolve()]
     assert "Zielordner auswählen" in dialog._status.text()
+
+
+def test_dialog_resolves_review_pdf_after_explicit_date_and_type_confirmation(
+    qtbot: object, tmp_path: Path, monkeypatch: object
+) -> None:
+    target = tmp_path / "onedrive"
+    target.mkdir()
+    journal = InvoiceJournal(tmp_path / "review-journal.sqlite3")
+    connection = ProviderConnection.create(
+        provider_id="fixture",
+        tenant_id=TenantId.XW,
+        account_alias="billing",
+        enabled=False,
+    )
+    source = tmp_path / "unknown-date.pdf"
+    with fitz.open() as pdf:
+        pdf.new_page().insert_text((72, 72), "Invoice, date unclear")
+        pdf.save(source)
+    sink = OneDriveLocalSink(target)
+    candidate = DocumentCandidate(
+        connection=connection,
+        route_key="mail_pdf",
+        source_id="message-1:attachment-1",
+        external_id="message-1:attachment-1",
+        document_type=DocumentType.UNKNOWN,
+        original_filename=source.name,
+    )
+    DocumentPipeline(sink=sink, journal=journal).process(
+        DownloadedArtifact(candidate, source)
+    )
+    review = journal.list_review_documents(tenant_id="xw", sink_id=sink.sink_id)[0]
+    review_path = sink.target_path_for(review.relative_path)
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: (str(review_path), "PDF-Dateien (*.pdf)"),
+    )
+    monkeypatch.setattr(
+        dialog_module.QInputDialog,
+        "getText",
+        lambda *_args, **_kwargs: ("2026-11-07", True),
+    )
+    monkeypatch.setattr(
+        dialog_module.QInputDialog,
+        "getItem",
+        lambda *_args, **_kwargs: (DocumentType.EXPENSE_INVOICE.value, True),
+    )
+    dialog = InvoiceCollectorDialog(
+        tenant_id="xw",
+        connection_repository=ConnectionRepository(tmp_path / "connections.sqlite3"),
+        invoice_journal=journal,
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    dialog._set_folder(target)
+
+    monkeypatch.setattr(
+        dialog_module.QInputDialog,
+        "getItem",
+        lambda *_args, **_kwargs: ("Belegart auswählen …", True),
+    )
+    dialog._resolve_review_file()
+    assert review_path.is_file()
+    assert dialog._table.rowCount() == 0
+    assert "konkrete Belegart" in dialog._status.text()
+
+    monkeypatch.setattr(
+        dialog_module.QInputDialog,
+        "getItem",
+        lambda *_args, **_kwargs: (DocumentType.EXPENSE_INVOICE.value, True),
+    )
+    dialog._resolve_review_file()
+    qtbot.waitUntil(lambda: dialog._review_worker is None, timeout=3000)  # type: ignore[attr-defined]
+
+    assert not review_path.exists()
+    assert dialog._table.rowCount() == 1
+    assert "REVIEW_RESOLVED; SYNC_PENDING" in dialog._table.item(0, 4).text()
+    assert "Prüfkopie entfernt" in dialog._status.text()
 
 
 def test_invoice_collector_dialog_saves_unverified_route_as_disabled_draft(

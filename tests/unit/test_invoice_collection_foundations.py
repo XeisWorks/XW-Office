@@ -39,7 +39,11 @@ from xw_office.services.invoice_collection.errors import (
 from xw_office.services.invoice_collection.factories import ConnectorFactoryRegistry
 from xw_office.services.invoice_collection.journal import InvoiceJournal
 from xw_office.services.invoice_collection.invoice_date import extract_invoice_date_from_text
-from xw_office.services.invoice_collection.naming import safe_component, workspace_download_path
+from xw_office.services.invoice_collection.naming import (
+    build_relative_path,
+    safe_component,
+    workspace_download_path,
+)
 from xw_office.services.invoice_collection.pipeline import DocumentPipeline
 from xw_office.services.invoice_collection.pdf_validation import inspect_pdf
 from xw_office.services.invoice_collection.registry import (
@@ -47,6 +51,7 @@ from xw_office.services.invoice_collection.registry import (
     ProviderManifest,
     RouteManifest,
 )
+from xw_office.services.invoice_collection.review import InvoiceReviewService
 from xw_office.services.invoice_collection.security import redact_sensitive_text
 from xw_office.services.invoice_collection.sinks.onedrive_local import OneDriveLocalSink
 from xw_office.services.invoice_collection.sinks import onedrive_local as sink_module
@@ -579,7 +584,7 @@ def test_invoice_journal_migrates_v1_and_rejects_newer_schema(tmp_path: Path) ->
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )
         }
-    assert version == "4"
+    assert version == "5"
     assert "collection_runs" in tables
     assert "collection_checkpoints" in tables
     assert "document_provenance" in tables
@@ -591,10 +596,153 @@ def test_invoice_journal_migrates_v1_and_rejects_newer_schema(tmp_path: Path) ->
             "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
         connection.execute(
-            "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '5')"
+            "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '6')"
         )
     with pytest.raises(RuntimeError, match="newer than supported"):
         InvoiceJournal(newer_path)
+
+
+def test_invoice_journal_migrates_v4_review_metadata_columns(tmp_path: Path) -> None:
+    path = tmp_path / "schema-four.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        connection.execute(
+            "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '4')"
+        )
+        connection.execute(
+            "CREATE TABLE documents (document_id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, "
+            "connection_id TEXT NOT NULL, provider_id TEXT NOT NULL, route_key TEXT NOT NULL, "
+            "external_id TEXT, sha256 TEXT NOT NULL, sink_id TEXT NOT NULL, "
+            "relative_path TEXT NOT NULL, outcome TEXT NOT NULL, sync_status TEXT NOT NULL, "
+            "created_at TEXT NOT NULL, UNIQUE (tenant_id, sink_id, sha256))"
+        )
+        connection.execute(
+            "INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "review-doc", "xw", str(_foundation_connection().connection_id), "fixture",
+                "mail_pdf", None, "a" * 64, "onedrive_local_sync",
+                "xw/_needs_review/fixture/unknown.pdf", "NEW", "SYNC_PENDING",
+                "2026-11-14T00:00:00+00:00",
+            ),
+        )
+
+    journal = InvoiceJournal(path)
+    review = journal.list_review_documents(tenant_id="xw", sink_id="onedrive_local_sync")
+
+    assert len(review) == 1
+    assert review[0].document_id == "review-doc"
+    assert review[0].document_type is DocumentType.UNKNOWN
+    assert review[0].document_date is None
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0] == "5"
+
+
+def test_invoice_review_resolution_moves_pdf_and_updates_journal_truthfully(
+    tmp_path: Path,
+) -> None:
+    source = _pdf(tmp_path / "unknown-date.pdf")
+    archive = tmp_path / "onedrive"
+    archive.mkdir()
+    sink = OneDriveLocalSink(archive)
+    journal = InvoiceJournal(tmp_path / "journal.sqlite3")
+    connection = _foundation_connection()
+    candidate = DocumentCandidate(
+        connection=connection,
+        route_key="mail_pdf",
+        source_id="message-1:attachment-1",
+        external_id="message-1:attachment-1",
+        document_type=DocumentType.UNKNOWN,
+        original_filename=source.name,
+    )
+    DocumentPipeline(sink=sink, journal=journal).process(
+        DownloadedArtifact(candidate, source)
+    )
+    review = journal.list_review_documents(
+        tenant_id=TenantId.XW.value, sink_id=sink.sink_id
+    )[0]
+    review_path = sink.target_path_for(review.relative_path)
+
+    result = InvoiceReviewService(journal=journal, sink=sink).resolve(
+        document=review,
+        document_date=date(2026, 11, 7),
+        document_type=DocumentType.EXPENSE_INVOICE,
+    )
+
+    assert result.resolved_path.is_file()
+    assert result.resolved_path.relative_to(archive).parts[:3] == ("xw", "2026", "11")
+    assert not review_path.exists()
+    assert result.sync_status.value == "SYNC_PENDING"
+    assert result.review_copy_removed
+    assert journal.list_review_documents(tenant_id="xw", sink_id=sink.sink_id) == ()
+    with sqlite3.connect(journal.path) as db:
+        row = db.execute(
+            "SELECT relative_path, document_type, document_date, outcome, sync_status "
+            "FROM documents WHERE document_id=?",
+            (review.document_id,),
+        ).fetchone()
+    assert row == (
+        result.resolved_path.relative_to(archive).as_posix(),
+        DocumentType.EXPENSE_INVOICE.value,
+        "2026-11-07",
+        "REVIEW_RESOLVED",
+        "SYNC_PENDING",
+    )
+
+
+def test_invoice_review_resolution_never_overwrites_archive_collision(
+    tmp_path: Path,
+) -> None:
+    source = _pdf(tmp_path / "unknown-date-collision.pdf")
+    archive = tmp_path / "onedrive"
+    archive.mkdir()
+    sink = OneDriveLocalSink(archive)
+    journal = InvoiceJournal(tmp_path / "collision-journal.sqlite3")
+    connection = _foundation_connection()
+    candidate = DocumentCandidate(
+        connection=connection,
+        route_key="mail_pdf",
+        source_id="message-2:attachment-1",
+        external_id=None,
+        document_type=DocumentType.UNKNOWN,
+        original_filename=source.name,
+    )
+    DocumentPipeline(sink=sink, journal=journal).process(
+        DownloadedArtifact(candidate, source)
+    )
+    review = journal.list_review_documents(tenant_id="xw", sink_id=sink.sink_id)[0]
+    review_path = sink.target_path_for(review.relative_path)
+    resolution_candidate = DocumentCandidate(
+        connection=connection,
+        route_key=review.route_key,
+        source_id=f"review-resolution:{review.document_id}",
+        external_id=None,
+        document_type=DocumentType.EXPENSE_INVOICE,
+        original_filename=review_path.name,
+        document_date=date(2026, 11, 8),
+    )
+    destination_relative = build_relative_path(
+        resolution_candidate, sha256=review.sha256
+    )
+    collision_path = archive / destination_relative
+    collision_path.parent.mkdir(parents=True)
+    _pdf(collision_path, "different existing invoice")
+    original_collision = collision_path.read_bytes()
+
+    with pytest.raises(InvoiceCollectionError) as raised:
+        InvoiceReviewService(journal=journal, sink=sink).resolve(
+            document=review,
+            document_date=date(2026, 11, 8),
+            document_type=DocumentType.EXPENSE_INVOICE,
+        )
+
+    assert raised.value.code is InvoiceErrorCode.DESTINATION_UNAVAILABLE
+    assert collision_path.read_bytes() == original_collision
+    assert review_path.is_file()
+    assert journal.review_document_by_path(
+        tenant_id="xw", sink_id=sink.sink_id, relative_path=review.relative_path
+    ) == review
 
 
 def test_manual_import_uses_pipeline_and_is_idempotent(tmp_path: Path) -> None:
@@ -832,7 +980,7 @@ def test_invoice_journal_migrates_legacy_external_ids_to_hashes(tmp_path: Path) 
         ).fetchone()[0] is None
         assert db.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
-        ).fetchone()[0] == "4"
+        ).fetchone()[0] == "5"
     assert migrated.has_external_id(
         connection_id=str(connection.connection_id),
         route_key="invoices_api",

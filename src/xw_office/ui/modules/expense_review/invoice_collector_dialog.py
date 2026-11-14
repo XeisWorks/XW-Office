@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QInputDialog,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -52,6 +53,10 @@ from xw_office.services.invoice_collection.ports import CancelToken
 from xw_office.services.invoice_collection.registry import ProviderCatalog
 from xw_office.services.invoice_collection.security import ensure_invoice_collection_dirs
 from xw_office.services.invoice_collection.service import InvoiceCollectionService, CollectionRun
+from xw_office.services.invoice_collection.review import (
+    InvoiceReviewService,
+    ReviewResolutionResult,
+)
 from xw_office.services.invoice_collection.sinks.onedrive_local import OneDriveLocalSink
 
 
@@ -66,6 +71,7 @@ class InvoiceCollectorDialog(QDialog):
         connection_repository: ConnectionRepository | None = None,
         collection_service: InvoiceCollectionService | None = None,
         secret_store: SecretStore | None = None,
+        invoice_journal: InvoiceJournal | None = None,
     ) -> None:
         super().__init__(parent)  # type: ignore[arg-type]
         self.setWindowTitle("Rechnungen abrufen")
@@ -76,9 +82,11 @@ class InvoiceCollectorDialog(QDialog):
         self._editing_connection: ProviderConnection | None = None
         self._saved_connections_by_id: dict[str, ProviderConnection] = {}
         self._collection_service = collection_service
+        self._invoice_journal = invoice_journal
         self._fetch_worker: BackgroundWorker | None = None
         self._mail_test_worker: BackgroundWorker | None = None
         self._manual_worker: BackgroundWorker | None = None
+        self._review_worker: BackgroundWorker | None = None
         self._fetch_generation = 0
         self._folder = QLineEdit()
         self._folder.setReadOnly(True)
@@ -236,6 +244,9 @@ class InvoiceCollectorDialog(QDialog):
         self._review_folder_button = QPushButton("Prüfablage öffnen")
         self._review_folder_button.clicked.connect(self._open_review_folder)
         folder_row.addWidget(self._review_folder_button)
+        self._resolve_review_button = QPushButton("Prüfbeleg zuordnen")
+        self._resolve_review_button.clicked.connect(self._resolve_review_file)
+        folder_row.addWidget(self._resolve_review_button)
         root.addLayout(folder_row)
         form = QFormLayout()
         self._saved_connections = QComboBox()
@@ -336,24 +347,8 @@ class InvoiceCollectorDialog(QDialog):
         )
 
     def _open_review_folder(self) -> None:
-        folder_text = self._folder.text().strip()
-        if not folder_text:
-            self._status.setText("Bitte zuerst einen Zielordner auswählen.")
-            return
-        target_root = Path(folder_text).expanduser()
-        tenant_id = str(self._tenant.currentData() or "")
-        if tenant_id not in {tenant.value for tenant in TenantId}:
-            self._status.setText("Der ausgewählte Mandant ist ungültig.")
-            return
-        root = target_root.resolve(strict=False)
-        review_folder = (root / tenant_id / "_needs_review").resolve(strict=False)
-        try:
-            review_folder.relative_to(root)
-        except ValueError:
-            self._status.setText("Die Prüfablage liegt außerhalb des Zielordners.")
-            return
-        if not review_folder.is_dir():
-            self._status.setText("Für diesen Mandanten ist noch keine Prüfablage vorhanden.")
+        review_folder = self._selected_review_folder()
+        if review_folder is None:
             return
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(review_folder))):
             self._status.setText("Die Prüfablage konnte nicht geöffnet werden.")
@@ -362,6 +357,163 @@ class InvoiceCollectorDialog(QDialog):
             "Prüfablage geöffnet. Datum und Belegart müssen manuell geprüft werden; "
             "der Cloud-Syncstatus wird dadurch nicht bestätigt."
         )
+
+    def _selected_review_folder(self) -> Path | None:
+        folder_text = self._folder.text().strip()
+        if not folder_text:
+            self._status.setText("Bitte zuerst einen Zielordner auswählen.")
+            return None
+        target_root = Path(folder_text).expanduser()
+        tenant_id = str(self._tenant.currentData() or "")
+        if tenant_id not in {tenant.value for tenant in TenantId}:
+            self._status.setText("Der ausgewählte Mandant ist ungültig.")
+            return None
+        root = target_root.resolve(strict=False)
+        review_folder = (root / tenant_id / "_needs_review").resolve(strict=False)
+        try:
+            review_folder.relative_to(root)
+        except ValueError:
+            self._status.setText("Die Prüfablage liegt außerhalb des Zielordners.")
+            return None
+        if not review_folder.is_dir():
+            self._status.setText("Für diesen Mandanten ist noch keine Prüfablage vorhanden.")
+            return None
+        return review_folder
+
+    def _resolve_review_file(self) -> None:
+        if self._review_worker is not None and self._review_worker.isRunning():
+            return
+        review_folder = self._selected_review_folder()
+        if review_folder is None:
+            return
+        selected, _filter = QFileDialog.getOpenFileName(
+            self, "Prüfbeleg auswählen", str(review_folder), "PDF-Dateien (*.pdf)"
+        )
+        if not selected:
+            return
+        source_path = Path(selected).expanduser().resolve(strict=False)
+        try:
+            relative_path = source_path.relative_to(Path(self._folder.text()).expanduser().resolve())
+        except ValueError:
+            self._status.setText("Der ausgewählte Beleg liegt außerhalb des Zielordners.")
+            return
+        journal = self._journal_for_review()
+        tenant_id = str(self._tenant.currentData())
+        review_document = journal.review_document_by_path(
+            tenant_id=tenant_id,
+            sink_id=OneDriveLocalSink.sink_id,
+            relative_path=relative_path,
+        )
+        if review_document is None:
+            self._status.setText(
+                "Der ausgewählte PDF-Pfad gehört nicht zu einem offenen Journaleintrag."
+            )
+            return
+        date_text, accepted = QInputDialog.getText(
+            self,
+            "Rechnungsdatum bestätigen",
+            "Geprüftes Rechnungsdatum im Format JJJJ-MM-TT:",
+        )
+        if not accepted:
+            return
+        try:
+            normalized_date = date_text.strip()
+            invoice_date = date.fromisoformat(normalized_date)
+            if invoice_date.isoformat() != normalized_date:
+                raise ValueError("date must use the displayed ISO format")
+        except ValueError:
+            self._status.setText("Das Rechnungsdatum muss im Format JJJJ-MM-TT vorliegen.")
+            return
+        choices = [item.value for item in DocumentType if item is not DocumentType.UNKNOWN]
+        type_text, accepted = QInputDialog.getItem(
+            self,
+            "Belegart bestätigen",
+            "Geprüfte Belegart:",
+            ["Belegart auswählen …", *choices],
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        if type_text not in choices:
+            self._status.setText("Bitte eine konkrete Belegart auswählen.")
+            return
+        document_type = DocumentType(type_text)
+        target_root = Path(self._folder.text()).expanduser()
+        worker: BackgroundWorker
+
+        def resolve() -> ReviewResolutionResult:
+            return _run_collector_operation_safely(
+                lambda: InvoiceReviewService(
+                    journal=journal,
+                    sink=OneDriveLocalSink(target_root),
+                ).resolve(
+                    document=review_document,
+                    document_date=invoice_date,
+                    document_type=document_type,
+                )
+            )
+
+        worker = BackgroundWorker(resolve)
+        self._review_worker = worker
+        worker.signals.result.connect(self._on_review_result)
+        worker.signals.error.connect(self._on_review_error)
+        worker.signals.finished.connect(
+            lambda current=worker: self._on_review_finished(current)
+        )
+        self._resolve_review_button.setEnabled(False)
+        self._fetch_button.setEnabled(False)
+        self._manual_button.setEnabled(False)
+        self._status.setText("PDF wird geprüft und in den Monatsordner verschoben …")
+        worker.start()
+
+    def _journal_for_review(self) -> InvoiceJournal:
+        if self._invoice_journal is not None:
+            return self._invoice_journal
+        if self._collection_service is not None:
+            service_journal = getattr(self._collection_service, "journal", None)
+            if isinstance(service_journal, InvoiceJournal):
+                return service_journal
+        self._invoice_journal = InvoiceJournal()
+        return self._invoice_journal
+
+    def _on_review_result(self, result: object) -> None:
+        if not isinstance(result, ReviewResolutionResult):
+            self._status.setText("Review-Auflösung lieferte ein ungültiges Ergebnis.")
+            return
+        document = result.document
+        self._append_collection_result(
+            provider_id=document.provider_id,
+            account_alias=document.account_alias,
+            route_key=document.route_key,
+            tenant_id=document.tenant_id,
+            display_name=result.resolved_path.name,
+            outcome=f"REVIEW_RESOLVED; {result.sync_status.value}",
+        )
+        self._status.setText(
+            "Review-Beleg zugeordnet und nach Rechnungsdatum abgelegt. "
+            f"{result.sync_status.value}; "
+            + (
+                "Prüfkopie entfernt."
+                if result.review_copy_removed
+                else "Alte Prüfkopie konnte nicht entfernt werden; bitte manuell prüfen."
+            )
+        )
+
+    def _on_review_error(self, error: Exception) -> None:
+        safe_error = _safe_collector_error(error)
+        self._status.setText(
+            f"Review-Beleg konnte nicht zugeordnet werden ({safe_error.code.value}): "
+            f"{safe_error}"
+        )
+
+    def _on_review_finished(self, worker: BackgroundWorker) -> None:
+        if self._review_worker is worker:
+            self._review_worker = None
+        self._resolve_review_button.setEnabled(True)
+        if self._fetch_worker is None and self._manual_worker is None:
+            self._fetch_button.setEnabled(True)
+            self._manual_button.setEnabled(True)
 
     def _load_saved_connections(self, *, select_id: str | None = None) -> None:
         connections, _issues = self._connection_repository.list_all_with_issues()
@@ -478,6 +630,8 @@ class InvoiceCollectorDialog(QDialog):
         self._status.setText("OneDrive-Ordner ausgewählt; Cloudstatus wird erst remote bestätigt.")
 
     def _fetch_active(self) -> None:
+        if self._review_worker is not None and self._review_worker.isRunning():
+            return
         if self._manual_worker is not None and self._manual_worker.isRunning():
             return
         if not self._folder.text().strip():
@@ -765,6 +919,10 @@ class InvoiceCollectorDialog(QDialog):
             self._status.setText("Abruf abgebrochen; bereits gespeicherte Dokumente bleiben erhalten.")
 
     def closeEvent(self, event: object) -> None:
+        if self._review_worker is not None and self._review_worker.isRunning():
+            self._status.setText("Review-Auflösung läuft; bitte nach Abschluss schließen.")
+            event.ignore()  # type: ignore[attr-defined]
+            return
         self._cancel_fetch()
         if self._mail_test_worker is not None and self._mail_test_worker.isRunning():
             self._mail_test_worker.cancel()
@@ -881,7 +1039,10 @@ class InvoiceCollectorDialog(QDialog):
             )
 
     def _manual_import(self) -> None:
-        if self._fetch_worker is not None and self._fetch_worker.isRunning():
+        if (
+            (self._fetch_worker is not None and self._fetch_worker.isRunning())
+            or (self._review_worker is not None and self._review_worker.isRunning())
+        ):
             return
         if not self._folder.text().strip():
             self._status.setText("Bitte zuerst einen Zielordner auswählen.")

@@ -1,18 +1,20 @@
 """Small local SQLite journal for idempotency and provenance."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from dataclasses import dataclass
 import hashlib
 import json
 import sqlite3
 from pathlib import Path
+from pathlib import PurePosixPath
 from threading import RLock
 from uuid import uuid4
 
 from xw_office.core.app_paths import invoice_collection_dir
 from xw_office.services.invoice_collection.domain import (
     DateRange,
+    DocumentType,
     RunStatus,
     SinkReceipt,
     ValidatedDocument,
@@ -28,6 +30,24 @@ class DocumentProvenance:
     route_key: str
     source_id_hash: str
     external_id_hash: str | None
+
+
+@dataclass(frozen=True)
+class ReviewDocument:
+    """Journal metadata needed to resolve one locally archived review PDF."""
+
+    document_id: str
+    tenant_id: str
+    connection_id: str
+    provider_id: str
+    account_alias: str
+    route_key: str
+    sha256: str
+    sink_id: str
+    relative_path: Path
+    document_type: DocumentType
+    document_date: date | None
+    sync_status: str
 
 
 class InvoiceJournal:
@@ -60,9 +80,9 @@ class InvoiceJournal:
                     current_version = int(version_row["value"])
                 except (TypeError, ValueError) as exc:
                     raise RuntimeError("invoice journal schema version is invalid") from exc
-                if current_version > 4:
+                if current_version > 5:
                     raise RuntimeError(
-                        f"invoice journal schema {current_version} is newer than supported schema 4"
+                        f"invoice journal schema {current_version} is newer than supported schema 5"
                     )
             connection.executescript(
                 """
@@ -80,6 +100,9 @@ class InvoiceJournal:
                     sha256 TEXT NOT NULL,
                     sink_id TEXT NOT NULL,
                     relative_path TEXT NOT NULL,
+                    account_alias TEXT NOT NULL DEFAULT '',
+                    document_type TEXT NOT NULL DEFAULT 'unknown',
+                    document_date TEXT,
                     outcome TEXT NOT NULL,
                     sync_status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
@@ -168,8 +191,22 @@ class InvoiceJournal:
                 connection.execute(
                     "UPDATE documents SET external_id=NULL WHERE external_id IS NOT NULL"
                 )
+            document_columns = {
+                str(row["name"])
+                for row in connection.execute("PRAGMA table_info(documents)").fetchall()
+            }
+            if "account_alias" not in document_columns:
+                connection.execute(
+                    "ALTER TABLE documents ADD COLUMN account_alias TEXT NOT NULL DEFAULT ''"
+                )
+            if "document_type" not in document_columns:
+                connection.execute(
+                    "ALTER TABLE documents ADD COLUMN document_type TEXT NOT NULL DEFAULT 'unknown'"
+                )
+            if "document_date" not in document_columns:
+                connection.execute("ALTER TABLE documents ADD COLUMN document_date TEXT")
             connection.execute(
-                "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '4') "
+                "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '5') "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
             )
 
@@ -328,6 +365,70 @@ class InvoiceJournal:
             ).fetchone()
         return Path(str(row["relative_path"])) if row else None
 
+    def list_review_documents(
+        self, *, tenant_id: str, sink_id: str
+    ) -> tuple[ReviewDocument, ...]:
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM documents WHERE tenant_id=? AND sink_id=? "
+                "ORDER BY created_at DESC",
+                (tenant_id, sink_id),
+            ).fetchall()
+        documents = (_review_document_from_row(row) for row in rows)
+        return tuple(item for item in documents if _is_review_relative_path(item))
+
+    def review_document_by_path(
+        self, *, tenant_id: str, sink_id: str, relative_path: Path
+    ) -> ReviewDocument | None:
+        normalized = PurePosixPath(relative_path.as_posix())
+        if len(normalized.parts) < 3 or normalized.parts[:2] != (tenant_id, "_needs_review"):
+            return None
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM documents WHERE tenant_id=? AND sink_id=? AND relative_path=?",
+                (tenant_id, sink_id, normalized.as_posix()),
+            ).fetchone()
+        return _review_document_from_row(row) if row else None
+
+    def resolve_review_document(
+        self,
+        *,
+        document: ReviewDocument,
+        new_relative_path: Path,
+        document_type: DocumentType,
+        document_date: date,
+        sync_status: str,
+    ) -> bool:
+        old_path = PurePosixPath(document.relative_path.as_posix())
+        new_path = PurePosixPath(new_relative_path.as_posix())
+        if not _is_review_relative_path(document):
+            raise ValueError("document is not stored in the review folder")
+        if (
+            len(new_path.parts) < 5
+            or new_path.parts[0] != document.tenant_id
+            or new_path.parts[1] != f"{document_date.year:04d}"
+            or new_path.parts[2] != f"{document_date.month:02d}"
+        ):
+            raise ValueError("resolved archive path does not match tenant and invoice date")
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE documents SET relative_path=?, document_type=?, document_date=?, "
+                "outcome='REVIEW_RESOLVED', sync_status=? "
+                "WHERE document_id=? AND tenant_id=? AND sink_id=? AND sha256=? AND relative_path=?",
+                (
+                    new_path.as_posix(),
+                    document_type.value,
+                    document_date.isoformat(),
+                    sync_status,
+                    document.document_id,
+                    document.tenant_id,
+                    document.sink_id,
+                    document.sha256,
+                    old_path.as_posix(),
+                ),
+            )
+            return cursor.rowcount == 1
+
     def list_provenance(
         self, *, tenant_id: str, sink_id: str, sha256: str
     ) -> tuple[DocumentProvenance, ...]:
@@ -393,8 +494,9 @@ class InvoiceJournal:
                 """
                 INSERT OR IGNORE INTO documents(
                     document_id, tenant_id, connection_id, provider_id, route_key,
-                    external_id, sha256, sink_id, relative_path, outcome, sync_status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    external_id, sha256, sink_id, relative_path, account_alias,
+                    document_type, document_date, outcome, sync_status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     document_id,
@@ -406,6 +508,9 @@ class InvoiceJournal:
                     document.sha256,
                     sink_id,
                     document.relative_path.as_posix(),
+                    candidate.connection.account_alias,
+                    candidate.document_type.value,
+                    candidate.document_date.isoformat() if candidate.document_date else None,
                     receipt.outcome.value,
                     receipt.sync_status.value,
                     document.validated_at.isoformat(),
@@ -449,3 +554,26 @@ class InvoiceJournal:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _review_document_from_row(row: sqlite3.Row) -> ReviewDocument:
+    raw_date = row["document_date"]
+    return ReviewDocument(
+        document_id=str(row["document_id"]),
+        tenant_id=str(row["tenant_id"]),
+        connection_id=str(row["connection_id"]),
+        provider_id=str(row["provider_id"]),
+        account_alias=str(row["account_alias"] or "unknown"),
+        route_key=str(row["route_key"]),
+        sha256=str(row["sha256"]),
+        sink_id=str(row["sink_id"]),
+        relative_path=Path(str(row["relative_path"])),
+        document_type=DocumentType(str(row["document_type"] or DocumentType.UNKNOWN.value)),
+        document_date=date.fromisoformat(str(raw_date)) if raw_date else None,
+        sync_status=str(row["sync_status"]),
+    )
+
+
+def _is_review_relative_path(document: ReviewDocument) -> bool:
+    parts = PurePosixPath(document.relative_path.as_posix()).parts
+    return len(parts) >= 3 and parts[:2] == (document.tenant_id, "_needs_review")

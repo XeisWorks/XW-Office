@@ -81,7 +81,7 @@ Contract-Tests – keine Änderung an Dialog, Orchestrator, PDF-Pipeline oder On
 Implementiert und lokal getestet sind der manuelle PDF-Slice, der providerunabhängige
 Monatsdialog und Orchestrator, Graph-Mailbox-Zugriff/Anhangsreader, Mollie-API-Adapter,
 Playwright-Fake-Portal, PDF-Prüfung, lokales No-Clobber-Publishing, Journal mit Resume und
-Provenienz sowie Verbindungsbearbeitung mit stabiler Connection-ID. Der Dialog kann den Zielordner und eine vorhandene mandantenspezifische `_needs_review`-Prüfablage öffnen. Für unbekannte oder mehrdeutige Rechnungsdaten bleibt die inhaltliche Prüfung manuell; lokale Ablage wird weiter als `SYNC_PENDING` markiert.
+Provenienz sowie Verbindungsbearbeitung mit stabiler Connection-ID. Der Dialog kann den Zielordner und eine vorhandene mandantenspezifische `_needs_review`-Prüfablage öffnen. Ein Review-PDF lässt sich nach erneuter Validierung und expliziter Datums-/Belegart-Bestätigung ins datumsbasierte Archiv auflösen. Lokale Ablage wird weiterhin als `SYNC_PENDING` markiert.
 
 Relevante Implementierungsstellen:
 
@@ -98,8 +98,8 @@ Relevante Implementierungsstellen:
   Aufgabenstatus und Abnahmeevidenz.
 
 Keine echte Anbieterroute oder OneDrive-Remote-Synchronisation ist nachgewiesen. Die lokal
-gespeicherten externen IDs liegen seit Journal-Schema 4 nicht mehr im Klartext im aktiven
-Datensatz; SQLite garantiert dadurch keine physische Bereinigung alter Datenseiten oder Backups.
+gespeicherten externen IDs liegen seit Journal-Schema 5 nicht mehr im Klartext im aktiven
+Datensatz; Schema 5 speichert zusätzlich Kontoalias, Belegart und Rechnungsdatum für die manuelle Review-Auflösung. SQLite garantiert keine physische Bereinigung alter Datenseiten oder Backups.
 
 ## Dateien und Reihenfolge
 

@@ -1,6 +1,6 @@
 # Fortsetzungs-Goal fuer GPT-6-Luna
 
-**Stand:** 14.11.2026 (Fehlerredaktion, kataloggesteuerte Portale, Tool-Recherche und Vollsuite 2.429/7 und mandantenspezifische Prüfablage und Auth-Capabilities ergaenzt)
+**Stand:** 14.11.2026 (Fehlerredaktion, kataloggesteuerte Portale, Tool-Recherche und Vollsuite 2.433/7 und mandantenspezifische Prüfablage und Auth-Capabilities ergaenzt)
 **Repository:** `XeisWorks/XW-Office`, Branch `main`
 **Ausgangslage:** Die technische MVP-Grundlage ist weitgehend implementiert und lokal getestet. Der erste echte Rechnungsabruf ist noch nicht verifiziert. Der Benutzer hat bestaetigt, dass Anbieter-Mailbox und Absenderdomain(s) noch geklaert werden muessen.
 
@@ -54,10 +54,12 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    divergierende Zielinhalte sind gezielt getestet. Der Mollie-PDF-Download ist ebenso auf 25 MiB
    begrenzt und gestreamt. Pruefe diese vorhandenen Schutzmassnahmen gegen Code und Tests, statt
    sie neu zu bauen. Der Browseradapter hat generische Fake-Portal-Tests, aber keine echten
-   Anbieter-Callbacks. Das Journal verwendet Schema 4: neue Dokumente speichern keine rohen
+   Anbieter-Callbacks. Das Journal verwendet Schema 5: neue Dokumente speichern keine rohen
    `external_id`-Werte in `documents`; vorhandene Schema-1-bis-3-Werte werden in gehashte
-   Provenienz migriert und aus der aktiven Spalte entfernt. Erhalte die Hash-basierte
-   Konflikterkennung und fuehre keinen Klartext-Fallback wieder ein.
+   Provenienz migriert und aus der aktiven Spalte entfernt. Schema 5 speichert Kontoalias,
+   Belegart und Datum fuer Review-Aufloesung; `InvoiceReviewService` prueft die PDF-Hashidentitaet,
+   publiziert no-clobber, aktualisiert danach das Journal und entfernt zuletzt die Review-Kopie.
+   Erhalte die Hash-basierte Konflikterkennung und fuehre keinen Klartext-Fallback wieder ein.
    Der Dialog listet gespeicherte Providerverbindungen, aktualisiert Einstellungen mit stabiler
    Connection-ID und verhindert die Reaktivierung nicht verifizierter Routen. Angaben zu
    unverifizierten Routen koennen als deaktivierte Entwuerfe lokal gespeichert werden. Fuer

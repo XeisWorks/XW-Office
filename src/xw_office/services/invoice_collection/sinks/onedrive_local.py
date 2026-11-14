@@ -37,7 +37,7 @@ class OneDriveLocalSink:
 
     def confirm_existing(self, relative_path: Path, sha256: str) -> SinkReceipt | None:
         """Confirm a journal-known target before suppressing a cross-route duplicate."""
-        target = self._safe_target(relative_path)
+        target = self.target_path_for(relative_path)
         if not target.exists():
             return None
         existing_hash = _sha256(target)
@@ -52,7 +52,7 @@ class OneDriveLocalSink:
 
     def publish(self, document: ValidatedDocument, source_path: Path) -> SinkReceipt:
         self.preflight()
-        target = self._safe_target(document.relative_path)
+        target = self.target_path_for(document.relative_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             existing_hash = _sha256(target)
@@ -139,7 +139,8 @@ class OneDriveLocalSink:
             sha256=existing_hash,
         )
 
-    def _safe_target(self, relative_path: Path) -> Path:
+    def target_path_for(self, relative_path: Path) -> Path:
+        """Resolve a relative archive path while enforcing the selected target root."""
         root = self.root.resolve(strict=False)
         target = (self.root / relative_path).resolve(strict=False)
         try:

@@ -30,6 +30,7 @@ class DocumentOutcome(StrEnum):
     REJECTED = "REJECTED"
     QUARANTINED = "QUARANTINED"
     CONTENT_CONFLICT = "CONTENT_CONFLICT"
+    REVIEW_RESOLVED = "REVIEW_RESOLVED"
 
 
 class ConfigurationStatus(StrEnum):
