@@ -4,6 +4,10 @@
 
 **Aktueller persoenlicher Blocker:** Der Benutzer hat am 14.11.2026 bestaetigt, dass Anbieter-Mailbox und bestaetigte Absenderdomain(s) erst geklaert werden muessen. Bis dahin kein Graph-Live-Probe und keine echte Mailrouten-Verifikation; T08 bleibt `blocked_external`. Fuer die naechste Umsetzung mit GPT-6-Luna ist der auf den heutigen Code zugeschnittene Auftrag in [GPT6_LUNA_FORTSETZUNGS_GOAL_2026-11-14.md](GPT6_LUNA_FORTSETZUNGS_GOAL_2026-11-14.md) massgeblich. Der unten stehende fruehere Initialauftrag ist nur Historie und soll nicht erneut zum kompletten Neuaufbau fuehren.
 
+## Fortschreibung: begrenzter Graph-Anhangsdownload
+
+Der Graph-Reader liest rohe Anhangsantworten und JSON-`contentBytes` jetzt ueber `httpx.Client.stream()`. Der Empfang ist auf maximal 25 MiB fuer rohe PDF-Bytes begrenzt; JSON-Antworten haben eine berechnete Base64-Obergrenze plus 64 KiB JSON-Metadaten. `Content-Length` loest nur eine fruehe Ablehnung aus; die laufende Bytezaehlung bleibt die Grenze. Fehler schliessen die Antwort und schreiben keine teilweise Zieldatei. Die Connector-Suite besteht mit 22 Tests. Die vollstaendige Repository-Suite besteht nach dieser Aenderung mit **2.404 bestanden, 7 uebersprungen, 0 fehlgeschlagen**; Repo-weites Ruff, Collector-MyPy (30 Dateien), Provider-/Queue-YAML, `git diff --check` und Secret-Musterpruefung sind ebenfalls sauber.
+
 ## 1. Herkunft und ursprünglich gemeintes Ergebnis
 
 Der konkrete frühere Chat war in den lokal verfügbaren Codex-Sitzungen nicht eindeutig auffindbar. Die am **07.11.2026** erstellte Planungs-Commitfolge belegt das Vorhaben im Repository: `4f5d7acb` („plan secure one-click invoice collector with 2FA and OneDrive“), danach `caf041f1` (modularisierte Planung) und die Implementierungs-Commits ab `b39041fd`. Ein Link oder Wortlaut des ursprünglichen Chats lässt sich daraus nicht ableiten.

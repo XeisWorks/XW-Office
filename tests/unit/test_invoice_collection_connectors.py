@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from datetime import date
 from pathlib import Path
 
@@ -183,6 +184,71 @@ def test_graph_reader_paginates_and_downloads_attachment_bytes(tmp_path: Path) -
     destination = tmp_path / "invoice.pdf"
     reader.download_attachment("message-1", "attachment-1", destination)
     assert destination.read_bytes() == pdf_bytes
+
+
+def test_graph_reader_stops_oversized_stream_and_closes_response(tmp_path: Path) -> None:
+    class OversizedStream(httpx.SyncByteStream):
+        def __init__(self) -> None:
+            self.closed = False
+            self.yielded = 0
+
+        def __iter__(self):
+            self.yielded += 1
+            yield b"x" * (64 * 1024 + 1)
+            self.yielded += 1
+            yield b"unread"
+
+        def close(self) -> None:
+            self.closed = True
+
+    body_stream = OversizedStream()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/pdf"},
+            stream=body_stream,
+        )
+
+    reader = GraphMailAttachmentReader(
+        mailbox="billing@example.test",
+        token_provider=CallbackGraphTokenProvider(lambda: "test-token"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_attachment_bytes=8,
+    )
+    destination = tmp_path / "nested" / "invoice.pdf"
+    with pytest.raises(InvoiceCollectionError) as error:
+        reader.download_attachment("message-1", "attachment-1", destination)
+
+    assert error.value.code is InvoiceErrorCode.INVALID_DOCUMENT
+    assert body_stream.closed
+    assert body_stream.yielded == 1
+    assert not destination.exists()
+    assert not destination.parent.exists()
+
+
+def test_graph_reader_rejects_json_base64_above_decoded_limit(tmp_path: Path) -> None:
+    encoded = base64.b64encode(b"123456789").decode("ascii")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"contentBytes": encoded},
+            headers={"content-type": "application/json"},
+        )
+
+    reader = GraphMailAttachmentReader(
+        mailbox="billing@example.test",
+        token_provider=CallbackGraphTokenProvider(lambda: "test-token"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_attachment_bytes=8,
+    )
+    destination = tmp_path / "invoice.pdf"
+    with pytest.raises(InvoiceCollectionError) as error:
+        reader.download_attachment("message-1", "attachment-1", destination)
+
+    assert error.value.code is InvoiceErrorCode.INVALID_DOCUMENT
+    assert not destination.exists()
 
 
 def test_graph_reader_mailbox_probe_reads_only_one_message_id() -> None:
