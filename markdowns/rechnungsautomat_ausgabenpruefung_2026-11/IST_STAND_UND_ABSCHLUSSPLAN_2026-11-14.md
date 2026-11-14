@@ -1,6 +1,6 @@
 # Rechnungsautomat: Ist-Stand und Abschlussplan
 
-**Pruefstand: 14.11.2026, `main` einschliesslich Implementierung `f13de57a`.** Diese Datei ist eine Bestandsaufnahme und ein Folgeauftrag, kein Nachweis fuer einen produktiven Rechnungsabruf. Verbindliches Zielbild bleiben `START_HERE.md`, `ARCHITEKTUR.md` und `SICHERHEIT_UND_2FA.md` in diesem Ordner. `TASK_QUEUE.yaml` ist die bestehende Implementierungs-Queue; ihre Statuswerte wurden hier nicht pauschal auf `done` gesetzt. Die juengsten Implementierungsschritte umfassen `3b386611`, `159e5bb5`, `f6ade5fe`, `73cc7f1a`, `2c837ba9`, `9590f9e4`, `1eb15c6a`, `6dc34325`, `ec9a53bd` und `0c5274c7`, sowie die Quellenanzeige aus `f13de57a`.
+**Pruefstand: 14.11.2026, `main` einschliesslich Implementierung `dbcac683`.** Diese Datei ist eine Bestandsaufnahme und ein Folgeauftrag, kein Nachweis fuer einen produktiven Rechnungsabruf. Verbindliches Zielbild bleiben `START_HERE.md`, `ARCHITEKTUR.md` und `SICHERHEIT_UND_2FA.md` in diesem Ordner. `TASK_QUEUE.yaml` ist die bestehende Implementierungs-Queue; ihre Statuswerte wurden hier nicht pauschal auf `done` gesetzt. Die juengsten Schritte sind Cross-Route-Deduplizierung `0c5274c7`, sichere Quellenanzeige `2d152f3c`, Quarantaene-Status `f13de57a` und Playwright-Lifecycle/Fehlerklassifikation `dbcac683`.
 
 ## 1. Herkunft und ursprünglich gemeintes Ergebnis
 
@@ -20,7 +20,7 @@ Das Produktziel ist: In **Finanzen > Ausgabenprüfung** per Klick die **aktivier
 | Abrufadapter | Graph-Mail ist in der Desktop-App mit expliziter Factory verdrahtet; Mailbox- und Absenderdomain-Konfiguration wird gepr?ft. Die optionale Graph-/Browser-Laufzeit ist installiert; der normale Doppler-Start liefert `MS_GRAPH_CLIENT_ID` und `MS_GRAPH_TENANT_ID`. | Technisch vorbereitet; keine Rechnungsroute live verifiziert |
 | Graph-Mailbox-Probe | Der Dialog öffnet einen sichtbaren MSAL-Systembrowser-Login mit `Mail.Read`; der Probe fragt höchstens eine Nachrichten-ID ab, keine Texte oder Anhänge. Token-Cache ist lokal unter `LOCALAPPDATA` und nach Tenant/Mailbox getrennt. | Zugriffstest vorhanden; bestätigt weder Anbieterregel noch Rechnungsabruf |
 | Browser-Einrichtung | `xw-invoice-collection` bietet `doctor`, `catalog`, `login`, `login-all`, `probe`. Login öffnet eine Startseite; `probe_callback=True`, `discover_callback=[]` und `download_callback=None` sind Platzhalter. | Anmeldung/Diagnose, kein Rechnungsabruf |
-| Testlauf | Vollstaendige Repository-Suite nach Quarantaene-Status: **2.398 bestanden, 7 uebersprungen**, 0 fehlgeschlagen. Repo-weites Ruff, Provider-/Queue-YAML, `git diff --check`, Secret-Musterpruefung und Collector-MyPy (30 Dateien) bestanden. | Lokale Regression, keine Live-Abnahme |
+| Testlauf | Vollstaendige Repository-Suite nach Browser-Lifecycle- und Callback-Fehlerbehandlung: **2.402 bestanden, 7 uebersprungen**, 0 fehlgeschlagen. Repo-weites Ruff, Provider-/Queue-YAML, `git diff --check`, Secret-Musterpruefung und Collector-MyPy (30 Dateien) bestanden. | Lokale Regression, keine Live-Abnahme |
 
 Die optionale Abhängigkeit `invoice-collection` in `pyproject.toml` umfasst Keyring, `msal-extensions` und Playwright. Das Vorhandensein dieser Pakete beweist keine eingerichteten Konten oder erteilten Microsoft-Rechte.
 
