@@ -9,7 +9,7 @@ import pytest
 import fitz
 
 from PySide6.QtCore import QDate
-from PySide6.QtWidgets import QFileDialog
+from PySide6.QtWidgets import QDialog, QFileDialog
 
 from xw_office.core.app_paths import default_invoice_target_dir
 from xw_office.ui.modules.expense_review import invoice_collector_dialog as dialog_module
@@ -35,6 +35,7 @@ from xw_office.services.invoice_collection.pipeline import DocumentPipeline
 from xw_office.services.invoice_collection.sinks.onedrive_local import OneDriveLocalSink
 from xw_office.ui.modules.expense_review.invoice_collector_dialog import (
     InvoiceCollectorDialog,
+    InvoiceRunHistoryDialog,
     _collect_active_safely,
     _looks_like_mailbox,
     _parse_sender_domains,
@@ -725,6 +726,90 @@ def test_retry_action_targets_only_routes_that_failed_last_run(
     }
     assert requested == [expected]
     assert dialog._pending_retry_targets == expected
+
+
+def test_run_history_shows_route_status_and_reuses_selected_period(
+    qtbot: object, tmp_path: Path
+) -> None:
+    journal = InvoiceJournal(tmp_path / "run-history.sqlite3")
+    period = DateRange(date(2026, 10, 1), date(2026, 10, 31))
+    run_id, _resumed = journal.begin_or_resume_run(
+        period=period,
+        target_fingerprint="opaque-target",
+        connection_fingerprints={"connection-id": "opaque-fingerprint"},
+    )
+    journal.record_route_status(
+        run_id=run_id,
+        connection_id="connection-id",
+        route_key="mail_pdf",
+        status="WAITING_FOR_USER",
+        error_code="AUTH_REQUIRED",
+    )
+    dialog = InvoiceRunHistoryDialog(journal)
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+
+    assert dialog._runs_table.rowCount() == 1
+    assert dialog._runs_table.item(0, 1).text() == "RUNNING"
+    assert dialog._routes_table.rowCount() == 1
+    assert dialog._routes_table.item(0, 1).text() == "mail_pdf"
+    assert dialog._routes_table.item(0, 2).text() == "WAITING_FOR_USER: AUTH_REQUIRED"
+    assert dialog._use_period_button.isEnabled()
+
+    dialog._use_period_button.click()
+
+    assert dialog.selected_period == (period.start, period.end)
+
+
+def test_collector_run_history_applies_period_and_starts_fetch(
+    qtbot: object, monkeypatch: object, tmp_path: Path
+) -> None:
+    journal = InvoiceJournal(tmp_path / "run-history-action.sqlite3")
+    run_period = DateRange(date(2026, 9, 1), date(2026, 9, 30))
+    journal.begin_or_resume_run(
+        period=run_period,
+        target_fingerprint="opaque-target",
+        connection_fingerprints={"connection-id": "opaque-fingerprint"},
+    )
+    dialog = InvoiceCollectorDialog(
+        tenant_id="xw",
+        connection_repository=ConnectionRepository(tmp_path / "connections.sqlite3"),
+        invoice_journal=journal,
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    fetches: list[bool] = []
+    monkeypatch.setattr(dialog, "_fetch_active", lambda: fetches.append(True))
+
+    def accept_history(history: InvoiceRunHistoryDialog) -> int:
+        history.selected_period = (run_period.start, run_period.end)
+        return int(QDialog.DialogCode.Accepted)
+
+    monkeypatch.setattr(InvoiceRunHistoryDialog, "exec", accept_history)
+
+    dialog._show_run_history()
+
+    assert dialog._period_start.date() == QDate(2026, 9, 1)
+    assert dialog._period_end.date() == QDate(2026, 9, 30)
+    assert fetches == [True]
+
+
+def test_collection_service_uses_the_dialog_journal(
+    qtbot: object, monkeypatch: object, tmp_path: Path
+) -> None:
+    journal = InvoiceJournal(tmp_path / "injected-journal.sqlite3")
+    dialog = InvoiceCollectorDialog(
+        tenant_id="xw",
+        connection_repository=ConnectionRepository(tmp_path / "connections.sqlite3"),
+        invoice_journal=journal,
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    target = tmp_path / "target"
+    dialog._folder.setText(str(target))
+    monkeypatch.setattr(dialog_module, "build_connector_factories", lambda **_kwargs: object())
+
+    service = dialog._build_collection_service()
+
+    assert service.journal is journal
+    assert service.target_root == target
 
 
 def test_manual_import_runs_in_worker_and_publishes_partial_results_on_cancel(

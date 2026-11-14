@@ -46,7 +46,7 @@ from xw_office.services.invoice_collection.errors import (
     InvoiceCollectionError,
     InvoiceErrorCode,
 )
-from xw_office.services.invoice_collection.journal import InvoiceJournal
+from xw_office.services.invoice_collection.journal import CollectionRunSummary, InvoiceJournal
 from xw_office.services.invoice_collection.bootstrap import build_connector_factories
 from xw_office.services.invoice_collection.pipeline import DocumentPipeline
 from xw_office.services.invoice_collection.ports import CancelToken
@@ -58,6 +58,92 @@ from xw_office.services.invoice_collection.review import (
     ReviewResolutionResult,
 )
 from xw_office.services.invoice_collection.sinks.onedrive_local import OneDriveLocalSink
+
+
+class InvoiceRunHistoryDialog(QDialog):
+    """Show recent local runs and let the user reuse a prior billing period."""
+
+    def __init__(self, journal: InvoiceJournal, parent: QDialog | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Laufverlauf")
+        self.resize(760, 500)
+        self._journal = journal
+        self._runs = journal.list_recent_runs()
+        self.selected_period: tuple[date, date] | None = None
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(
+            QLabel(
+                "Ein unvollständiger Lauf wird beim Abruf fortgesetzt, wenn Zeitraum, "
+                "Zielordner und aktive Verbindungen unverändert sind."
+            )
+        )
+        self._runs_table = QTableWidget(len(self._runs), 4)
+        self._runs_table.setHorizontalHeaderLabels(
+            ["Lauf", "Status", "Rechnungszeitraum", "Zuletzt aktualisiert"]
+        )
+        self._runs_table.horizontalHeader().setStretchLastSection(True)
+        for row, run in enumerate(self._runs):
+            period_label = (
+                f"{run.period_start.isoformat()} bis {run.period_end.isoformat()}"
+                if run.period_start and run.period_end
+                else "Nicht angegeben"
+            )
+            values = (
+                run.run_id[:8],
+                run.status,
+                period_label,
+                run.updated_at.astimezone().strftime("%Y-%m-%d %H:%M"),
+            )
+            for column, value in enumerate(values):
+                self._runs_table.setItem(row, column, QTableWidgetItem(value))
+        self._runs_table.currentCellChanged.connect(self._select_run)
+        layout.addWidget(self._runs_table, stretch=1)
+        self._routes_table = QTableWidget(0, 3)
+        self._routes_table.setHorizontalHeaderLabels(["Verbindung", "Route", "Status / Fehler"])
+        self._routes_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self._routes_table, stretch=1)
+        actions = QHBoxLayout()
+        self._use_period_button = QPushButton("Zeitraum übernehmen und abrufen")
+        self._use_period_button.setEnabled(False)
+        self._use_period_button.clicked.connect(self._use_selected_period)
+        actions.addWidget(self._use_period_button)
+        close_button = QPushButton("Schließen")
+        close_button.clicked.connect(self.reject)
+        actions.addWidget(close_button)
+        layout.addLayout(actions)
+        if self._runs:
+            self._runs_table.setCurrentCell(0, 0)
+
+    def _select_run(self, row: int, _column: int, *_previous: int) -> None:
+        if not 0 <= row < len(self._runs):
+            self._routes_table.setRowCount(0)
+            self._use_period_button.setEnabled(False)
+            return
+        run = self._runs[row]
+        routes = self._journal.list_route_statuses(run_id=run.run_id)
+        self._routes_table.setRowCount(len(routes))
+        for route_row, route in enumerate(routes):
+            values = (
+                route.connection_id[:8],
+                route.route_key,
+                ": ".join(value for value in (route.status, route.error_code) if value),
+            )
+            for column, value in enumerate(values):
+                self._routes_table.setItem(route_row, column, QTableWidgetItem(value))
+        self._use_period_button.setEnabled(
+            run.period_start is not None and run.period_end is not None
+        )
+
+    def _use_selected_period(self) -> None:
+        row = self._runs_table.currentRow()
+        if not 0 <= row < len(self._runs):
+            return
+        run: CollectionRunSummary = self._runs[row]
+        if run.period_start is None or run.period_end is None:
+            return
+        self.selected_period = (run.period_start, run.period_end)
+        self.accept()
 
 
 class InvoiceCollectorDialog(QDialog):
@@ -274,6 +360,9 @@ class InvoiceCollectorDialog(QDialog):
         self._fetch_button = QPushButton("Alle aktiven Verbindungen abrufen")
         self._fetch_button.clicked.connect(self._fetch_active)
         actions.addWidget(self._fetch_button)
+        self._history_button = QPushButton("Laufverlauf")
+        self._history_button.clicked.connect(self._show_run_history)
+        actions.addWidget(self._history_button)
         self._retry_button = QPushButton("Fehlerhafte Routen erneut abrufen")
         self._retry_button.setEnabled(False)
         self._retry_button.clicked.connect(self._retry_failed_routes)
@@ -483,6 +572,17 @@ class InvoiceCollectorDialog(QDialog):
         self._invoice_journal = InvoiceJournal()
         return self._invoice_journal
 
+    def _build_collection_service(self) -> InvoiceCollectionService:
+        return InvoiceCollectionService(
+            connections=self._connection_repository,
+            factories=build_connector_factories(
+                secret_store_factory=self._secret_store_for_ui
+            ),
+            target_root=Path(self._folder.text()),
+            journal=self._journal_for_review(),
+            catalog=getattr(self, "_catalog", None),
+        )
+
     def _on_review_result(self, result: object) -> None:
         if not isinstance(result, ReviewResolutionResult):
             self._status.setText("Review-Auflösung lieferte ein ungültiges Ergebnis.")
@@ -676,15 +776,7 @@ class InvoiceCollectorDialog(QDialog):
             return
         service = self._collection_service
         if service is None:
-            service = InvoiceCollectionService(
-                connections=self._connection_repository,
-                factories=build_connector_factories(
-                    secret_store_factory=self._secret_store_for_ui
-                ),
-                target_root=Path(self._folder.text()),
-                journal=InvoiceJournal(),
-                catalog=getattr(self, "_catalog", None),
-            )
+            service = self._build_collection_service()
         if self._fetch_worker is not None and self._fetch_worker.isRunning():
             return
         self._fetch_generation += 1
@@ -739,6 +831,15 @@ class InvoiceCollectorDialog(QDialog):
             return
         self._pending_retry_targets = set(self._retry_targets)
         self._retry_button.setEnabled(False)
+        self._fetch_active()
+
+    def _show_run_history(self) -> None:
+        history = InvoiceRunHistoryDialog(self._journal_for_review(), self)
+        if history.exec() != QDialog.DialogCode.Accepted or history.selected_period is None:
+            return
+        start, end = history.selected_period
+        self._period_start.setDate(QDate(start.year, start.month, start.day))
+        self._period_end.setDate(QDate(end.year, end.month, end.day))
         self._fetch_active()
 
     def _test_mailbox_access(self) -> None:

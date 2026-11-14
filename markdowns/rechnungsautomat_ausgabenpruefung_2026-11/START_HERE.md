@@ -47,6 +47,8 @@ Contract-Tests – keine Änderung an Dialog, Orchestrator, PDF-Pipeline oder On
    verifizierte Routen. Unabhängige Verbindungen laufen begrenzt parallel; pro Konto läuft
    höchstens ein Job. Ohne Live-verifizierte Route bleibt **„PDF manuell hinzufügen“** der
    nutzbare Weg durch dieselbe PDF-Prüfung und Ablage.
+   Der Button Laufverlauf zeigt die juengsten Run-/Routenstatus und uebernimmt einen
+   frueheren Zeitraum; Resume erfolgt nur bei identischem Laufkontext.
 3. **Anmeldung:** Graph kann für den Mailbox-Probe eine sichtbare Microsoft-Anmeldung öffnen.
    Der Dialog bietet noch keine allgemeine Aktion "Anmeldung erneuern". Auth- und
    voruebergehende Netzwerk-/Rate-Limit-/Zielordnerfehler lassen sich nach Behebung gezielt

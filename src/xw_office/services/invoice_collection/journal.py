@@ -50,6 +50,28 @@ class ReviewDocument:
     sync_status: str
 
 
+@dataclass(frozen=True)
+class CollectionRunSummary:
+    """Non-sensitive run metadata for the local history view."""
+
+    run_id: str
+    status: str
+    period_start: date | None
+    period_end: date | None
+    started_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class CollectionRouteStatus:
+    """Per-route status without provider payloads, target paths, or credentials."""
+
+    connection_id: str
+    route_key: str
+    status: str
+    error_code: str | None
+
+
 class InvoiceJournal:
     """A local metadata journal; it never stores document bytes or secret values."""
 
@@ -336,6 +358,44 @@ class InvoiceJournal:
             ).fetchone()
         return str(row["status"]) if row else None
 
+    def list_recent_runs(self, *, limit: int = 20) -> tuple[CollectionRunSummary, ...]:
+        bounded_limit = max(1, min(int(limit), 100))
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                "SELECT run_id, status, period_start, period_end, started_at, updated_at "
+                "FROM collection_runs ORDER BY updated_at DESC LIMIT ?",
+                (bounded_limit,),
+            ).fetchall()
+        return tuple(
+            CollectionRunSummary(
+                run_id=str(row["run_id"]),
+                status=str(row["status"]),
+                period_start=_parse_date(row["period_start"]),
+                period_end=_parse_date(row["period_end"]),
+                started_at=_parse_datetime(str(row["started_at"])),
+                updated_at=_parse_datetime(str(row["updated_at"])),
+            )
+            for row in rows
+        )
+
+    def list_route_statuses(self, *, run_id: str) -> tuple[CollectionRouteStatus, ...]:
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                "SELECT connection_id, route_key, status, error_code "
+                "FROM collection_run_routes WHERE run_id=? "
+                "ORDER BY connection_id, route_key",
+                (run_id,),
+            ).fetchall()
+        return tuple(
+            CollectionRouteStatus(
+                connection_id=str(row["connection_id"]),
+                route_key=str(row["route_key"]),
+                status=str(row["status"]),
+                error_code=str(row["error_code"]) if row["error_code"] else None,
+            )
+            for row in rows
+        )
+
     def checkpoint_count(self, *, run_id: str, route_key: str | None = None) -> int:
         query = "SELECT COUNT(*) AS total FROM collection_checkpoints WHERE run_id=?"
         parameters: tuple[str, ...] = (run_id,)
@@ -554,6 +614,23 @@ class InvoiceJournal:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_date(value: object) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _parse_datetime(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 def _review_document_from_row(row: sqlite3.Row) -> ReviewDocument:

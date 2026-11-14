@@ -639,6 +639,42 @@ def test_invoice_journal_migrates_v4_review_metadata_columns(tmp_path: Path) -> 
         ).fetchone()[0] == "5"
 
 
+def test_invoice_journal_lists_recent_run_and_route_status_without_context_secrets(
+    tmp_path: Path,
+) -> None:
+    journal = InvoiceJournal(tmp_path / "run-history.sqlite3")
+    period = DateRange(date(2026, 11, 1), date(2026, 11, 30))
+    run_id, resumed = journal.begin_or_resume_run(
+        period=period,
+        target_fingerprint="target-fingerprint",
+        connection_fingerprints={"connection-id": "connection-fingerprint"},
+    )
+    assert resumed is False
+    journal.record_route_status(
+        run_id=run_id,
+        connection_id="connection-id",
+        route_key="mail_pdf",
+        status="WAITING_FOR_USER",
+        error_code="AUTH_REQUIRED",
+    )
+    journal.finish_run(run_id=run_id, status=RunStatus.PARTIAL)
+
+    runs = journal.list_recent_runs(limit=1)
+    routes = journal.list_route_statuses(run_id=run_id)
+
+    assert len(runs) == 1
+    assert runs[0].run_id == run_id
+    assert runs[0].status == RunStatus.PARTIAL.value
+    assert runs[0].period_start == period.start
+    assert runs[0].period_end == period.end
+    assert runs[0].started_at.tzinfo is not None
+    assert [(route.route_key, route.status, route.error_code) for route in routes] == [
+        ("mail_pdf", "WAITING_FOR_USER", "AUTH_REQUIRED")
+    ]
+    assert "target-fingerprint" not in repr(runs)
+    assert "connection-fingerprint" not in repr(runs)
+
+
 def test_invoice_review_resolution_moves_pdf_and_updates_journal_truthfully(
     tmp_path: Path,
 ) -> None:
