@@ -35,6 +35,10 @@ from xw_office.services.invoice_collection.domain import (
     RouteSettings,
     TenantId,
 )
+from xw_office.services.invoice_collection.errors import (
+    InvoiceCollectionError,
+    InvoiceErrorCode,
+)
 from xw_office.services.invoice_collection.journal import InvoiceJournal
 from xw_office.services.invoice_collection.bootstrap import build_connector_factories
 from xw_office.services.invoice_collection.pipeline import DocumentPipeline
@@ -525,6 +529,11 @@ class InvoiceCollectorDialog(QDialog):
         if not self._folder.text().strip():
             self._status.setText("Bitte zuerst einen Zielordner auswählen.")
             return
+        try:
+            period = self._selected_period()
+        except ValueError:
+            self._status.setText("Das Enddatum muss am oder nach dem Startdatum liegen.")
+            return
         files, _ = QFileDialog.getOpenFileNames(
             self, "PDF-Belege auswählen", filter="PDF-Dateien (*.pdf)"
         )
@@ -551,6 +560,7 @@ class InvoiceCollectorDialog(QDialog):
                     connection=connection,
                     document_type=document_type,
                     target_root=target_root,
+                    period=period,
                     provider_id=provider_id,
                     tenant_id=tenant_id,
                     cancel=worker,
@@ -579,9 +589,14 @@ class InvoiceCollectorDialog(QDialog):
             if not isinstance(row, tuple) or len(row) != 4:
                 continue
             provider_id, tenant_id, filename, outcome = row
+            display_outcome = (
+                "Außerhalb des gewählten Zeitraums"
+                if outcome == InvoiceErrorCode.OUT_OF_PERIOD.value
+                else str(outcome)
+            )
             self._append_result(
                 str(filename),
-                str(outcome),
+                display_outcome,
                 provider_id=str(provider_id),
                 tenant_id=str(tenant_id),
             )
@@ -596,6 +611,11 @@ class InvoiceCollectorDialog(QDialog):
             for row in result
             if isinstance(row, tuple) and len(row) == 4
         )
+        out_of_period_count = sum(
+            row[3] == InvoiceErrorCode.OUT_OF_PERIOD.value
+            for row in result
+            if isinstance(row, tuple) and len(row) == 4
+        )
         error_count = sum(
             str(row[3]).startswith("ERROR:")
             for row in result
@@ -603,7 +623,8 @@ class InvoiceCollectorDialog(QDialog):
         )
         self._status.setText(
             f"Import abgeschlossen: {new_count} neu, {existing_count} bereits vorhanden, "
-            f"{review_count} zur Prüfung, {error_count} fehlgeschlagen. "
+            f"{review_count} zur Prüfung, {out_of_period_count} außerhalb Zeitraum, "
+            f"{error_count} fehlgeschlagen. "
             "Lokal gespeicherte Dateien bleiben SYNC_PENDING."
         )
 
@@ -656,6 +677,7 @@ def _run_manual_import(
     connection: ProviderConnection,
     document_type: DocumentType,
     target_root: Path,
+    period: DateRange,
     provider_id: str,
     tenant_id: str,
     cancel: BackgroundWorker,
@@ -667,7 +689,7 @@ def _run_manual_import(
         document_type=document_type,
     )
     pipeline = DocumentPipeline(
-        sink=OneDriveLocalSink(target_root), journal=InvoiceJournal()
+        sink=OneDriveLocalSink(target_root), journal=InvoiceJournal(), period=period
     )
     workspace = ensure_invoice_collection_dirs()["tmp"] / str(uuid.uuid4())
     workspace.mkdir(parents=True, exist_ok=False)
@@ -684,6 +706,8 @@ def _run_manual_import(
                     if result.receipt.review_reason
                     else result.receipt.outcome.value
                 )
+            except InvoiceCollectionError as exc:
+                outcome = exc.code.value
             except Exception as exc:  # noqa: BLE001 - keep a failed file local to its row
                 outcome = f"ERROR: {type(exc).__name__}"
             results.append(

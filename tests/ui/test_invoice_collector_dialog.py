@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from threading import Event
 
+from PySide6.QtCore import QDate
 from PySide6.QtWidgets import QFileDialog
 
 from xw_office.core.app_paths import default_invoice_target_dir
@@ -188,13 +189,15 @@ def test_manual_import_runs_in_worker_and_publishes_partial_results_on_cancel(
 ) -> None:
     started = Event()
     release = Event()
+    captured_periods = []
     monkeypatch.setattr(
         QFileDialog,
         "getOpenFileNames",
         lambda *_args, **_kwargs: ([str(tmp_path / "fixture.pdf")], ""),
     )
 
-    def blocked_import(**_kwargs: object) -> list[tuple[str, str, str, str]]:
+    def blocked_import(**kwargs: object) -> list[tuple[str, str, str, str]]:
+        captured_periods.append(kwargs["period"])
         started.set()
         release.wait(2)
         return [("fixture", "xw", "fixture.pdf", "NEW")]
@@ -208,6 +211,8 @@ def test_manual_import_runs_in_worker_and_publishes_partial_results_on_cancel(
     )
     qtbot.addWidget(dialog)  # type: ignore[attr-defined]
     dialog._set_folder(target)
+    dialog._period_start.setDate(QDate(2026, 11, 1))
+    dialog._period_end.setDate(QDate(2026, 11, 30))
 
     dialog._manual_import()
 
@@ -222,3 +227,36 @@ def test_manual_import_runs_in_worker_and_publishes_partial_results_on_cancel(
     assert dialog._table.rowCount() == 1
     assert dialog._table.item(0, 3).text() == "fixture.pdf"
     assert dialog._status.text().startswith("Import abgebrochen")
+    assert len(captured_periods) == 1
+    assert captured_periods[0].start.isoformat() == "2026-11-01"
+    assert captured_periods[0].end.isoformat() == "2026-11-30"
+
+
+def test_manual_import_displays_out_of_period_documents_as_skipped(
+    qtbot: object, monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileNames",
+        lambda *_args, **_kwargs: ([str(tmp_path / "old-invoice.pdf")], ""),
+    )
+    monkeypatch.setattr(
+        dialog_module,
+        "_run_manual_import",
+        lambda **_kwargs: [("fixture", "xw", "old-invoice.pdf", "OUT_OF_PERIOD")],
+    )
+    target = tmp_path / "onedrive"
+    target.mkdir()
+    dialog = InvoiceCollectorDialog(
+        tenant_id="xw",
+        connection_repository=ConnectionRepository(tmp_path / "connections.sqlite3"),
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    dialog._set_folder(target)
+
+    dialog._manual_import()
+
+    qtbot.waitUntil(lambda: dialog._manual_worker is None, timeout=3000)  # type: ignore[attr-defined]
+    assert dialog._table.rowCount() == 1
+    assert dialog._table.item(0, 4).text() == "Außerhalb des gewählten Zeitraums"
+    assert "1 außerhalb Zeitraum" in dialog._status.text()
