@@ -11,11 +11,17 @@ current_status:
   implemented:
     - "manual import through PDF pipeline and OneDriveLocalSink"
     - "provider-independent dialog, connection metadata and bounded orchestrator"
-    - "Graph mail, Mollie API and Playwright adapter contracts with local fakes"
+    - "current Europe/Vienna month defaults and selected DateRange forwarding to connector factories"
+    - "route-local discovery failure isolation, connection-ID locks and connector cleanup"
+    - "planned routes blocked both at save time and when loading existing connections"
+    - "Graph mail factory wired into desktop dialog with mailbox and sender-domain settings"
+    - "explicit delegated Graph mailbox probe using minimal Mail.Read and one-message-ID query"
+    - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
-    - "all real provider accounts and portal DOMs"
+    - "all 18 real provider accounts and 26 route behaviors; mailbox probe is not invoice-route verification"
+    - "invoice-date extraction and unknown-date review for Graph mail attachments"
     - "remote OneDrive cloud confirmation"
-    - "18 catalog providers / 26 routes remain planned or manual; see PROVIDER_ABDECKUNG_2026-11-14.md"
+    - "see PROVIDER_ABDECKUNG_2026-11-14.md for provider-by-provider relevance and next proof"
 
 mvp_scope:
   required:
