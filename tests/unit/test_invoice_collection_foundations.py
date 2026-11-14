@@ -891,6 +891,27 @@ def test_connection_repository_round_trips_metadata_without_secret_values(tmp_pa
     assert loaded == [value]
 
 
+def test_connection_repository_lists_and_toggles_disabled_connections(tmp_path: Path) -> None:
+    repository = ConnectionRepository(tmp_path / "connections.sqlite3")
+    value = ProviderConnection.create(
+        provider_id="fixture",
+        tenant_id=TenantId.XW,
+        account_alias="billing",
+        enabled=False,
+    )
+    repository.save(value)
+
+    connections, issues = repository.list_all_with_issues()
+    assert connections == [value]
+    assert issues == []
+    assert repository.list_enabled() == []
+
+    assert repository.set_enabled(value.connection_id, True)
+    assert repository.list_enabled()[0].enabled is True
+    assert repository.set_enabled(value.connection_id, False)
+    assert repository.list_enabled() == []
+
+
 def test_collection_isolates_invalid_saved_connection_and_keeps_valid_accounts_running(
     tmp_path: Path,
 ) -> None:

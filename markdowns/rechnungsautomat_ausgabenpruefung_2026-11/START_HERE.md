@@ -1,6 +1,6 @@
 # Rechnungsautomat für XW-Office – START HERE
 
-**Stand: 07.11.2026 | Architektur und Foundation-MVP implementiert; keine live verifizierten Portalrouten.**
+**Stand: 14.11.2026 | Lokale Foundation und Adapter-Fakes getestet; keine live verifizierte Rechnungsroute.**
 
 ## Ziel
 
@@ -38,27 +38,30 @@ Contract-Tests – keine Änderung an Dialog, Orchestrator, PDF-Pipeline oder On
 
 ## Bedienung in drei Schritten
 
-1. **Einmalig:** Zielordner wählen, Provider-Verbindungen einem Mandanten (`xw` oder
-   `wuedara`) zuordnen und benötigte Routen aktivieren. Microsoft-Zustimmung, schmal
-   berechtigte API-Tokens und sichtbare Portal-Logins werden nur bei Bedarf angefordert.
-2. **Danach:** **„Alle aktiven Verbindungen abrufen“** startet einen Lauf. Unabhängige
-   Verbindungen laufen begrenzt parallel; pro Konto läuft höchstens ein Job. Jeder Kandidat
-   durchläuft dieselbe sichere, idempotente Pipeline.
-3. **Login abgelaufen:** Nur die betroffene Route zeigt **„Anmeldung erneuern“**. Der Benutzer
-   meldet sich im sichtbaren Browser inklusive 2FA an. Danach wird diese Route fortgesetzt;
-   andere Verbindungen bleiben unbeeinträchtigt.
+1. **Lokales Setup:** Zielordner wählen. Der Zeitraum ist mit dem aktuellen Kalendermonat in
+   `Europe/Vienna` vorbelegt. Eine automatisierte Verbindung lässt sich erst speichern und
+   aktivieren, wenn ihre konkrete Route im Katalog als `verified` steht. Der Graph-Mailbox-Probe
+   testet Zugriff, verifiziert aber keine Rechnungsroute.
+2. **Monatslauf:** **„Alle aktiven Verbindungen abrufen“** verarbeitet nur aktivierte, aktuell
+   verifizierte Routen. Unabhängige Verbindungen laufen begrenzt parallel; pro Konto läuft
+   höchstens ein Job. Ohne Live-verifizierte Route bleibt **„PDF manuell hinzufügen“** der
+   nutzbare Weg durch dieselbe PDF-Prüfung und Ablage.
+3. **Anmeldung:** Graph kann für den Mailbox-Probe eine sichtbare Microsoft-Anmeldung öffnen.
+   Der Dialog bietet noch keine allgemeine Aktion **„Anmeldung erneuern“** oder eine
+   routebezogene Wiederaufnahme nach einem Authfehler. Authfehler werden im Ergebnis angezeigt;
+   das ist ein offener T04-Punkt.
 
 ## Verbindliche Produktentscheidungen
 
 - **Desktop-MVP:** Windows/PySide6. Standardziel ist ein bewusst ausgewählter, beschreibbarer
   OneDrive-Business-Syncordner. Lokal gespeichert bedeutet `SYNC_PENDING`, nicht
   `CLOUD_VERIFIED`.
-- **Priorität je Verbindung:** verifizierter Mail-PDF-Weg > offizielle API > Playwright mit
-  dediziertem Benutzerprofil > manueller Import. Die Reihenfolge ist konfigurierbar; ein
-  Fallback startet nur bei einem passenden, klassifizierten Fehler.
-- **Keine Provider-Sonderlogik in UI/Orchestrator:** Anzeige und Aktionen werden aus
-  Capabilities und Status abgeleitet. Provider-spezifische DOM-, API- und Mailregeln bleiben
-  im jeweiligen Connector.
+- **Route und Fallback:** Katalogstatus, Factory-Prüfung und Verbindungsaktivierung sind
+  fail-closed. Konfigurierbare Priorität und Capability-gesteuerte Auth-/Retry-Aktionen sind
+  Zielarchitektur, aber im Dialog noch nicht vollständig umgesetzt.
+- **Keine Provider-Sonderlogik in UI/Orchestrator:** Manifest und Connector-Factories sind
+  explizit und die gemeinsame Pipeline ist providerunabhängig. Der aktuelle Dialog ist noch ein
+  erster Slice; Capability-gesteuerte Aktionen bleiben offen.
 - **Secrets:** Windows Credential Manager/keyring oder geprüfter verschlüsselter Speicher.
   Keine echten Tokens, Cookies, Passwörter, 2FA-Seeds, PDFs oder Browserprofile in Git,
   OneDrive-Sitzungsordnern, Logs oder Testartefakten.
@@ -71,36 +74,31 @@ Contract-Tests – keine Änderung an Dialog, Orchestrator, PDF-Pipeline oder On
   Abrufroute. Nur mit echtem Dokument plus idempotentem Wiederholungstest darf eine Route
   `verified` werden.
 
-## Echtes Repository: Einhängepunkte
+## Echtes Repository: aktueller Stand
 
-Der aktuelle Stand enthält bereits den manuellen vertikalen Slice, den providerunabhängigen
-Dialog/Orchestrator sowie getestete Graph-Mail-, Mollie- und Playwright-Adaptergrenzen. Reale
-Providerkonten, Portal-DOMs und Cloud-Remoteprüfung bleiben bewusst ungeprüft, bis die jeweilige
-Verbindung lokal autorisiert und mit einem echten Dokument wiederholt getestet wurde.
+Implementiert und lokal getestet sind der manuelle PDF-Slice, der providerunabhängige
+Monatsdialog und Orchestrator, Graph-Mailbox-Zugriff/Anhangsreader, Mollie-API-Adapter,
+Playwright-Fake-Portal, PDF-Prüfung, lokales No-Clobber-Publishing, Journal mit Resume und
+Provenienz sowie Verbindungsbearbeitung mit stabiler Connection-ID. Der Dialog kann den
+Zielordner öffnen und markiert lokale Ablage weiter als `SYNC_PENDING`.
 
-- `src/xw_office/ui/modules/expense_review/view.py`: zusätzlicher Button; bestehende zwei
-  Mandanten, Tabellen, Aktualisierung, Lieferantenportale und Einstellungen bleiben erhalten.
-- `src/xw_office/core/worker.py` und `src/xw_office/ui/async_action.py`: vorhandene
-  Thread-/Lifecycle-Muster wiederverwenden; für mehrere Jobs einen kleinen, begrenzten
-  Orchestrator darüber setzen.
-- `src/xw_office/core/app_paths.py`: derzeit liegen `state/` und Logs im Repository. Für
-  Browserprofile, Token-Cache, lokale Registry-Konfiguration und Journal ist deshalb vor dem
-  ersten Live-Login ein neuer `%LOCALAPPDATA%`-Pfadhelfer erforderlich.
-- `src/xw_office/services/secrets/service.py`: vorhandenen SecretService nicht ungeprüft für
-  persönliche Portal-Logins zweckentfremden; Secret-Referenzen und Speicherart explizit
-  modellieren.
-- `src/xw_office/services/mailing/graph_client.py`: bestehender Client nutzt aktuell breite
-  Mail-Rechte, Device-Code-Ausgabe auf der Konsole und einen Klartext-JSON-Cache unter
-  `state/`. Nicht direkt als sichere MVP-Lösung übernehmen; zuerst UI-fähige Authentifizierung,
-  minimale Scopes und verschlüsselten Cache schaffen, ohne bestehende Mailfunktionen zu
-  beschädigen.
-- `src/xw_office/core/database.py`: zentrale PostgreSQL-Datenbank nicht für lokale
-  Browser-/Tokenzustände verwenden. Das Invoice-Journal ist eine eigene lokale SQLite-Datei
-  unter `%LOCALAPPDATA%` mit Migrationen.
-- `src/xw_office/core/shared_paths.py`: darf einen OneDrive-Pfad vorschlagen, ersetzt aber nie
-  die bewusste Ordnerwahl. Der Product-Hub-OneDrive-Client bleibt unverändert.
-- `AGENTS.md`: auf aktuellem `main` arbeiten; getestete Änderungen committen und nach
-  `origin/main` pushen.
+Relevante Implementierungsstellen:
+
+- `src/xw_office/ui/modules/expense_review/view.py` und
+  `src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py`: Einstieg, lokales
+  Setup, Zeitraum, Verbindungsverwaltung, Graph-Probe, manueller Import und Ergebnisanzeige.
+- `src/xw_office/services/invoice_collection/`: Domain, Registry, Factories, Connectoren,
+  PDF-Pipeline, Sink, Journal, Secret- und Authgrenzen, Orchestrator.
+- `src/xw_office/core/app_paths.py`: separate Pfade für Invoice-Collection-Zustand unter
+  `%LOCALAPPDATA%`; das zentrale PostgreSQL wird nicht als lokaler Auth-/Browserzustand benutzt.
+- `markdowns/rechnungsautomat_ausgabenpruefung_2026-11/IST_STAND_UND_ABSCHLUSSPLAN_2026-11-14.md`:
+  detaillierte Befunde, offene Punkte, externe Blocker und letzte Testevidenz.
+- `markdowns/rechnungsautomat_ausgabenpruefung_2026-11/TASK_QUEUE.yaml`: verbindliche
+  Aufgabenstatus und Abnahmeevidenz.
+
+Keine echte Anbieterroute oder OneDrive-Remote-Synchronisation ist nachgewiesen. Die lokal
+gespeicherten externen IDs liegen seit Journal-Schema 4 nicht mehr im Klartext im aktiven
+Datensatz; SQLite garantiert dadurch keine physische Bereinigung alter Datenseiten oder Backups.
 
 ## Dateien und Reihenfolge
 
@@ -109,14 +107,22 @@ Verbindung lokal autorisiert und mit einem echten Dokument wiederholt getestet w
 3. `SICHERHEIT_UND_2FA.md` – Bedrohungsmodell, sichere Ablage und Benutzerhandlungen.
 4. `PROVIDER_REGISTRY.yaml` – versionierter Provider-Katalog mit Routen und Reifegraden.
 5. `TASK_QUEUE.yaml` – inkrementelle Umsetzung mit vertikalem ersten Slice.
-6. `CODEX_GOAL.md` – kompakter Folgeauftrag.
+6. `GPT6_LUNA_FORTSETZUNGS_GOAL_2026-11-14.md` – aktueller, kopierbarer Folgeauftrag für GPT-6-Luna.
 
 ## Persönliche Schritte – nur wenn die Implementierung sie tatsächlich benötigt
 
 - OneDrive-Business-Zielordner auswählen.
-- Portal-Login einschließlich Authenticator/Passkey/SMS im sichtbaren Browser durchführen.
-- Einen minimal berechtigten API-Token im lokalen geschützten Dialog hinterlegen.
-- Microsoft-Graph-Zustimmung für die konkret angezeigten Rechte erteilen.
+- Für den ersten Mail-Pilot Provider, Rechnungs-Mailbox und bestätigte Absenderdomains lokal
+  klären und nur im Dialog eintragen; keine dieser Angaben im Chat posten.
+- Danach Graph-Mailbox-Test und sichtbaren Microsoft-Login/Consent im lokalen UI abschließen.
+- Echten Rechnungsbeleg und Wiederholung lokal prüfen; ein erfolgreicher Mailbox-Probe allein
+  reicht nicht zur Route-Verifikation.
+- Browser-Login einschließlich Authenticator/Passkey/SMS nur für einen konkret unterstützten
+  und erlaubten Portalpilot im sichtbaren Browser durchführen; ein solcher Anbieterpilot ist
+  noch nicht verifiziert.
+- Die aktuelle UI hat noch kein API-Token-Eingabefeld. Einen minimal berechtigten API-Token
+  erst eingeben, wenn die jeweilige Route und ihre lokale Secret-Eingabe implementiert sind.
+- Microsoft-Graph-Zustimmung für die konkret angezeigten minimalen Rechte erteilen.
 
 **Technische Referenzen:** [Playwright Auth](https://playwright.dev/python/docs/auth),
 [Playwright Downloads](https://playwright.dev/python/docs/downloads),

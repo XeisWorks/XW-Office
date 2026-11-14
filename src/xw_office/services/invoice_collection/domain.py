@@ -103,12 +103,14 @@ class ProviderConnection:
         tenant_id: TenantId,
         account_alias: str,
         route_settings: tuple[RouteSettings, ...] = (),
+        enabled: bool = True,
     ) -> "ProviderConnection":
         return cls(
             connection_id=uuid4(),
             provider_id=provider_id,
             tenant_id=tenant_id,
             account_alias=account_alias,
+            enabled=enabled,
             route_settings=route_settings,
         )
 

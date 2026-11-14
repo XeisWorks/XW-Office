@@ -58,6 +58,11 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    `external_id`-Werte in `documents`; vorhandene Schema-1-bis-3-Werte werden in gehashte
    Provenienz migriert und aus der aktiven Spalte entfernt. Erhalte die Hash-basierte
    Konflikterkennung und fuehre keinen Klartext-Fallback wieder ein.
+   Der Dialog listet gespeicherte Providerverbindungen, aktualisiert Einstellungen mit stabiler
+   Connection-ID und verhindert die Reaktivierung nicht verifizierter Routen. Er kann auch den
+   gewaehlten lokalen Zielordner oeffnen, ohne Cloud-Sync zu behaupten. Erhalte diese
+   Guardrails; capability-basierte Auth-/Token-/Portalaktionen bleiben ein gesonderter offener
+   T04-Punkt.
 4. Der Live-Mailpilot ist extern blockiert: Anbieter, Rechnungs-Mailbox und bestaetigte
    Absenderdomain(s) sind noch nicht geklaert. Frage nie nach diesen Werten oder Geheimnissen
    im Chat. Wenn der Benutzer soweit ist, gib genau eine lokale UI-Anweisung: in Finanzen >

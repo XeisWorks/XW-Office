@@ -8,7 +8,13 @@
 
 Beim Abschlussaudit wurde festgestellt, dass `documents.external_id` neue externe Rechnungs-IDs trotz bereits vorhandener Hash-Provenienz zusaetzlich im Klartext speicherte. Das Journal nutzt jetzt Schema 4: neue Dokumentzeilen schreiben dort keine externe ID mehr; `has_external_id()` arbeitet ueber den SHA-256-Fingerprint in `document_provenance`. Die Migration uebernimmt vorhandene Schema-1-bis-3-Klartextwerte in gehashte Provenienz und leert anschliessend die Spalte, sodass die Inhaltskonflikterkennung erhalten bleibt. Abgedeckt durch Tests fuer neue Klartextfreiheit, Hash-Lookup/Konflikterkennung und Schema-3-Migration. Der gezielte Foundation-Lauf besteht mit **37 passed**. Eine SQLite-Migration garantiert keine physische Loeschung alter Datenseiten oder Sicherungskopien; sie entfernt den Wert aus dem aktiven Datenbankschema und dem aktuellen Datensatz.
 
-Die volle Repository-Suite nach der Migration besteht mit **2.414 passed, 7 skipped, 0 failed** (eine externe Starlette/httpx-Deprecation-Warnung). Repo-weites Ruff, Collector-MyPy (30 Dateien), Provider-/Queue-YAML, `git diff --check` und der hinzugefuegte Diff-Secret-Mustercheck bestehen.
+Die volle Repository-Suite nach der Journal-Migration und den UI-Ergaenzungen besteht mit **2.418 passed, 7 skipped, 0 failed** (eine externe Starlette/httpx-Deprecation-Warnung). Repo-weites Ruff, Collector-MyPy (30 Dateien), Provider-/Queue-YAML, `git diff --check` und der hinzugefuegte Diff-Secret-Mustercheck bestehen.
+
+## Fortschreibung: gespeicherte Verbindungen und Zielordner
+
+Der Dialog listet gespeicherte Verbindungen nun nach Provider/Konto/Mandant, laedt ihre lokalen Einstellungen zur Bearbeitung, aktualisiert sie unter derselben Connection-ID und kann sie deaktivieren. Beim Reaktivieren prueft die UI jede aktivierte Route erneut gegen den aktuellen Katalogstatus `verified`; geplante Routen bleiben gesperrt. Der OneDrive-Zielordner kann aus dem Dialog geoeffnet werden; die Meldung stellt klar, dass dies keinen Cloud-Sync bestaetigt. Ein UI-Grenzfall wurde ebenfalls behoben: Der selektierte Dokumenttyp wird als Enum oder als Qt-konvertierter String akzeptiert. Gezielte Tests decken gespeicherte Verbindungen, stabile ID, Aktivierungssperre und Ordneraktion ab. Noch offen bleiben capability-basierte Auth-/Token-/Portalaktionen sowie Live-Routen.
+
+`START_HERE.md` wurde mit dem tatsaechlichen Verhalten synchronisiert: manuelle Ablage, aktivierbare verified-Routen, Graph-Probe, lokale Authgrenzen und noch fehlende Token-/Erneuerungsaktionen sind dort jetzt getrennt vom Zielbild beschrieben.
 
 ## Fortschreibung: begrenzter Graph-Anhangsdownload
 

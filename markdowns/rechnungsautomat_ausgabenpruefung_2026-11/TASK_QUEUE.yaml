@@ -36,8 +36,10 @@ current_status:
     - "same tenant/sink/PDF hash across routes publishes once and adds hashed source provenance to the journal"
     - "invoice journal schema 4 migrates legacy external IDs to hashed provenance and never persists new raw external IDs"
     - "collection results show safe provider/route provenance labels without raw source or external IDs"
+    - "saved provider connections can be selected, updated by stable ID, and disabled; re-enabling still requires verified routes"
+    - "selected OneDrive target folder can be opened from the dialog without implying cloud sync"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
-    - "full repository suite after invoice-journal schema 4 privacy migration: 2414 passed, 7 skipped, 0 failed; repo Ruff, provider/queue YAML, collector MyPy and diff checks pass"
+    - "full repository suite after invoice-journal schema 4 privacy migration and saved-connection UI: 2418 passed, 7 skipped, 0 failed; repo Ruff, provider/queue YAML, collector MyPy and diff checks pass"
     - "collector/dialog MyPy: 30 source files, no issues; DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
@@ -208,6 +210,9 @@ tasks:
       - "src/xw_office/services/invoice_collection/orchestrator.py"
       - "tests/ui/test_invoice_collector_dialog.py"
       - "tests/ui/test_invoice_collector_dialog.py::test_invoice_collector_dialog_refuses_to_enable_unverified_route"
+      - "tests/ui/test_invoice_collector_dialog.py::test_saved_connection_can_be_loaded_but_unverified_route_stays_disabled"
+      - "tests/ui/test_invoice_collector_dialog.py::test_saving_an_existing_verified_connection_keeps_its_identity"
+      - "tests/ui/test_invoice_collector_dialog.py::test_invoice_collector_dialog_opens_only_an_existing_target_folder"
       - "tests/unit/test_invoice_collection_foundations.py::test_collection_service_blocks_saved_route_that_catalog_marks_planned"
       - "tests/unit/test_invoice_collection_foundations.py::test_orchestrator_honors_cooperative_cancellation_before_start"
       - "tests/unit/test_invoice_collection_foundations.py::test_orchestrator_isolates_discovery_failure_and_uses_connection_lock"
@@ -355,7 +360,7 @@ tasks:
     status: "in_progress"
     depends_on: ["T05", "T06", "T07"]
     evidence:
-      - "python -m pytest -q: 2402 passed, 7 skipped, 0 failed"
+      - "python -m pytest -q: 2418 passed, 7 skipped, 0 failed"
       - "python -m ruff check .: passed"
       - "python -m mypy src/xw_office/services/invoice_collection src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py: 30 source files, no issues"
       - "Provider and task queue YAML parse: passed"

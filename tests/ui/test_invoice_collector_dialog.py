@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from threading import Event
+from dataclasses import replace
 
 from PySide6.QtCore import QDate
 from PySide6.QtWidgets import QFileDialog
@@ -9,7 +10,12 @@ from PySide6.QtWidgets import QFileDialog
 from xw_office.core.app_paths import default_invoice_target_dir
 from xw_office.ui.modules.expense_review import invoice_collector_dialog as dialog_module
 from xw_office.services.invoice_collection.connections import ConnectionRepository
-from xw_office.services.invoice_collection.domain import DocumentOutcome
+from xw_office.services.invoice_collection.domain import (
+    DocumentOutcome,
+    ProviderConnection,
+    RouteSettings,
+    TenantId,
+)
 from xw_office.services.invoice_collection.orchestrator import (
     CollectionItemResult,
     CollectionSummary,
@@ -43,6 +49,33 @@ def test_invoice_collector_dialog_loads_catalog_and_requires_active_connections(
     assert "Keine aktiven Provider-Verbindungen" in dialog._status.text()
 
 
+def test_invoice_collector_dialog_opens_only_an_existing_target_folder(
+    qtbot: object, tmp_path: Path, monkeypatch: object
+) -> None:
+    dialog = InvoiceCollectorDialog(
+        tenant_id="xw",
+        connection_repository=ConnectionRepository(tmp_path / "connections.sqlite3"),
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    opened: list[str] = []
+    monkeypatch.setattr(
+        dialog_module.QDesktopServices,
+        "openUrl",
+        lambda url: opened.append(url.toLocalFile()) or True,
+    )
+
+    dialog._set_folder(tmp_path)
+    dialog._open_folder()
+
+    assert [Path(value).resolve() for value in opened] == [tmp_path.resolve()]
+    assert "Cloud-Syncstatus wird dadurch nicht bestätigt" in dialog._status.text()
+
+    dialog._folder.setText(str(tmp_path / "missing"))
+    dialog._open_folder()
+    assert [Path(value).resolve() for value in opened] == [tmp_path.resolve()]
+    assert "nicht verfügbar" in dialog._status.text()
+
+
 def test_invoice_collector_dialog_refuses_to_enable_unverified_route(qtbot: object, tmp_path: Path) -> None:
     repository = ConnectionRepository(tmp_path / "connections.sqlite3")
     dialog = InvoiceCollectorDialog(tenant_id="xw", connection_repository=repository)
@@ -51,6 +84,111 @@ def test_invoice_collector_dialog_refuses_to_enable_unverified_route(qtbot: obje
     dialog._save_connection()
     assert repository.list_enabled() == []
     assert "nicht live verifiziert" in dialog._status.text()
+
+
+def test_saved_connection_can_be_loaded_but_unverified_route_stays_disabled(
+    qtbot: object, tmp_path: Path
+) -> None:
+    repository = ConnectionRepository(tmp_path / "connections.sqlite3")
+    catalog_path = (
+        Path(__file__).resolve().parents[2]
+        / "markdowns"
+        / "rechnungsautomat_ausgabenpruefung_2026-11"
+        / "PROVIDER_REGISTRY.yaml"
+    )
+    catalog = dialog_module.ProviderCatalog.from_yaml(catalog_path)
+    mail_provider = next(
+        provider for provider in catalog.providers
+        if any(route.method == "mail" for route in provider.routes)
+    )
+    mail_route = next(route for route in mail_provider.routes if route.method == "mail")
+    saved = ProviderConnection.create(
+        provider_id=mail_provider.provider_id,
+        tenant_id=TenantId.XW,
+        account_alias="billing",
+        enabled=False,
+        route_settings=(
+            RouteSettings(
+                route_key=mail_route.route_key,
+                options={
+                    "mailbox": "billing@example.test",
+                    "sender_domains": "invoices.example.test",
+                    "document_type": "expense_invoice",
+                },
+            ),
+        ),
+    )
+    repository.save(saved)
+
+    dialog = InvoiceCollectorDialog(tenant_id="xw", connection_repository=repository)
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    dialog._saved_connections.setCurrentIndex(
+        dialog._saved_connections.findData(str(saved.connection_id))
+    )
+
+    assert dialog._account_alias.text() == "billing"
+    assert dialog._mailbox.text() == "billing@example.test"
+    assert dialog._sender_domains.text() == "invoices.example.test"
+    assert dialog._provider.isEnabled() is False
+    dialog._toggle_saved_connection()
+    assert "live verifiziert" in dialog._status.text()
+    assert repository.list_enabled() == []
+
+
+def test_saving_an_existing_verified_connection_keeps_its_identity(
+    qtbot: object, tmp_path: Path
+) -> None:
+    repository = ConnectionRepository(tmp_path / "connections.sqlite3")
+    dialog = InvoiceCollectorDialog(tenant_id="xw", connection_repository=repository)
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    catalog = dialog._catalog
+    provider = next(
+        provider for provider in catalog.providers
+        if any(route.method == "mail" for route in provider.routes)
+    )
+    route = next(route for route in provider.routes if route.method == "mail")
+    verified_provider = replace(
+        provider,
+        routes=tuple(
+            replace(item, maturity="verified") if item.route_key == route.route_key else item
+            for item in provider.routes
+        ),
+    )
+    dialog._catalog = replace(
+        catalog,
+        providers=tuple(verified_provider if item.provider_id == provider.provider_id else item
+                        for item in catalog.providers),
+    )
+    dialog._provider.setCurrentIndex(dialog._provider.findData(provider.provider_id))
+    dialog._provider_changed()
+    dialog._account_alias.setText("billing")
+    dialog._mailbox.setText("billing@example.test")
+    dialog._sender_domains.setText("invoices.example.test")
+    dialog._save_connection()
+    first = repository.list_enabled()[0]
+    repository.save(
+        replace(
+            first,
+            route_settings=first.route_settings
+            + (RouteSettings(route_key="future_route", enabled=False),),
+        )
+    )
+    dialog._load_saved_connections(select_id=str(first.connection_id))
+
+    dialog._mailbox.setText("ap@example.test")
+    dialog._save_connection()
+    second = repository.list_enabled()[0]
+
+    assert second.connection_id == first.connection_id
+    assert second.route_settings[0].options["mailbox"] == "ap@example.test"
+    assert second.route_settings[1].route_key == "future_route"
+    repository.save(replace(second, enabled=False))
+    dialog._load_saved_connections(select_id=str(first.connection_id))
+    dialog._mailbox.setText("billing2@example.test")
+    dialog._save_connection()
+    third = repository.list_all_with_issues()[0][0]
+    assert third.enabled is False
+    assert third.route_settings[0].options["mailbox"] == "billing2@example.test"
 
 
 def test_invoice_collector_dialog_does_not_save_provider_without_automated_route(

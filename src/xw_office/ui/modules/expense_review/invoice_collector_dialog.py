@@ -8,7 +8,8 @@ import re
 import uuid
 from zoneinfo import ZoneInfo
 
-from PySide6.QtCore import QDate, QSettings, Qt
+from PySide6.QtCore import QDate, QSettings, QUrl, Qt
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -64,6 +65,8 @@ class InvoiceCollectorDialog(QDialog):
         self.resize(900, 560)
         self._settings = QSettings("XeisWorks", "XW Office")
         self._connection_repository = connection_repository or ConnectionRepository()
+        self._editing_connection: ProviderConnection | None = None
+        self._saved_connections_by_id: dict[str, ProviderConnection] = {}
         self._collection_service = collection_service
         self._fetch_worker: BackgroundWorker | None = None
         self._mail_test_worker: BackgroundWorker | None = None
@@ -107,6 +110,7 @@ class InvoiceCollectorDialog(QDialog):
         self._provider.currentIndexChanged.connect(self._provider_changed)
         self._provider_changed()
         self._build_ui()
+        self._load_saved_connections()
         saved = str(self._settings.value("invoice_collection/target_folder") or "").strip()
         if saved:
             self._set_folder(Path(saved))
@@ -156,8 +160,14 @@ class InvoiceCollectorDialog(QDialog):
         choose = QPushButton("Ordner wählen")
         choose.clicked.connect(self._choose_folder)
         folder_row.addWidget(choose)
+        open_folder = QPushButton("Ordner öffnen")
+        open_folder.clicked.connect(self._open_folder)
+        folder_row.addWidget(open_folder)
         root.addLayout(folder_row)
         form = QFormLayout()
+        self._saved_connections = QComboBox()
+        self._saved_connections.currentIndexChanged.connect(self._saved_connection_changed)
+        form.addRow("Gespeicherte Verbindung", self._saved_connections)
         form.addRow("Mandant", self._tenant)
         form.addRow("Rechnungsdatum von", self._period_start)
         form.addRow("Rechnungsdatum bis", self._period_end)
@@ -179,6 +189,10 @@ class InvoiceCollectorDialog(QDialog):
         save = QPushButton("Verbindung speichern")
         save.clicked.connect(self._save_connection)
         actions.addWidget(save)
+        self._connection_toggle_button = QPushButton("Verbindung deaktivieren")
+        self._connection_toggle_button.setEnabled(False)
+        self._connection_toggle_button.clicked.connect(self._toggle_saved_connection)
+        actions.addWidget(self._connection_toggle_button)
         self._mail_test_button = QPushButton("Graph-Mailbox testen")
         self._mail_test_button.clicked.connect(self._test_mailbox_access)
         actions.addWidget(self._mail_test_button)
@@ -201,6 +215,110 @@ class InvoiceCollectorDialog(QDialog):
         selected = QFileDialog.getExistingDirectory(self, "OneDrive-Business-Ordner auswählen")
         if selected:
             self._set_folder(Path(selected))
+
+    def _open_folder(self) -> None:
+        target = Path(self._folder.text().strip()).expanduser()
+        if not target.is_dir():
+            self._status.setText("Der ausgewählte Zielordner ist nicht verfügbar.")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(target.resolve()))):
+            self._status.setText("Der Zielordner konnte nicht geöffnet werden.")
+            return
+        self._status.setText(
+            "OneDrive-Ordner geöffnet. Der Cloud-Syncstatus wird dadurch nicht bestätigt."
+        )
+
+    def _load_saved_connections(self, *, select_id: str | None = None) -> None:
+        connections, _issues = self._connection_repository.list_all_with_issues()
+        self._saved_connections.blockSignals(True)
+        self._saved_connections.clear()
+        self._saved_connections.addItem("Neue Verbindung", "")
+        self._saved_connections_by_id = {}
+        for connection in connections:
+            connection_id = str(connection.connection_id)
+            state = "aktiv" if connection.enabled else "deaktiviert"
+            label = (
+                f"{connection.provider_id} / {connection.account_alias} "
+                f"({connection.tenant_id.value}, {state})"
+            )
+            self._saved_connections.addItem(label, connection_id)
+            self._saved_connections_by_id[connection_id] = connection
+        index = self._saved_connections.findData(select_id or "")
+        self._saved_connections.setCurrentIndex(max(index, 0))
+        self._saved_connections.blockSignals(False)
+        self._saved_connection_changed(self._saved_connections.currentIndex())
+
+    def _saved_connection_changed(self, index: int) -> None:
+        connection_id = str(self._saved_connections.itemData(index) or "")
+        self._editing_connection = self._saved_connections_by_id.get(connection_id)
+        if self._editing_connection is None:
+            self._provider.setEnabled(True)
+            self._tenant.setEnabled(True)
+            self._account_alias.setText("default")
+            self._mailbox.clear()
+            self._sender_domains.clear()
+            self._connection_toggle_button.setEnabled(False)
+            return
+
+        connection = self._editing_connection
+        self._provider.setEnabled(False)
+        self._tenant.setEnabled(False)
+        self._provider.setCurrentIndex(self._provider.findData(connection.provider_id))
+        self._tenant.setCurrentIndex(self._tenant.findData(connection.tenant_id.value))
+        self._account_alias.setText(connection.account_alias)
+        route_settings = connection.route_settings[0] if connection.route_settings else None
+        if route_settings is not None:
+            route_index = next(
+                (
+                    i for i in range(self._route.count())
+                    if (route := self._route.itemData(i)) is not None
+                    and route.route_key == route_settings.route_key
+                ),
+                -1,
+            )
+            if route_index >= 0:
+                self._route.setCurrentIndex(route_index)
+            options = route_settings.options
+            self._mailbox.setText(options.get("mailbox", ""))
+            self._sender_domains.setText(options.get("sender_domains", ""))
+            type_index = next(
+                (
+                    i for i in range(self._document_type.count())
+                    if (document_type := self._document_type.itemData(i)) is not None
+                    and str(getattr(document_type, "value", document_type))
+                    == options.get("document_type")
+                ),
+                -1,
+            )
+            if type_index >= 0:
+                self._document_type.setCurrentIndex(type_index)
+        self._connection_toggle_button.setText(
+            "Verbindung deaktivieren" if connection.enabled else "Verbindung aktivieren"
+        )
+        self._connection_toggle_button.setEnabled(True)
+
+    def _toggle_saved_connection(self) -> None:
+        connection = self._editing_connection
+        if connection is None:
+            return
+        enabled = not connection.enabled
+        if enabled:
+            catalog = getattr(self, "_catalog", None)
+            if catalog is None or any(
+                (route := catalog.route(connection.provider_id, settings.route_key)) is None
+                or route.maturity != "verified"
+                for settings in connection.route_settings
+                if settings.enabled
+            ):
+                self._status.setText(
+                    "Die Verbindung kann erst aktiviert werden, wenn alle aktiven Routen live verifiziert sind."
+                )
+                return
+        if self._connection_repository.set_enabled(connection.connection_id, enabled):
+            self._load_saved_connections(select_id=str(connection.connection_id))
+            self._status.setText(
+                "Verbindung aktiviert." if enabled else "Verbindung deaktiviert."
+            )
 
     def _set_folder(self, path: Path) -> None:
         self._folder.setText(str(path))
@@ -290,7 +408,7 @@ class InvoiceCollectorDialog(QDialog):
             "connector": str(route.connector),
             "mailbox": mailbox,
             "sender_domains": ",".join(sorted(domains)),
-            "document_type": str(self._document_type.currentData().value),
+            "document_type": self._selected_document_type().value,
         }
         connection = ProviderConnection.create(
             provider_id=str(self._provider.currentData()),
@@ -363,6 +481,12 @@ class InvoiceCollectorDialog(QDialog):
         start = date.fromisoformat(self._period_start.date().toString("yyyy-MM-dd"))
         end = date.fromisoformat(self._period_end.date().toString("yyyy-MM-dd"))
         return DateRange(start=start, end=end)
+
+    def _selected_document_type(self) -> DocumentType:
+        value = self._document_type.currentData()
+        if isinstance(value, DocumentType):
+            return value
+        return DocumentType(str(value))
 
     def _on_collection_finished(self, generation: int, result: object) -> None:
         if generation != self._fetch_generation:
@@ -515,19 +639,37 @@ class InvoiceCollectorDialog(QDialog):
                     "sender_domains": ",".join(sorted(domains)),
                 }
             )
-        route_options["document_type"] = str(self._document_type.currentData().value)
-        connection = ProviderConnection.create(
+        route_options["document_type"] = self._selected_document_type().value
+        route_settings_by_key = {
+            setting.route_key: setting
+            for setting in (
+                self._editing_connection.route_settings
+                if self._editing_connection is not None
+                else ()
+            )
+        }
+        route_settings_by_key[str(selected_route.route_key)] = RouteSettings(
+            route_key=str(selected_route.route_key),
+            options=route_options,
+        )
+        connection = ProviderConnection(
+            connection_id=(
+                self._editing_connection.connection_id
+                if self._editing_connection is not None
+                else uuid.uuid4()
+            ),
             provider_id=provider_id,
             tenant_id=TenantId(str(self._tenant.currentData())),
             account_alias=account_alias,
-            route_settings=(
-                RouteSettings(
-                    route_key=str(selected_route.route_key),
-                    options=route_options,
-                ),
+            enabled=(
+                self._editing_connection.enabled
+                if self._editing_connection is not None
+                else True
             ),
+            route_settings=tuple(route_settings_by_key.values()),
         )
         self._connection_repository.save(connection)
+        self._load_saved_connections(select_id=str(connection.connection_id))
         self._status.setText("Verbindung lokal gespeichert; Secretwerte werden separat hinterlegt.")
 
     def _manual_import(self) -> None:
@@ -555,7 +697,7 @@ class InvoiceCollectorDialog(QDialog):
                 account_alias="manual",
             )
             selected_files = [Path(item) for item in files]
-            document_type = self._document_type.currentData()
+            document_type = self._selected_document_type()
             target_root = Path(self._folder.text())
             provider_id = str(self._provider.currentData() or "manual")
             tenant_id = str(self._tenant.currentData())

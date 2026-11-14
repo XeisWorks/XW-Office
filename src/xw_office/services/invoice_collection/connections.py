@@ -98,10 +98,31 @@ class ConnectionRepository:
         self,
     ) -> tuple[list[ProviderConnection], list[InvalidConnectionRecord]]:
         """Load valid rows and isolate malformed legacy rows for per-record reporting."""
+        return self._list_with_issues(enabled_only=True)
+
+    def list_all_with_issues(
+        self,
+    ) -> tuple[list[ProviderConnection], list[InvalidConnectionRecord]]:
+        """Load enabled and disabled connections for local connection management."""
+        return self._list_with_issues(enabled_only=False)
+
+    def set_enabled(self, connection_id: UUID, enabled: bool) -> bool:
+        """Enable or disable one saved connection; return whether it existed."""
         with self._lock, self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE provider_connections SET enabled=? WHERE connection_id=?",
+                (int(enabled), str(connection_id)),
+            )
+            return cursor.rowcount > 0
+
+    def _list_with_issues(
+        self, *, enabled_only: bool
+    ) -> tuple[list[ProviderConnection], list[InvalidConnectionRecord]]:
+        with self._lock, self._connect() as connection:
+            where = "WHERE enabled=1 " if enabled_only else ""
             rows = connection.execute(
-                "SELECT * FROM provider_connections "
-                "WHERE enabled=1 ORDER BY provider_id, account_alias"
+                f"SELECT * FROM provider_connections {where}"
+                "ORDER BY provider_id, account_alias, tenant_id"
             ).fetchall()
         valid: list[ProviderConnection] = []
         issues: list[InvalidConnectionRecord] = []
