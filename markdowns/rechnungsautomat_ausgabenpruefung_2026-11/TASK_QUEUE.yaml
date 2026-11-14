@@ -28,7 +28,7 @@ current_status:
     - "same tenant/sink/PDF hash across routes publishes once and adds hashed source provenance to the journal"
     - "collection results show safe provider/route provenance labels without raw source or external IDs"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
-    - "full repository suite: 2397 passed, 7 skipped; repo Ruff, provider/queue YAML and diff checks pass"
+    - "full repository suite: 2398 passed, 7 skipped; repo Ruff, provider/queue YAML and diff checks pass"
     - "collector/dialog MyPy: 30 source files, no issues; DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
@@ -321,7 +321,7 @@ tasks:
     status: "in_progress"
     depends_on: ["T05", "T06", "T07"]
     evidence:
-      - "python -m pytest -q: 2397 passed, 7 skipped, 0 failed"
+      - "python -m pytest -q: 2398 passed, 7 skipped, 0 failed"
       - "python -m ruff check .: passed"
       - "python -m mypy src/xw_office/services/invoice_collection src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py: 30 source files, no issues"
       - "Provider and task queue YAML parse: passed"
