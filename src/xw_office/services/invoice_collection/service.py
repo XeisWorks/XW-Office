@@ -162,6 +162,7 @@ class InvoiceCollectionService:
                     )
         summary = orchestrator.collect(connectors, cancel=cancel)
         issue_map = {(issue.connection_id, issue.route_key): issue for issue in issues}
+        route_statuses: dict[tuple[str, str], str] = {}
         for route_identity, connection in route_context.items():
             route_items = [
                 item
@@ -179,7 +180,11 @@ class InvoiceCollectionService:
                 item.error and not item.error.startswith("OUT_OF_PERIOD:")
                 for item in route_items
             ):
-                status = "PARTIAL" if any(item.outcome for item in route_items) else "FAILED"
+                route_errors = [
+                    item.error
+                    for item in route_items
+                    if item.error and not item.error.startswith("OUT_OF_PERIOD:")
+                ]
                 error_code = next(
                     (
                         item.error.split(":", 1)[0]
@@ -188,12 +193,18 @@ class InvoiceCollectionService:
                     ),
                     None,
                 )
+                status = (
+                    "PARTIAL"
+                    if any(item.outcome for item in route_items)
+                    else _error_route_status(route_errors[0])
+                )
             elif route_items and all(item.outcome is None for item in route_items):
                 status = "NO_DOCUMENTS"
                 error_code = None
             else:
                 status = "SUCCEEDED"
                 error_code = None
+            route_statuses[route_identity] = status
             self.journal.record_route_status(
                 run_id=run_id,
                 connection_id=route_identity[0],
@@ -208,15 +219,23 @@ class InvoiceCollectionService:
         elif not route_context:
             run_status = RunStatus.FAILED
         elif has_errors:
-            completed_route_exists = any(
-                route_identity not in issue_map for route_identity in route_context
-            )
-            run_status = (
-                RunStatus.PARTIAL
-                if any(item.outcome is not None for item in summary.items)
-                or completed_route_exists
-                else RunStatus.FAILED
-            )
+            if any(item.outcome is not None for item in summary.items):
+                run_status = RunStatus.PARTIAL
+            elif route_statuses and all(
+                status == "WAITING_FOR_USER" for status in route_statuses.values()
+            ) and len(route_statuses) == len(route_context) and all(
+                (issue.connection_id, issue.route_key) in route_context
+                and _error_route_status(issue.message) == "WAITING_FOR_USER"
+                for issue in issues
+            ):
+                run_status = RunStatus.WAITING_FOR_USER
+            elif any(
+                status in {"SUCCEEDED", "NO_DOCUMENTS", "PARTIAL"}
+                for status in route_statuses.values()
+            ):
+                run_status = RunStatus.PARTIAL
+            else:
+                run_status = RunStatus.FAILED
         else:
             run_status = RunStatus.SUCCEEDED
         self.journal.finish_run(run_id=run_id, status=run_status)

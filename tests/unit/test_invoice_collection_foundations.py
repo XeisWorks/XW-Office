@@ -1277,6 +1277,59 @@ def test_collection_service_wires_saved_routes_to_factory_and_orchestrator(tmp_p
     assert repeated.summary.existing_count == 1
 
 
+def test_collection_service_marks_run_waiting_when_every_route_needs_auth(
+    tmp_path: Path,
+) -> None:
+    repository = ConnectionRepository(tmp_path / "auth-connections.sqlite3")
+    connection = ProviderConnection.create(
+        provider_id="fixture",
+        tenant_id=TenantId.XW,
+        account_alias="billing",
+        route_settings=(
+            RouteSettings(route_key="mail_pdf", options={"connector": "fixture"}),
+        ),
+    )
+    repository.save(connection)
+
+    class NeedsLoginConnector:
+        route_key = "mail_pdf"
+
+        def __init__(self, saved: ProviderConnection) -> None:
+            self.connection = saved
+
+        def discover(self) -> list[object]:
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.AUTH_REQUIRED, "Microsoft-Anmeldung erforderlich"
+            )
+
+        def download(self, *_args: object) -> object:
+            raise AssertionError("download must not run before authentication")
+
+    factories = ConnectorFactoryRegistry()
+    factories.register(
+        "fixture",
+        lambda saved, _settings, _period: NeedsLoginConnector(saved),  # type: ignore[arg-type]
+    )
+    target = tmp_path / "auth-onedrive"
+    target.mkdir()
+    journal = InvoiceJournal(tmp_path / "auth-journal.sqlite3")
+
+    run = InvoiceCollectionService(
+        connections=repository,
+        factories=factories,
+        target_root=target,
+        journal=journal,
+    ).collect_active()
+
+    assert run.status is RunStatus.WAITING_FOR_USER
+    assert run.run_id is not None
+    assert journal.run_status(run.run_id) == RunStatus.WAITING_FOR_USER.value
+    routes = journal.list_route_statuses(run_id=run.run_id)
+    assert len(routes) == 1
+    assert routes[0].status == "WAITING_FOR_USER"
+    assert routes[0].error_code == "AUTH_REQUIRED"
+
+
 def test_collection_service_retries_only_requested_active_route(tmp_path: Path) -> None:
     first_source = _pdf(tmp_path / "first-route.pdf")
     second_source = _pdf(tmp_path / "second-route.pdf")

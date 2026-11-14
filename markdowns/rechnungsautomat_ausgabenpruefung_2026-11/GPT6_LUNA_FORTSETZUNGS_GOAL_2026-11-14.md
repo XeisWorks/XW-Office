@@ -65,6 +65,9 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    Belegart und Datum fuer Review-Aufloesung; `InvoiceReviewService` prueft die PDF-Hashidentitaet,
    publiziert no-clobber, aktualisiert danach das Journal und entfernt zuletzt die Review-Kopie.
    Erhalte die Hash-basierte Konflikterkennung und fuehre keinen Klartext-Fallback wieder ein.
+   Ein Discovery-Fehler `AUTH_REQUIRED` wird pro Route und fuer den Gesamtlauf als
+   `WAITING_FOR_USER` dargestellt, wenn alle aktiven Routen auf Benutzerauthentifizierung
+   warten; Regressionstest `test_collection_service_marks_run_waiting_when_every_route_needs_auth`.
    Der Dialog listet gespeicherte Providerverbindungen, aktualisiert Einstellungen mit stabiler
    Connection-ID und verhindert die Reaktivierung nicht verifizierter Routen. Angaben zu
    unverifizierten Routen koennen als deaktivierte Entwuerfe lokal gespeichert werden. Fuer
