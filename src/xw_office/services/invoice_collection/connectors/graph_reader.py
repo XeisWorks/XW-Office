@@ -41,7 +41,7 @@ class GraphMailAttachmentReader:
     def list_messages(self) -> Iterator[dict[str, Any]]:
         url: str | None = (
             f"{self.base_url}/users/{quote(self.mailbox, safe='@.')}/messages"
-            "?$select=id,receivedDateTime,sender&$expand=attachments"
+            "?$filter=hasAttachments%20eq%20true&$select=id,receivedDateTime,sender&$expand=attachments"
             "($select=id,name,contentType,size,isInline)&$top=100"
         )
         seen_page_links: set[str] = set()

@@ -6,6 +6,8 @@
 
 ## Fortschreibung: begrenzter Graph-Anhangsdownload
 
+Die Nachrichtenabfrage verwendet ausserdem `hasAttachments eq true`, damit Graph Nachrichten ohne nicht-inline Anhaenge vor dem Expand herausfiltert. Microsoft dokumentiert OData-Queryparameter fuer [List messages](https://learn.microsoft.com/en-us/graph/api/user-list-messages?view=graph-rest-1.0); `hasAttachments` ist laut [Message-Ressource](https://learn.microsoft.com/en-us/graph/api/resources/message?view=graph-rest-1.0) bei Inline-only-Nachrichten `false`, die der Connector ohnehin nicht als Rechnungsanhaenge verarbeitet.
+
 Der Graph-Reader liest rohe Anhangsantworten und JSON-`contentBytes` jetzt ueber `httpx.Client.stream()`. Der Empfang ist auf maximal 25 MiB fuer rohe PDF-Bytes begrenzt; JSON-Antworten haben eine berechnete Base64-Obergrenze plus 64 KiB JSON-Metadaten. `Content-Length` loest nur eine fruehe Ablehnung aus; die laufende Bytezaehlung bleibt die Grenze. Fehler schliessen die Antwort und schreiben keine teilweise Zieldatei. Nachrichten-Seiten werden inkrementell geliefert, statt die gesamte Mailboxliste im Speicher zu halten; jeder `nextLink` wird vor dem Aufruf auf den erlaubten Graph-Host geprueft und wiederholte Seitenlinks werden erkannt, um Endlosschleifen zu verhindern. Die vollstaendige Repository-Suite nach Graph-Streaming, Temp-Dateinamen-Haertung, inkrementeller Pagination und Loop-Schutz besteht mit **2.407 bestanden, 7 uebersprungen, 0 fehlgeschlagen**; Repo-weites Ruff, Collector-MyPy (30 Dateien), Provider-/Queue-YAML, `git diff --check` und Secret-Musterpruefung sind ebenfalls sauber.
 
 ## Fortschreibung: sichere temporäre Downloadnamen

@@ -160,10 +160,12 @@ def test_graph_mail_factory_wires_local_connection_settings_and_selected_period(
 def test_graph_reader_paginates_and_downloads_attachment_bytes(tmp_path: Path) -> None:
     pdf_bytes = b"%PDF-1.4 fake"
     requests: list[str] = []
+    first_page_params: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request.url.path)
         if request.url.path.endswith("/messages"):
+            first_page_params.update(dict(request.url.params))
             return httpx.Response(
                 200,
                 json={
@@ -202,6 +204,7 @@ def test_graph_reader_paginates_and_downloads_attachment_bytes(tmp_path: Path) -
     assert requests == []
     messages = list(message_iterator)
     assert messages[0]["sender_domain"] == "example.test"
+    assert first_page_params["$filter"] == "hasAttachments eq true"
     assert requests[:2] == [
         "/v1.0/users/invoices@example.test/messages",
         "/v1.0/next",

@@ -39,7 +39,8 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
 2. Der Graph-Downloadpfad hat seit Commit `1de41866` begrenztes Streaming fuer rohe und
    JSON/Base64-Anhaenge, eine berechnete Base64-Obergrenze und eine 64-KiB-Grenze fuer
    JSON-Metadaten. `Content-Length` ist nur ein Vorabhinweis. Graph-Nachrichtenseiten werden
-   inkrementell iteriert, und wiederholte `nextLink`s enden mit einem typisierten Routenfehler.
+   inkrementell iteriert, vorab auf `hasAttachments eq true` eingeschraenkt, und wiederholte
+   `nextLink`s enden mit einem typisierten Routenfehler.
    Erhalte diese Regeln und pruefe die Implementierung samt Tests, bevor du den Task als
    erledigt betrachtest; erfinde keine zweite Downloadstrategie.
 3. Pruefe die Dialog-, Journal-, Wiederaufnahme- und Fehlerpfade auf noch fehlende MVP-
