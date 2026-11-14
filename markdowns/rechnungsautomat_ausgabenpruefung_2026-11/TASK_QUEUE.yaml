@@ -17,6 +17,7 @@ current_status:
     - "Graph mail factory wired into desktop dialog with mailbox and sender-domain settings"
     - "explicit delegated Graph mailbox probe using minimal Mail.Read and one-message-ID query"
     - "Graph attachment downloads enforce streaming byte limits for raw and JSON/Base64 response bodies"
+    - "Graph message pagination yields normalized messages incrementally instead of retaining the whole mailbox scan"
     - "provider-controlled filenames are sanitized into the isolated workspace for mail, browser, API and manual downloads"
     - "collection table reports provider/account/route/tenant and per-candidate result without external IDs"
     - "empty discovery is distinct from successful document processing"
@@ -31,7 +32,7 @@ current_status:
     - "same tenant/sink/PDF hash across routes publishes once and adds hashed source provenance to the journal"
     - "collection results show safe provider/route provenance labels without raw source or external IDs"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
-    - "full repository suite after bounded Graph attachment streaming and workspace filename hardening: 2406 passed, 7 skipped, 0 failed; repo Ruff, provider/queue YAML, collector MyPy and diff checks pass"
+    - "full repository suite after bounded Graph attachment streaming, workspace filename hardening and incremental Graph pagination: 2406 passed, 7 skipped, 0 failed; repo Ruff, provider/queue YAML, collector MyPy and diff checks pass"
     - "collector/dialog MyPy: 30 source files, no issues; DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
@@ -247,6 +248,7 @@ tasks:
       - "UI-visible delegated sign-in with minimal required mail scopes"
       - "DPAPI-protected MSAL cache outside repo and migration/reauth decision"
       - "Generic Graph attachment discovery/download with pagination and checkpoints"
+      - "Incremental Graph page iteration while preserving trusted-host validation on every nextLink"
       - "Bounded attachment response streaming with hard decoded and encoded body limits"
       - "Validated provider matcher config for sender domain, alias and attachment"
     acceptance:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -37,8 +38,7 @@ class GraphMailAttachmentReader:
         self.base_url = base_url.rstrip("/")
         self.max_attachment_bytes = max_attachment_bytes
 
-    def list_messages(self) -> list[dict[str, Any]]:
-        messages: list[dict[str, Any]] = []
+    def list_messages(self) -> Iterator[dict[str, Any]]:
         url: str | None = (
             f"{self.base_url}/users/{quote(self.mailbox, safe='@.')}/messages"
             "?$select=id,receivedDateTime,sender&$expand=attachments"
@@ -62,17 +62,14 @@ class GraphMailAttachmentReader:
                             "size": attachment.get("size"),
                         }
                     )
-                messages.append(
-                    {
-                        "id": raw.get("id"),
-                        "received_at": raw.get("receivedDateTime"),
-                        "sender_domain": _sender_domain(sender.get("address")),
-                        "attachments": attachments,
-                    }
-                )
+                yield {
+                    "id": raw.get("id"),
+                    "received_at": raw.get("receivedDateTime"),
+                    "sender_domain": _sender_domain(sender.get("address")),
+                    "attachments": attachments,
+                }
             next_link = payload.get("@odata.nextLink")
             url = str(next_link) if next_link else None
-        return messages
 
     def probe_mailbox(self) -> None:
         """Verify delegated mailbox access without reading message content or attachments."""

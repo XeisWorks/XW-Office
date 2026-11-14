@@ -40,7 +40,8 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    JSON/Base64-Anhaenge, eine berechnete Base64-Obergrenze und eine 64-KiB-Grenze fuer
    JSON-Metadaten. `Content-Length` ist nur ein Vorabhinweis. Erhalte dies und pruefe die
    Implementierung samt Tests, bevor du den Task als erledigt betrachtest; erfinde keine
-   zweite Downloadstrategie.
+   zweite Downloadstrategie. Graph-Nachrichtenseiten werden ausserdem inkrementell iteriert,
+   damit der gesamte Mailboxscan nicht als Nachrichtenliste im Speicher verbleibt.
 3. Pruefe die Dialog-, Journal-, Wiederaufnahme- und Fehlerpfade auf noch fehlende MVP-
    Bedienhandlungen. Implementiere nur konkret belegte, providerunabhaengige Luecken.
    Insbesondere keine erfundenen Mail-Absenderregeln, Portal-Selektoren, API-Rechte oder

@@ -159,8 +159,10 @@ def test_graph_mail_factory_wires_local_connection_settings_and_selected_period(
 
 def test_graph_reader_paginates_and_downloads_attachment_bytes(tmp_path: Path) -> None:
     pdf_bytes = b"%PDF-1.4 fake"
+    requests: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
         if request.url.path.endswith("/messages"):
             return httpx.Response(
                 200,
@@ -196,8 +198,14 @@ def test_graph_reader_paginates_and_downloads_attachment_bytes(tmp_path: Path) -
         token_provider=CallbackGraphTokenProvider(lambda: "access-token"),
         client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
-    messages = reader.list_messages()
+    message_iterator = reader.list_messages()
+    assert requests == []
+    messages = list(message_iterator)
     assert messages[0]["sender_domain"] == "example.test"
+    assert requests[:2] == [
+        "/v1.0/users/invoices@example.test/messages",
+        "/v1.0/next",
+    ]
     destination = tmp_path / "invoice.pdf"
     reader.download_attachment("message-1", "attachment-1", destination)
     assert destination.read_bytes() == pdf_bytes
