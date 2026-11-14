@@ -39,10 +39,12 @@ class DocumentPipeline:
         *,
         sink: DocumentSink,
         journal: InvoiceJournal | None = None,
+        run_id: str | None = None,
         quarantine_root: Path | None = None,
     ) -> None:
         self.sink = sink
         self.journal = journal
+        self.run_id = run_id
         self.quarantine_root = quarantine_root or ensure_invoice_collection_dirs()["quarantine"]
 
     def process(self, artifact: DownloadedArtifact) -> PipelineResult:
@@ -75,9 +77,11 @@ class DocumentPipeline:
         )
         receipt = self.sink.publish(document, artifact.path)
         if self.journal is not None:
-            self.journal.record_document(
+            document_id = self.journal.record_document(
                 document=document, sink_id=self.sink.sink_id, receipt=receipt
             )
+            if self.run_id is not None:
+                self.journal.link_document_to_run(run_id=self.run_id, document_id=document_id)
         return PipelineResult(document=document, receipt=receipt)
 
     def _quarantine(self, source_path: Path) -> None:

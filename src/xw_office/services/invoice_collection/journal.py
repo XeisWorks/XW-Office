@@ -1,12 +1,18 @@
 """Small local SQLite journal for idempotency and provenance."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import hashlib
+import json
 import sqlite3
 from pathlib import Path
 from threading import RLock
+from uuid import uuid4
 
 from xw_office.core.app_paths import invoice_collection_dir
 from xw_office.services.invoice_collection.domain import (
+    DateRange,
+    RunStatus,
     SinkReceipt,
     ValidatedDocument,
 )
@@ -30,6 +36,21 @@ class InvoiceJournal:
 
     def _initialize(self) -> None:
         with self._lock, self._connect() as connection:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
+            version_row = connection.execute(
+                "SELECT value FROM schema_meta WHERE key='schema_version'"
+            ).fetchone()
+            if version_row is not None:
+                try:
+                    current_version = int(version_row["value"])
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError("invoice journal schema version is invalid") from exc
+                if current_version > 2:
+                    raise RuntimeError(
+                        f"invoice journal schema {current_version} is newer than supported schema 2"
+                    )
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -53,11 +74,183 @@ class InvoiceJournal:
                 );
                 CREATE INDEX IF NOT EXISTS idx_documents_external
                     ON documents (connection_id, route_key, external_id);
+                CREATE TABLE IF NOT EXISTS collection_runs (
+                    run_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    period_start TEXT,
+                    period_end TEXT,
+                    target_fingerprint TEXT NOT NULL,
+                    connection_fingerprints_json TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_collection_runs_status_updated
+                    ON collection_runs (status, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS collection_run_routes (
+                    run_id TEXT NOT NULL REFERENCES collection_runs(run_id) ON DELETE CASCADE,
+                    connection_id TEXT NOT NULL,
+                    route_key TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    error_code TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (run_id, connection_id, route_key)
+                );
+                CREATE TABLE IF NOT EXISTS collection_checkpoints (
+                    run_id TEXT NOT NULL REFERENCES collection_runs(run_id) ON DELETE CASCADE,
+                    connection_id TEXT NOT NULL,
+                    route_key TEXT NOT NULL,
+                    candidate_hash TEXT NOT NULL,
+                    completed_at TEXT NOT NULL,
+                    PRIMARY KEY (run_id, connection_id, route_key, candidate_hash)
+                );
+                CREATE TABLE IF NOT EXISTS collection_run_documents (
+                    run_id TEXT NOT NULL REFERENCES collection_runs(run_id) ON DELETE CASCADE,
+                    document_id TEXT NOT NULL REFERENCES documents(document_id),
+                    PRIMARY KEY (run_id, document_id)
+                );
                 """
             )
             connection.execute(
-                "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version', '1')"
+                "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '2') "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
             )
+
+    def begin_or_resume_run(
+        self,
+        *,
+        period: DateRange | None,
+        target_fingerprint: str,
+        connection_fingerprints: dict[str, str],
+    ) -> tuple[str, bool]:
+        """Start a run or resume the newest incomplete run with the exact same context."""
+        now = _now()
+        connections_json = json.dumps(
+            connection_fingerprints, sort_keys=True, separators=(",", ":")
+        )
+        start = period.start.isoformat() if period else None
+        end = period.end.isoformat() if period else None
+        resumable = (
+            RunStatus.RUNNING.value,
+            RunStatus.PARTIAL.value,
+            RunStatus.FAILED.value,
+            RunStatus.CANCELLED.value,
+        )
+        with self._lock, self._connect() as connection:
+            placeholders = ",".join("?" for _ in resumable)
+            row = connection.execute(
+                f"SELECT run_id FROM collection_runs WHERE status IN ({placeholders}) "
+                "AND period_start IS ? AND period_end IS ? AND target_fingerprint=? "
+                "AND connection_fingerprints_json=? ORDER BY updated_at DESC LIMIT 1",
+                (*resumable, start, end, target_fingerprint, connections_json),
+            ).fetchone()
+            if row is not None:
+                run_id = str(row["run_id"])
+                connection.execute(
+                    "UPDATE collection_runs SET status=?, updated_at=?, completed_at=NULL "
+                    "WHERE run_id=?",
+                    (RunStatus.RUNNING.value, now, run_id),
+                )
+                return run_id, True
+
+            run_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO collection_runs(
+                    run_id, status, period_start, period_end, target_fingerprint,
+                    connection_fingerprints_json, started_at, updated_at, completed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (
+                    run_id,
+                    RunStatus.RUNNING.value,
+                    start,
+                    end,
+                    target_fingerprint,
+                    connections_json,
+                    now,
+                    now,
+                ),
+            )
+            return run_id, False
+
+    def record_route_status(
+        self,
+        *,
+        run_id: str,
+        connection_id: str,
+        route_key: str,
+        status: str,
+        error_code: str | None = None,
+    ) -> None:
+        now = _now()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO collection_run_routes(
+                    run_id, connection_id, route_key, status, error_code, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, connection_id, route_key) DO UPDATE SET
+                    status=excluded.status, error_code=excluded.error_code,
+                    updated_at=excluded.updated_at
+                """,
+                (run_id, connection_id, route_key, status, error_code, now),
+            )
+
+    def record_checkpoint(
+        self,
+        *,
+        run_id: str,
+        connection_id: str,
+        route_key: str,
+        source_id: str,
+    ) -> None:
+        """Persist completion using a one-way hash; raw source IDs are never checkpointed."""
+        candidate_hash = hashlib.sha256(source_id.encode("utf-8")).hexdigest()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO collection_checkpoints(
+                    run_id, connection_id, route_key, candidate_hash, completed_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (run_id, connection_id, route_key, candidate_hash, _now()),
+            )
+
+    def link_document_to_run(self, *, run_id: str, document_id: str) -> None:
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO collection_run_documents(run_id, document_id) "
+                "VALUES (?, ?)",
+                (run_id, document_id),
+            )
+
+    def finish_run(self, *, run_id: str, status: RunStatus) -> None:
+        now = _now()
+        completed_at = None if status is RunStatus.RUNNING else now
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "UPDATE collection_runs SET status=?, updated_at=?, completed_at=? "
+                "WHERE run_id=?",
+                (status.value, now, completed_at, run_id),
+            )
+
+    def run_status(self, run_id: str) -> str | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT status FROM collection_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+        return str(row["status"]) if row else None
+
+    def checkpoint_count(self, *, run_id: str, route_key: str | None = None) -> int:
+        query = "SELECT COUNT(*) AS total FROM collection_checkpoints WHERE run_id=?"
+        parameters: tuple[str, ...] = (run_id,)
+        if route_key is not None:
+            query += " AND route_key=?"
+            parameters = (run_id, route_key)
+        with self._lock, self._connect() as connection:
+            row = connection.execute(query, parameters).fetchone()
+        return int(row["total"])
 
     def has_hash(self, *, tenant_id: str, sink_id: str, sha256: str) -> bool:
         with self._lock, self._connect() as connection:
@@ -88,8 +281,12 @@ class InvoiceJournal:
         document: ValidatedDocument,
         sink_id: str,
         receipt: SinkReceipt,
-    ) -> None:
+    ) -> str:
         candidate = document.candidate
+        source_fingerprint = hashlib.sha256(candidate.source_id.encode("utf-8")).hexdigest()
+        document_id = (
+            f"{candidate.connection.connection_id}:{source_fingerprint}:{document.sha256}"
+        )
         with self._lock, self._connect() as connection:
             connection.execute(
                 """
@@ -99,7 +296,7 @@ class InvoiceJournal:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    f"{candidate.connection.connection_id}:{candidate.source_id}",
+                    document_id,
                     candidate.connection.tenant_id.value,
                     str(candidate.connection.connection_id),
                     candidate.connection.provider_id,
@@ -113,3 +310,18 @@ class InvoiceJournal:
                     document.validated_at.isoformat(),
                 ),
             )
+            row = connection.execute(
+                "SELECT document_id FROM documents WHERE tenant_id=? AND sink_id=? AND sha256=?",
+                (
+                    candidate.connection.tenant_id.value,
+                    sink_id,
+                    document.sha256,
+                ),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("journal document insert could not be resolved")
+            return str(row["document_id"])
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()

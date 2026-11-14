@@ -9,6 +9,7 @@ from threading import Lock
 from typing import Iterable
 
 from xw_office.services.invoice_collection.domain import DocumentCandidate, DocumentOutcome
+from xw_office.services.invoice_collection.journal import InvoiceJournal
 from xw_office.services.invoice_collection.pipeline import DocumentPipeline, PipelineResult
 from xw_office.services.invoice_collection.ports import CancelToken, InvoiceConnector
 
@@ -19,6 +20,7 @@ class CollectionItemResult:
     outcome: DocumentOutcome | None = None
     error: str | None = None
     route_key: str | None = None
+    connection_id: str | None = None
     provider_id: str | None = None
     tenant_id: str | None = None
     account_alias: str | None = None
@@ -48,10 +50,14 @@ class CollectionOrchestrator:
         workspace_root: Path | None = None,
         *,
         max_workers: int = 2,
+        journal: InvoiceJournal | None = None,
+        run_id: str | None = None,
     ) -> None:
         self.pipeline = pipeline
         self.workspace_root = workspace_root
         self.max_workers = max(1, int(max_workers))
+        self.journal = journal
+        self.run_id = run_id
 
     def collect(
         self,
@@ -81,6 +87,7 @@ class CollectionOrchestrator:
                                 CollectionItemResult(
                                     source_id=connection_id,
                                     route_key=connector.route_key,
+                                    connection_id=connection_id,
                                     error=_safe_error(exc),
                                     provider_id=getattr(connection, "provider_id", None),
                                     tenant_id=getattr(
@@ -95,6 +102,7 @@ class CollectionOrchestrator:
                                 CollectionItemResult(
                                     source_id=connection_id,
                                     route_key=connector.route_key,
+                                    connection_id=connection_id,
                                     provider_id=getattr(connection, "provider_id", None),
                                     tenant_id=getattr(
                                         getattr(connection, "tenant_id", None), "value", None
@@ -142,11 +150,20 @@ class CollectionOrchestrator:
                 try:
                     artifact = connector.download(candidate, workspace, cancel)
                     processed: PipelineResult = self.pipeline.process(artifact)
+                    connection_id = str(candidate.connection.connection_id)
+                    if self.journal is not None and self.run_id is not None:
+                        self.journal.record_checkpoint(
+                            run_id=self.run_id,
+                            connection_id=connection_id,
+                            route_key=candidate.route_key,
+                            source_id=candidate.source_id,
+                        )
                     results.append(
                         CollectionItemResult(
                             source_id=candidate.source_id,
                             outcome=processed.receipt.outcome,
                             route_key=candidate.route_key,
+                            connection_id=connection_id,
                             provider_id=candidate.connection.provider_id,
                             tenant_id=candidate.connection.tenant_id.value,
                             account_alias=candidate.connection.account_alias,
@@ -158,6 +175,7 @@ class CollectionOrchestrator:
                         CollectionItemResult(
                             source_id=candidate.source_id,
                             route_key=candidate.route_key,
+                            connection_id=str(candidate.connection.connection_id),
                             error=_safe_error(exc),
                             provider_id=candidate.connection.provider_id,
                             tenant_id=candidate.connection.tenant_id.value,

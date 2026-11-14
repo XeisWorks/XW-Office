@@ -18,6 +18,8 @@ current_status:
     - "explicit delegated Graph mailbox probe using minimal Mail.Read and one-message-ID query"
     - "collection table reports provider/account/route/tenant and per-candidate result without external IDs"
     - "empty discovery is distinct from successful document processing"
+    - "local SQLite run journal stores status, context fingerprints, route states and hashed candidate checkpoints"
+    - "matching interrupted runs resume on the next click; completed runs start a new run and rely on idempotent publishing"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
     - "all 18 real provider accounts and 26 route behaviors; mailbox probe is not invoice-route verification"
@@ -118,6 +120,10 @@ tasks:
       - "src/xw_office/services/invoice_collection/journal.py"
       - ".gitignore"
       - "tests/unit/test_invoice_collection_foundations.py"
+      - "src/xw_office/services/invoice_collection/journal.py::begin_or_resume_run"
+      - "src/xw_office/services/invoice_collection/journal.py::record_checkpoint"
+      - "tests/unit/test_invoice_collection_foundations.py::test_invoice_journal_migrates_v1_and_rejects_newer_schema"
+      - "tests/unit/test_invoice_collection_foundations.py::test_service_resumes_cancelled_run_with_same_context_without_persisting_target_or_mailbox"
     deliverables:
       - "Tested LOCALAPPDATA path helper for profiles, auth, journal, tmp and quarantine"
       - "Gitignore hardening as defense in depth"
@@ -170,6 +176,7 @@ tasks:
       - "tests/unit/test_invoice_collection_foundations.py::test_orchestrator_isolates_discovery_failure_and_uses_connection_lock"
       - "tests/unit/test_invoice_collection_foundations.py::test_collection_service_wires_saved_routes_to_factory_and_orchestrator (period forwarding)"
       - "tests/unit/test_invoice_collection_foundations.py::test_orchestrator_reports_empty_route_without_source_identifiers"
+      - "tests/unit/test_invoice_collection_foundations.py::test_service_resumes_cancelled_run_with_same_context_without_persisting_target_or_mailbox"
       - "tests/ui/test_expense_review_view.py"
       - "tests/ui/test_invoice_collector_dialog.py::test_collection_results_show_route_outcomes_without_external_ids"
       - "tests/ui/test_invoice_collector_dialog.py::test_collection_results_distinguish_empty_route_from_success"

@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 import logging
+import sqlite3
 
 import fitz
 import pytest
@@ -201,6 +202,43 @@ def test_pipeline_quarantines_invalid_artifact(tmp_path: Path) -> None:
     assert list((tmp_path / "quarantine").glob("broken.pdf"))
 
 
+def test_invoice_journal_migrates_v1_and_rejects_newer_schema(tmp_path: Path) -> None:
+    old_path = tmp_path / "old-journal.sqlite3"
+    with sqlite3.connect(old_path) as connection:
+        connection.execute(
+            "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '1')"
+        )
+    migrated = InvoiceJournal(old_path)
+    with sqlite3.connect(old_path) as connection:
+        version = connection.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0]
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+    assert version == "2"
+    assert "collection_runs" in tables
+    assert "collection_checkpoints" in tables
+    assert migrated.path == old_path
+
+    newer_path = tmp_path / "newer-journal.sqlite3"
+    with sqlite3.connect(newer_path) as connection:
+        connection.execute(
+            "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO schema_meta(key, value) VALUES ('schema_version', '3')"
+        )
+    with pytest.raises(RuntimeError, match="newer than supported"):
+        InvoiceJournal(newer_path)
+
+
 def test_manual_import_uses_pipeline_and_is_idempotent(tmp_path: Path) -> None:
     source = _pdf(tmp_path / "source.pdf")
     destination = tmp_path / "onedrive"
@@ -388,7 +426,7 @@ def test_collection_service_wires_saved_routes_to_factory_and_orchestrator(tmp_p
         tenant_id=TenantId.XW,
         account_alias="billing",
         route_settings=(
-            RouteSettings(route_key="fixture", options={"connector": "fixture"}),
+            RouteSettings(route_key="manual_import", options={"connector": "fixture"}),
         ),
     )
     repository.save(connection)
@@ -406,20 +444,95 @@ def test_collection_service_wires_saved_routes_to_factory_and_orchestrator(tmp_p
     )
     target = tmp_path / "onedrive"
     target.mkdir()
-    run = InvoiceCollectionService(
+    journal = InvoiceJournal(tmp_path / "journal.sqlite3")
+    service = InvoiceCollectionService(
         connections=repository,
         factories=factories,
         target_root=target,
-        journal=InvoiceJournal(tmp_path / "journal.sqlite3"),
-    ).collect_active(period=selected_period)
+        journal=journal,
+    )
+    run = service.collect_active(period=selected_period)
     assert run.issues == ()
     assert run.summary.new_count == 1
+    assert run.status is RunStatus.SUCCEEDED
+    assert run.run_id is not None
+    assert journal.run_status(run.run_id) == RunStatus.SUCCEEDED.value
+    assert journal.checkpoint_count(run_id=run.run_id, route_key="manual_import") == 1
     assert received_periods == [selected_period]
     item = run.summary.items[0]
     assert item.provider_id == "fixture"
     assert item.tenant_id == "xw"
     assert item.account_alias == "billing"
     assert item.display_name == "saved-route.pdf"
+
+    repeated = service.collect_active(period=selected_period)
+    assert repeated.status is RunStatus.SUCCEEDED
+    assert repeated.resumed is False
+    assert repeated.run_id != run.run_id
+    assert repeated.summary.new_count == 0
+    assert repeated.summary.existing_count == 1
+
+
+def test_service_resumes_cancelled_run_with_same_context_without_persisting_target_or_mailbox(
+    tmp_path: Path,
+) -> None:
+    source = _pdf(tmp_path / "resume-route.pdf")
+    repository = ConnectionRepository(tmp_path / "connections.sqlite3")
+    connection = ProviderConnection.create(
+        provider_id="fixture",
+        tenant_id=TenantId.XW,
+        account_alias="billing",
+        route_settings=(
+            RouteSettings(
+                route_key="manual_import",
+                options={
+                    "connector": "fixture",
+                    "mailbox": "billing@example.test",
+                    "sender_domains": "vendor.example.test",
+                },
+            ),
+        ),
+    )
+    repository.save(connection)
+    factories = ConnectorFactoryRegistry()
+    factories.register(
+        "fixture",
+        lambda saved, _settings, _period: ManualImportConnector(
+            connection=saved, files=[source]
+        ),
+    )
+    target = tmp_path / "resume-onedrive"
+    target.mkdir()
+    journal_path = tmp_path / "resume-journal.sqlite3"
+    journal = InvoiceJournal(journal_path)
+    service = InvoiceCollectionService(
+        connections=repository,
+        factories=factories,
+        target_root=target,
+        journal=journal,
+    )
+
+    class Cancelled:
+        cancelled = True
+
+    period = DateRange(date(2026, 11, 1), date(2026, 11, 30))
+    interrupted = service.collect_active(period=period, cancel=Cancelled())
+    assert interrupted.status is RunStatus.CANCELLED
+    assert interrupted.run_id is not None
+    assert journal.run_status(interrupted.run_id) == RunStatus.CANCELLED.value
+
+    resumed = service.collect_active(period=period)
+
+    assert resumed.run_id == interrupted.run_id
+    assert resumed.resumed is True
+    assert resumed.status is RunStatus.SUCCEEDED
+    assert journal.run_status(resumed.run_id or "") == RunStatus.SUCCEEDED.value
+    assert journal.checkpoint_count(
+        run_id=resumed.run_id or "", route_key="manual_import"
+    ) == 1
+    journal_bytes = journal_path.read_bytes()
+    assert b"billing@example.test" not in journal_bytes
+    assert str(target).encode("utf-8") not in journal_bytes
 
 
 def test_orchestrator_reports_empty_route_without_source_identifiers(tmp_path: Path) -> None:

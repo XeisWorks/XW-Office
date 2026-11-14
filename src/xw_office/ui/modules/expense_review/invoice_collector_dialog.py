@@ -389,10 +389,12 @@ class InvoiceCollectorDialog(QDialog):
             )
             return
         if successful_count == 0:
-            self._status.setText("Abruf abgeschlossen; keine passenden Dokumente gefunden.")
+            prefix = "Lauf fortgesetzt" if result.resumed else "Abruf abgeschlossen"
+            self._status.setText(f"{prefix}; keine passenden Dokumente gefunden.")
             return
+        prefix = "Lauf fortgesetzt" if result.resumed else "Abruf beendet"
         self._status.setText(
-            f"Abruf beendet: {result.summary.new_count} neu, "
+            f"{prefix}: {result.summary.new_count} neu, "
             f"{result.summary.existing_count} bereits vorhanden, "
             f"{issue_count + error_count} Route(n) fehlgeschlagen. "
             "Lokal gespeicherte Dateien bleiben SYNC_PENDING."
