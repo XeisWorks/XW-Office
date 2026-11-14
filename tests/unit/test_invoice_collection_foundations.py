@@ -1,10 +1,13 @@
 """Contract tests for the invoice-collection vertical foundation slice."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+import hashlib
 from pathlib import Path
 import logging
 import sqlite3
+from threading import Barrier
 
 import fitz
 import pytest
@@ -25,6 +28,8 @@ from xw_office.services.invoice_collection.domain import (
     RouteSettings,
     RunStatus,
     TenantId,
+    ValidatedDocument,
+    utc_now,
 )
 from xw_office.services.invoice_collection.errors import (
     DocumentValidationError,
@@ -44,6 +49,7 @@ from xw_office.services.invoice_collection.registry import (
 )
 from xw_office.services.invoice_collection.security import redact_sensitive_text
 from xw_office.services.invoice_collection.sinks.onedrive_local import OneDriveLocalSink
+from xw_office.services.invoice_collection.sinks import onedrive_local as sink_module
 from xw_office.services.invoice_collection.orchestrator import CollectionOrchestrator
 from xw_office.services.invoice_collection.service import InvoiceCollectionService
 from xw_office.core.logging_setup import _SecretRedactionFilter
@@ -71,6 +77,28 @@ def _candidate(
         document_type=DocumentType.EXPENSE_INVOICE,
         original_filename="invoice.pdf",
         document_date=date(2026, 11, 7),
+    )
+
+
+def _foundation_connection() -> ProviderConnection:
+    return ProviderConnection.create(
+        provider_id="fixture", tenant_id=TenantId.XW, account_alias="billing"
+    )
+
+
+def _validated_document(
+    candidate: DocumentCandidate,
+    source: Path,
+    relative_path: Path,
+) -> ValidatedDocument:
+    inspection = inspect_pdf(source)
+    return ValidatedDocument(
+        candidate=candidate,
+        sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        size_bytes=inspection.size_bytes,
+        page_count=inspection.page_count,
+        relative_path=relative_path,
+        validated_at=utc_now(),
     )
 
 
@@ -250,6 +278,140 @@ def test_onedrive_sink_preflight_rejects_unwritable_target(
         sink.preflight()
 
     assert error.value.code is InvoiceErrorCode.DESTINATION_UNAVAILABLE
+
+
+def test_onedrive_sink_copy_fallback_publishes_when_hardlinks_are_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _pdf(tmp_path / "source.pdf", "Invoice date: 2026-11-07")
+    destination = tmp_path / "onedrive"
+    destination.mkdir()
+
+    def no_hardlinks(*_args: object) -> None:
+        raise OSError("hard links unsupported")
+
+    monkeypatch.setattr(sink_module.os, "link", no_hardlinks)
+    pipeline = DocumentPipeline(sink=OneDriveLocalSink(destination))
+    result = pipeline.process(
+            DownloadedArtifact(_candidate(_foundation_connection(), source_id="fallback"), source)
+    )
+
+    assert result.receipt.outcome is DocumentOutcome.NEW
+    assert result.receipt.target_path.read_bytes() == source.read_bytes()
+    assert not list(destination.rglob("*.tmp"))
+
+
+def test_onedrive_sink_removes_partial_fallback_target_after_write_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _pdf(tmp_path / "source.pdf", "Invoice date: 2026-11-07")
+    destination = tmp_path / "onedrive"
+    destination.mkdir()
+
+    def no_hardlinks(*_args: object) -> None:
+        raise OSError("hard links unsupported")
+
+    def partial_copy(source_file, destination_file, *_args, **_kwargs) -> None:
+        destination_file.write(source_file.read(16))
+        raise OSError("simulated disk full")
+
+    monkeypatch.setattr(sink_module.os, "link", no_hardlinks)
+    monkeypatch.setattr(sink_module.shutil, "copyfileobj", partial_copy)
+    pipeline = DocumentPipeline(sink=OneDriveLocalSink(destination))
+
+    with pytest.raises(InvoiceCollectionError) as error:
+        pipeline.process(
+            DownloadedArtifact(_candidate(_foundation_connection(), source_id="partial"), source)
+        )
+
+    assert error.value.code is InvoiceErrorCode.DESTINATION_UNAVAILABLE
+    assert not list(destination.rglob("*.pdf"))
+    assert not list(destination.rglob("*.tmp"))
+
+
+def test_onedrive_sink_concurrent_identical_publish_uses_unique_temporary_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _pdf(tmp_path / "source.pdf", "Invoice date: 2026-11-07")
+    destination = tmp_path / "onedrive"
+    destination.mkdir()
+    barrier = Barrier(2)
+    temporary_paths: list[str] = []
+    original_copyfile = sink_module.shutil.copyfile
+
+    def concurrent_copy(source_path, destination_path, *args, **kwargs):
+        temporary_paths.append(str(destination_path))
+        barrier.wait(timeout=5)
+        return original_copyfile(source_path, destination_path, *args, **kwargs)
+
+    monkeypatch.setattr(sink_module.shutil, "copyfile", concurrent_copy)
+    pipeline = DocumentPipeline(sink=OneDriveLocalSink(destination))
+    artifact = DownloadedArtifact(_candidate(_foundation_connection(), source_id="same"), source)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(pipeline.process, artifact) for _ in range(2)]
+        results = [future.result(timeout=10) for future in futures]
+
+    assert len(set(temporary_paths)) == 2
+    assert {result.receipt.outcome for result in results} == {
+        DocumentOutcome.NEW,
+        DocumentOutcome.ALREADY_PRESENT,
+    }
+    assert len(list(destination.rglob("*.pdf"))) == 1
+    assert next(destination.rglob("*.pdf")).read_bytes() == source.read_bytes()
+
+
+def test_onedrive_sink_concurrent_different_content_never_overwrites_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_source = _pdf(tmp_path / "first.pdf", "Invoice date: 2026-11-07")
+    second_source = _pdf(tmp_path / "second.pdf", "Invoice date: 2026-11-08")
+    destination = tmp_path / "onedrive"
+    destination.mkdir()
+    barrier = Barrier(2)
+    original_link = sink_module.os.link
+
+    def synchronized_link(source_path, target_path, *args, **kwargs):
+        barrier.wait(timeout=5)
+        return original_link(source_path, target_path, *args, **kwargs)
+
+    monkeypatch.setattr(sink_module.os, "link", synchronized_link)
+    connection = _foundation_connection()
+    relative_path = Path("xw") / "2026" / "11" / "fixture" / "shared.pdf"
+    documents = [
+        _validated_document(
+            _candidate(connection, source_id="first"), first_source, relative_path
+        ),
+        _validated_document(
+            _candidate(connection, source_id="second"), second_source, relative_path
+        ),
+    ]
+    sink = OneDriveLocalSink(destination)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(sink.publish, document, source)
+            for document, source in zip(documents, (first_source, second_source))
+        ]
+        receipts = []
+        errors = []
+        for future in futures:
+            try:
+                receipts.append(future.result(timeout=10))
+            except InvoiceCollectionError as exc:
+                errors.append(exc)
+
+    assert len(receipts) == 1
+    assert receipts[0].outcome is DocumentOutcome.NEW
+    assert len(errors) == 1
+    assert errors[0].code is InvoiceErrorCode.DESTINATION_UNAVAILABLE
+    target = destination / relative_path
+    assert target.read_bytes() in {first_source.read_bytes(), second_source.read_bytes()}
+    assert len(list(destination.rglob("*.pdf"))) == 1
 
 
 def test_pipeline_quarantines_invalid_artifact(tmp_path: Path) -> None:

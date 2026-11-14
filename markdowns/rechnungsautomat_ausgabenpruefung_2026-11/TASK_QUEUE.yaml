@@ -21,6 +21,7 @@ current_status:
     - "Graph mailbox pagination detects repeated nextLink URLs and ends the affected route with a typed error"
     - "Graph mailbox listing filters to messages with non-inline attachments before expanding attachment metadata"
     - "provider-controlled filenames are sanitized into the isolated workspace for mail, browser, API and manual downloads"
+    - "OneDrive sink uses unique per-publish temporary files and cleans incomplete O_EXCL fallback targets"
     - "collection table reports provider/account/route/tenant and per-candidate result without external IDs"
     - "empty discovery is distinct from successful document processing"
     - "local SQLite run journal stores status, context fingerprints, route states and hashed candidate checkpoints"
@@ -34,7 +35,7 @@ current_status:
     - "same tenant/sink/PDF hash across routes publishes once and adds hashed source provenance to the journal"
     - "collection results show safe provider/route provenance labels without raw source or external IDs"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
-    - "full repository suite after bounded Graph attachment streaming, workspace filename hardening, incremental Graph pagination and repeated-nextLink guard: 2407 passed, 7 skipped, 0 failed; repo Ruff, provider/queue YAML, collector MyPy and diff checks pass"
+    - "full repository suite after Graph streaming/pagination and OneDrive no-clobber temp/fallback hardening: 2411 passed, 7 skipped, 0 failed; repo Ruff, provider/queue YAML, collector MyPy and diff checks pass"
     - "collector/dialog MyPy: 30 source files, no issues; DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
@@ -171,6 +172,10 @@ tasks:
       - "tests/unit/test_invoice_collection_foundations.py::test_pdf_inspection_rejects_oversized_artifact"
       - "tests/unit/test_invoice_collection_foundations.py::test_encrypted_pdf_is_typed_as_quarantined_and_preserved_locally"
       - "tests/unit/test_invoice_collection_foundations.py::test_onedrive_sink_preflight_rejects_unwritable_target"
+      - "tests/unit/test_invoice_collection_foundations.py::test_onedrive_sink_copy_fallback_publishes_when_hardlinks_are_unavailable"
+      - "tests/unit/test_invoice_collection_foundations.py::test_onedrive_sink_removes_partial_fallback_target_after_write_error"
+      - "tests/unit/test_invoice_collection_foundations.py::test_onedrive_sink_concurrent_identical_publish_uses_unique_temporary_files"
+      - "tests/unit/test_invoice_collection_foundations.py::test_onedrive_sink_concurrent_different_content_never_overwrites_target"
       - "tests/unit/test_invoice_collection_foundations.py::test_same_tenant_cross_route_duplicate_publishes_once_and_merges_safe_provenance"
       - "tests/unit/test_invoice_collection_foundations.py::test_workspace_download_path_sanitizes_traversal_and_windows_devices"
     deliverables:

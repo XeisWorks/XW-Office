@@ -14,6 +14,10 @@ Der Graph-Reader liest rohe Anhangsantworten und JSON-`contentBytes` jetzt ueber
 
 Ein Anbieter kann den Dateinamen eines Anhangs oder API-Dokuments kontrollieren. Graph-Mail, Browser-, Mollie- und manueller Import schreiben deshalb ueber `workspace_download_path()` in einen bereinigten Dateinamen im jeweiligen Temp-Workspace. Die Aufloesung des Zielpfads wird gegen den Workspace geprueft; Pfadtrenner, Traversalnamen und Windows-Geraetedateien koennen so nicht aus dem Workspace ausbrechen. Traversal- und `CON.pdf`/`LPT1.txt`-Faelle sind gezielt abgedeckt; die vollstaendige Repository-Regression besteht mit **2.406 bestanden, 7 uebersprungen, 0 fehlgeschlagen**.
 
+## Fortschreibung: paralleles No-Clobber-Publishing
+
+Der OneDrive-Sink verwendete zuvor einen Tempnamen aus Dateiname und Prozess-ID; parallele Laeufe im selben Prozess konnten dieselbe Tempdatei teilen. Er nutzt jetzt pro Publish eine exklusiv angelegte, eindeutige Tempdatei. Beim Kopierfallback wird eine von diesem Lauf angelegte Teildatei bei Fehlern entfernt, die Zielpruefsumme verifiziert und ein Rennen um denselben Zielpfad hashbasiert als Duplikat oder Konflikt bewertet. Vier gezielte Tests decken erfolgreichen Fallback, Schreibfehler mit Cleanup sowie parallele identische und divergierende Inhalte ab. Die vollstaendige Repository-Suite besteht nach diesem Fix mit **2.411 bestanden, 7 uebersprungen, 0 fehlgeschlagen**; der Lauf zeigt eine externe Starlette/httpx-Deprecation-Warnung.
+
 ## 1. Herkunft und ursprünglich gemeintes Ergebnis
 
 Der konkrete frühere Chat war in den lokal verfügbaren Codex-Sitzungen nicht eindeutig auffindbar. Die am **07.11.2026** erstellte Planungs-Commitfolge belegt das Vorhaben im Repository: `4f5d7acb` („plan secure one-click invoice collector with 2FA and OneDrive“), danach `caf041f1` (modularisierte Planung) und die Implementierungs-Commits ab `b39041fd`. Ein Link oder Wortlaut des ursprünglichen Chats lässt sich daraus nicht ableiten.

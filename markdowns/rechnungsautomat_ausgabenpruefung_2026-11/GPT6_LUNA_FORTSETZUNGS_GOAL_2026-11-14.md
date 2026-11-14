@@ -49,8 +49,10 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    Rechnungsdaten. Temp-Downloadpfade nutzen `workspace_download_path()` fuer Graph, Browser,
    Mollie und manuellen Import; diese Funktion begrenzt bereinigte Anbieterdateinamen auf den
    Workspace und prueft Traversal/Geraetedateien. Pruefe diese bestehende Loesung, statt sie
-   erneut zu bauen. Der Browseradapter hat generische Fake-Portal-Tests, aber keine echten
-   Anbieter-Callbacks.
+   erneut zu bauen. Der OneDrive-Sink nutzt ebenfalls eindeutige temporaere Dateien pro
+   Publish und entfernt Teildateien nach Fallback-Schreibfehlern; parallele identische sowie
+   divergierende Zielinhalte sind gezielt getestet. Pruefe das gegen den Code und baue es nicht
+   neu. Der Browseradapter hat generische Fake-Portal-Tests, aber keine echten Anbieter-Callbacks.
 4. Der Live-Mailpilot ist extern blockiert: Anbieter, Rechnungs-Mailbox und bestaetigte
    Absenderdomain(s) sind noch nicht geklaert. Frage nie nach diesen Werten oder Geheimnissen
    im Chat. Wenn der Benutzer soweit ist, gib genau eine lokale UI-Anweisung: in Finanzen >

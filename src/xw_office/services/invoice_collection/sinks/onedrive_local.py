@@ -65,7 +65,17 @@ class OneDriveLocalSink:
                 )
             raise DestinationError("Zieldatei mit abweichendem Inhalt vorhanden")
 
-        temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+        try:
+            temporary_handle = tempfile.NamedTemporaryFile(
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+                delete=False,
+            )
+            temporary = Path(temporary_handle.name)
+            temporary_handle.close()
+        except OSError as exc:
+            raise DestinationError("Temporäre OneDrive-Datei konnte nicht erstellt werden") from exc
         try:
             shutil.copyfile(source_path, temporary)
             with temporary.open("r+b") as handle:
@@ -77,21 +87,33 @@ class OneDriveLocalSink:
                 os.link(temporary, target)
                 temporary.unlink(missing_ok=True)
             except FileExistsError:
-                if _sha256(target) == document.sha256:
-                    return SinkReceipt(
-                        outcome=DocumentOutcome.ALREADY_PRESENT,
-                        sync_status=SyncStatus.SYNC_PENDING,
-                        target_path=target,
-                        sha256=document.sha256,
-                    )
-                raise DestinationError("Konkurrierende Zieldatei enthält anderen Inhalt")
+                return self._confirm_racing_target(target, document.sha256)
             except OSError:
                 # Some sync filesystems do not support hard links.  O_EXCL still prevents
                 # overwriting a pre-existing target, while the validated temp remains local.
-                with temporary.open("rb") as source, target.open("xb") as destination:
-                    shutil.copyfileobj(source, destination)
-                    destination.flush()
-                    os.fsync(destination.fileno())
+                created_target = False
+                try:
+                    with temporary.open("rb") as source:
+                        try:
+                            target_handle = target.open("xb")
+                        except FileExistsError:
+                            return self._confirm_racing_target(target, document.sha256)
+                        created_target = True
+                        with target_handle as destination:
+                            shutil.copyfileobj(source, destination)
+                            destination.flush()
+                            os.fsync(destination.fileno())
+                    if _sha256(target) != document.sha256:
+                        raise DestinationError("Prüfsumme des OneDrive-Ziels stimmt nicht überein")
+                except BaseException as exc:
+                    if created_target:
+                        try:
+                            target.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    if isinstance(exc, OSError):
+                        raise DestinationError("OneDrive-Ziel konnte nicht vollständig geschrieben werden") from exc
+                    raise
                 temporary.unlink(missing_ok=True)
         finally:
             temporary.unlink(missing_ok=True)
@@ -100,6 +122,21 @@ class OneDriveLocalSink:
             sync_status=SyncStatus.SYNC_PENDING,
             target_path=target,
             sha256=document.sha256,
+        )
+
+    @staticmethod
+    def _confirm_racing_target(target: Path, sha256: str) -> SinkReceipt:
+        try:
+            existing_hash = _sha256(target)
+        except OSError as exc:
+            raise DestinationError("Konkurrierendes OneDrive-Ziel konnte nicht geprüft werden") from exc
+        if existing_hash != sha256:
+            raise DestinationError("Konkurrierende Zieldatei enthält anderen Inhalt")
+        return SinkReceipt(
+            outcome=DocumentOutcome.ALREADY_PRESENT,
+            sync_status=SyncStatus.SYNC_PENDING,
+            target_path=target,
+            sha256=existing_hash,
         )
 
     def _safe_target(self, relative_path: Path) -> Path:
