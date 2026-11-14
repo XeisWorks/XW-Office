@@ -63,6 +63,7 @@ class InvoiceCollectorDialog(QDialog):
         self._collection_service = collection_service
         self._fetch_worker: BackgroundWorker | None = None
         self._mail_test_worker: BackgroundWorker | None = None
+        self._manual_worker: BackgroundWorker | None = None
         self._fetch_generation = 0
         self._folder = QLineEdit()
         self._folder.setReadOnly(True)
@@ -177,9 +178,13 @@ class InvoiceCollectorDialog(QDialog):
         self._mail_test_button = QPushButton("Graph-Mailbox testen")
         self._mail_test_button.clicked.connect(self._test_mailbox_access)
         actions.addWidget(self._mail_test_button)
-        manual = QPushButton("PDF manuell hinzufügen")
-        manual.clicked.connect(self._manual_import)
-        actions.addWidget(manual)
+        self._manual_button = QPushButton("PDF manuell hinzufügen")
+        self._manual_button.clicked.connect(self._manual_import)
+        actions.addWidget(self._manual_button)
+        self._manual_cancel_button = QPushButton("Import abbrechen")
+        self._manual_cancel_button.setEnabled(False)
+        self._manual_cancel_button.clicked.connect(self._cancel_manual_import)
+        actions.addWidget(self._manual_cancel_button)
         actions.addStretch()
         root.addLayout(actions)
         root.addWidget(self._status)
@@ -199,6 +204,8 @@ class InvoiceCollectorDialog(QDialog):
         self._status.setText("OneDrive-Ordner ausgewählt; Cloudstatus wird erst remote bestätigt.")
 
     def _fetch_active(self) -> None:
+        if self._manual_worker is not None and self._manual_worker.isRunning():
+            return
         if not self._folder.text().strip():
             self._status.setText("Bitte zuerst einen Zielordner auswählen.")
             return
@@ -229,12 +236,14 @@ class InvoiceCollectorDialog(QDialog):
         self._fetch_generation += 1
         generation = self._fetch_generation
         self._fetch_button.setEnabled(False)
+        self._manual_button.setEnabled(False)
         self._cancel_button.setEnabled(True)
         self._status.setText(f"{len(connections)} aktive Verbindung(en) werden abgerufen …")
         try:
             period = self._selected_period()
         except ValueError:
             self._fetch_button.setEnabled(True)
+            self._manual_button.setEnabled(True)
             self._cancel_button.setEnabled(False)
             self._status.setText("Das Enddatum muss am oder nach dem Startdatum liegen.")
             return
@@ -448,6 +457,7 @@ class InvoiceCollectorDialog(QDialog):
         if generation != self._fetch_generation:
             return
         self._fetch_button.setEnabled(True)
+        self._manual_button.setEnabled(self._manual_worker is None)
         self._cancel_button.setEnabled(False)
         if worker.cancelled:
             self._status.setText("Abruf abgebrochen; bereits gespeicherte Dokumente bleiben erhalten.")
@@ -456,6 +466,7 @@ class InvoiceCollectorDialog(QDialog):
         self._cancel_fetch()
         if self._mail_test_worker is not None and self._mail_test_worker.isRunning():
             self._mail_test_worker.cancel()
+        self._cancel_manual_import()
         super().closeEvent(event)  # type: ignore[arg-type]
 
     def _save_connection(self) -> None:
@@ -509,6 +520,8 @@ class InvoiceCollectorDialog(QDialog):
         self._status.setText("Verbindung lokal gespeichert; Secretwerte werden separat hinterlegt.")
 
     def _manual_import(self) -> None:
+        if self._fetch_worker is not None and self._fetch_worker.isRunning():
+            return
         if not self._folder.text().strip():
             self._status.setText("Bitte zuerst einen Zielordner auswählen.")
             return
@@ -517,53 +530,172 @@ class InvoiceCollectorDialog(QDialog):
         )
         if not files:
             return
+        if self._manual_worker is not None and self._manual_worker.isRunning():
+            return
         try:
             connection = ProviderConnection.create(
                 provider_id=str(self._provider.currentData() or "manual"),
                 tenant_id=TenantId(str(self._tenant.currentData())),
                 account_alias="manual",
             )
-            connector = ManualImportConnector(
-                connection=connection,
-                files=[Path(item) for item in files],
-                document_type=self._document_type.currentData(),
-            )
-            sink = OneDriveLocalSink(Path(self._folder.text()))
-            pipeline = DocumentPipeline(sink=sink, journal=InvoiceJournal())
-            workspace = ensure_invoice_collection_dirs()["tmp"] / str(uuid.uuid4())
-            workspace.mkdir(parents=True, exist_ok=True)
-            try:
-                for candidate in connector.discover():
-                    artifact = connector.download(candidate, workspace)
-                    result = pipeline.process(artifact)
-                    outcome = (
-                        f"NEEDS_REVIEW: {result.receipt.review_reason}"
-                        if result.receipt.review_reason
-                        else result.receipt.outcome.value
-                    )
-                    self._append_result(candidate.original_filename, outcome)
-            finally:
-                for child in workspace.glob("*"):
-                    child.unlink(missing_ok=True)
-                workspace.rmdir()
-            self._status.setText(
-                "Import abgeschlossen; lokale Dateien sind als SYNC_PENDING markiert."
-            )
-        except Exception as exc:  # noqa: BLE001 - show safe local setup/import error
-            self._status.setText(f"Import fehlgeschlagen: {exc}")
+            selected_files = [Path(item) for item in files]
+            document_type = self._document_type.currentData()
+            target_root = Path(self._folder.text())
+            provider_id = str(self._provider.currentData() or "manual")
+            tenant_id = str(self._tenant.currentData())
+            worker: BackgroundWorker
 
-    def _append_result(self, filename: str, outcome: str) -> None:
+            def import_files() -> list[tuple[str, str, str, str]]:
+                return _run_manual_import(
+                    files=selected_files,
+                    connection=connection,
+                    document_type=document_type,
+                    target_root=target_root,
+                    provider_id=provider_id,
+                    tenant_id=tenant_id,
+                    cancel=worker,
+                )
+
+            worker = BackgroundWorker(import_files, publish_result_on_cancel=True)
+            self._manual_worker = worker
+            worker.signals.result.connect(self._on_manual_import_result)
+            worker.signals.error.connect(self._on_manual_import_error)
+            worker.signals.finished.connect(
+                lambda current=worker: self._on_manual_import_finished(current)
+            )
+            self._fetch_button.setEnabled(False)
+            self._manual_button.setEnabled(False)
+            self._manual_cancel_button.setEnabled(True)
+            self._status.setText(f"{len(selected_files)} PDF-Datei(en) werden geprüft …")
+            worker.start()
+        except Exception as exc:  # noqa: BLE001 - show safe local setup/import error
+            self._status.setText(f"Import konnte nicht gestartet werden: {type(exc).__name__}")
+
+    def _on_manual_import_result(self, result: object) -> None:
+        if not isinstance(result, list):
+            self._status.setText("Import lieferte ein ungültiges Ergebnis.")
+            return
+        for row in result:
+            if not isinstance(row, tuple) or len(row) != 4:
+                continue
+            provider_id, tenant_id, filename, outcome = row
+            self._append_result(
+                str(filename),
+                str(outcome),
+                provider_id=str(provider_id),
+                tenant_id=str(tenant_id),
+            )
+        new_count = sum(row[3] == "NEW" for row in result if isinstance(row, tuple) and len(row) == 4)
+        existing_count = sum(
+            row[3] == "ALREADY_PRESENT"
+            for row in result
+            if isinstance(row, tuple) and len(row) == 4
+        )
+        review_count = sum(
+            str(row[3]).startswith("NEEDS_REVIEW:")
+            for row in result
+            if isinstance(row, tuple) and len(row) == 4
+        )
+        error_count = sum(
+            str(row[3]).startswith("ERROR:")
+            for row in result
+            if isinstance(row, tuple) and len(row) == 4
+        )
+        self._status.setText(
+            f"Import abgeschlossen: {new_count} neu, {existing_count} bereits vorhanden, "
+            f"{review_count} zur Prüfung, {error_count} fehlgeschlagen. "
+            "Lokal gespeicherte Dateien bleiben SYNC_PENDING."
+        )
+
+    def _on_manual_import_error(self, error: Exception) -> None:
+        self._status.setText(f"Import fehlgeschlagen: {type(error).__name__}")
+
+    def _on_manual_import_finished(self, worker: BackgroundWorker) -> None:
+        if self._manual_worker is worker:
+            self._manual_worker = None
+        self._manual_cancel_button.setEnabled(False)
+        if self._fetch_worker is None:
+            self._fetch_button.setEnabled(True)
+            self._manual_button.setEnabled(True)
+        if worker.cancelled:
+            self._status.setText(
+                "Import abgebrochen; bereits gespeicherte Dokumente bleiben erhalten."
+            )
+
+    def _cancel_manual_import(self) -> None:
+        worker = self._manual_worker
+        if worker is not None and worker.isRunning():
+            worker.cancel()
+            self._manual_cancel_button.setEnabled(False)
+            self._status.setText("Import wird abgebrochen …")
+
+    def _append_result(
+        self,
+        filename: str,
+        outcome: str,
+        *,
+        provider_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> None:
         row = self._table.rowCount()
         self._table.insertRow(row)
         values = [
-            str(self._provider.currentData() or "manual"),
+            provider_id or str(self._provider.currentData() or "manual"),
             "manual_import",
-            str(self._tenant.currentData()),
+            tenant_id or str(self._tenant.currentData()),
             filename,
             outcome,
         ]
         for column, value in enumerate(values):
             self._table.setItem(row, column, QTableWidgetItem(value))
+
+
+def _run_manual_import(
+    *,
+    files: list[Path],
+    connection: ProviderConnection,
+    document_type: DocumentType,
+    target_root: Path,
+    provider_id: str,
+    tenant_id: str,
+    cancel: BackgroundWorker,
+) -> list[tuple[str, str, str, str]]:
+    """Validate and publish selected PDFs off the UI thread, returning display-only rows."""
+    connector = ManualImportConnector(
+        connection=connection,
+        files=files,
+        document_type=document_type,
+    )
+    pipeline = DocumentPipeline(
+        sink=OneDriveLocalSink(target_root), journal=InvoiceJournal()
+    )
+    workspace = ensure_invoice_collection_dirs()["tmp"] / str(uuid.uuid4())
+    workspace.mkdir(parents=True, exist_ok=False)
+    results: list[tuple[str, str, str, str]] = []
+    try:
+        for candidate in connector.discover():
+            if cancel.cancelled:
+                break
+            try:
+                artifact = connector.download(candidate, workspace, cancel)
+                result = pipeline.process(artifact)
+                outcome = (
+                    f"NEEDS_REVIEW: {result.receipt.review_reason}"
+                    if result.receipt.review_reason
+                    else result.receipt.outcome.value
+                )
+            except Exception as exc:  # noqa: BLE001 - keep a failed file local to its row
+                outcome = f"ERROR: {type(exc).__name__}"
+            results.append(
+                (provider_id, tenant_id, candidate.original_filename, outcome)
+            )
+        return results
+    finally:
+        for child in workspace.iterdir():
+            if child.is_dir():
+                raise RuntimeError("manual import workspace contains an unexpected directory")
+            child.unlink(missing_ok=True)
+        workspace.rmdir()
 
 
 def _is_writable_directory(path: Path) -> bool:

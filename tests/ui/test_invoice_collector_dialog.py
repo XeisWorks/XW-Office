@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Event
+
+from PySide6.QtWidgets import QFileDialog
 
 from xw_office.core.app_paths import default_invoice_target_dir
+from xw_office.ui.modules.expense_review import invoice_collector_dialog as dialog_module
 from xw_office.services.invoice_collection.connections import ConnectionRepository
 from xw_office.services.invoice_collection.domain import DocumentOutcome
 from xw_office.services.invoice_collection.orchestrator import (
@@ -177,3 +181,44 @@ def test_collection_results_distinguish_empty_route_from_success(
     assert dialog._table.rowCount() == 1
     assert dialog._table.item(0, 4).text() == "Keine passenden Dokumente"
     assert dialog._status.text() == "Abruf abgeschlossen; keine passenden Dokumente gefunden."
+
+
+def test_manual_import_runs_in_worker_and_publishes_partial_results_on_cancel(
+    qtbot: object, monkeypatch, tmp_path: Path
+) -> None:
+    started = Event()
+    release = Event()
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileNames",
+        lambda *_args, **_kwargs: ([str(tmp_path / "fixture.pdf")], ""),
+    )
+
+    def blocked_import(**_kwargs: object) -> list[tuple[str, str, str, str]]:
+        started.set()
+        release.wait(2)
+        return [("fixture", "xw", "fixture.pdf", "NEW")]
+
+    monkeypatch.setattr(dialog_module, "_run_manual_import", blocked_import)
+    target = tmp_path / "onedrive"
+    target.mkdir()
+    dialog = InvoiceCollectorDialog(
+        tenant_id="xw",
+        connection_repository=ConnectionRepository(tmp_path / "connections.sqlite3"),
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    dialog._set_folder(target)
+
+    dialog._manual_import()
+
+    qtbot.waitUntil(started.is_set, timeout=1500)  # type: ignore[attr-defined]
+    assert dialog._manual_worker is not None
+    assert dialog._manual_worker.isRunning()
+    assert not dialog._fetch_button.isEnabled()
+    dialog._manual_cancel_button.click()
+    release.set()
+    qtbot.waitUntil(lambda: dialog._manual_worker is None, timeout=3000)  # type: ignore[attr-defined]
+
+    assert dialog._table.rowCount() == 1
+    assert dialog._table.item(0, 3).text() == "fixture.pdf"
+    assert dialog._status.text().startswith("Import abgebrochen")
