@@ -231,7 +231,7 @@ Logs liegen unabhaengig vom gewaehlten Start immer unter `logs\` im Repo
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_windows_shortcuts.ps1 -PrintCenterOnly -IncludeDesktopShortcut
 
 # Alternativ mit Diagnosekonsole
-doppler run --project xw-office-desktop --config prd -- .venv\Scripts\python.exe -m xw_office.print_center
+doppler run --no-fallback --project xw-office-desktop --config prd -- .venv\Scripts\python.exe -m xw_office.print_center
 ```
 
 Das Druckcenter startet ohne Office-Navigation, Bestandsbuchung oder Wix/sevDesk-Abgleich.
@@ -313,7 +313,7 @@ oder einen vermeintlich erfolgreichen Druck ersetzt.
 With `DATABASE_URL` and `FERNET_MASTER_KEY` supplied by Doppler (see [Doppler setup](docs/DOPPLER.md)):
 
 ```bash
-doppler run --project xw-office-desktop --config prd -- alembic upgrade head
+doppler run --no-fallback --project xw-office-desktop --config prd -- alembic upgrade head
 ```
 
 Initial schema covers registry, key-value settings, and encrypted API secrets. Apply migrations before relying on DB-backed features in production.

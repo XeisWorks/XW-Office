@@ -353,8 +353,9 @@ def _merge_dataclass(cls: type[_ConfigT], data: dict[str, Any]) -> _ConfigT:
 
 
 def load_config(config_path: str | Path | None = None) -> AppConfig:
-    """Load config from YAML + .env, return frozen AppConfig."""
-    load_dotenv()
+    """Load config from YAML and the active environment, return frozen AppConfig."""
+    if not os.getenv("DOPPLER_PROJECT"):
+        load_dotenv()
 
     if config_path is None:
         root = Path(__file__).resolve().parents[3]

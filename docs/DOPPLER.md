@@ -2,7 +2,7 @@
 
 XW-Office und das Druckcenter laden ihre Desktop-Umgebung beim Start aus dem
 Doppler-Projekt `xw-office-desktop`, Config `prd`. Das Startmenue und die
-Konsolen-Startskripte verwenden `doppler run`. In der Repository-Kopie ist
+Konsolen-Startskripte verwenden `doppler run --no-fallback`. In der Repository-Kopie ist
 keine `.env` erforderlich.
 
 ## Einmalig je PC
@@ -12,21 +12,20 @@ keine `.env` erforderlich.
    erfolgt im Browser. Zugang auf `xw-office-desktop/prd` muss freigeschaltet sein.
 3. Die virtuelle Python-Umgebung und Startmenue-Verknuepfungen wie im
    [Multi-PC-Leitfaden](multi_pc_betriebsleitfaden.md) einrichten.
-4. `doppler run --project xw-office-desktop --config prd --
+4. `doppler run --no-fallback --project xw-office-desktop --config prd --
    .\.venv\Scripts\python.exe scripts\verify_doppler_import.py`
    prueft nur das Vorhandensein der Startwerte und gibt sie nicht aus.
 
 Die normale Startmenue-Verknuepfung startet `scripts/xw_doppler_bootstrap.pyw`
 ohne Konsolenfenster. Der Debug-Start nutzt `run_xw_office_debug.cmd` und zeigt
 Doppler-Fehler im Terminal. Fuer direkte Python-Aufrufe muss der Befehl ebenfalls
-mit `doppler run --project xw-office-desktop --config prd --` beginnen.
+mit `doppler run --no-fallback --project xw-office-desktop --config prd --` beginnen.
+Bei Doppler-Starts liest `load_config()` keine lokale `.env`.
 
 ## Geheimnisse verwalten
 
-- Eine bestehende `.env` kann einmalig ohne Ausgabe der Werte importiert
-  werden: `doppler secrets upload "PFAD_ZUR_ENV" --project xw-office-desktop --config prd --silent`.
-  Nur die vorgesehene Desktop-Datei importieren; keine Railway-internen
-  Datenbank-URLs auf anderen PCs als einzigen `DATABASE_URL`-Wert verwenden.
+- Eine lokale `.env` nicht automatisch nach Doppler hochladen. Die zentralen
+  Desktop-Werte sind die verbindliche Quelle; abweichende lokale Werte zuerst pruefen.
 - Gemeinsame Desktop-Startwerte wie `DATABASE_PUBLIC_URL` und
   `FERNET_MASTER_KEY` in Doppler pflegen. Der Fernet-Schluessel muss zur
   bestehenden verschluesselten Datenbank passen; ein Austausch ohne
@@ -42,7 +41,6 @@ mit `doppler run --project xw-office-desktop --config prd --` beginnen.
   Synchronisierung braucht eine eigene Config mit nur den jeweiligen
   Dienst-Secrets.
 
-Doppler legt fuer `doppler run` einen verschluesselten lokalen Fallback an.
-Damit kann ein bereits benutzter PC bei einem kurzen Doppler-Ausfall starten;
-der lokale Fallback ist keine dauerhaft aktuelle Quelle fuer Token-Rotation.
+Die Desktop-Starts verwenden `--no-fallback`: Sie lesen die aktuelle Doppler-
+Konfiguration bei jedem Start und schlagen bei fehlendem API-Zugriff fehl.
 Die Doppler-Anmeldung pro PC ist weiterhin erforderlich.

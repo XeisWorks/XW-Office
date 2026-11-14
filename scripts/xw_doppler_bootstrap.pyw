@@ -60,6 +60,7 @@ def main() -> int:
             [
                 doppler,
                 "run",
+                "--no-fallback",
                 "--project",
                 PROJECT,
                 "--config",

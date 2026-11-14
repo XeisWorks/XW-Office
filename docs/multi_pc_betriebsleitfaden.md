@@ -42,7 +42,7 @@ Alternativer Direktstart ohne Verknuepfung (z. B. fuer Codex/Claude Code):
 - Normaler Start: `.venv\\Scripts\\pythonw.exe scripts\\xw_doppler_bootstrap.pyw office`
 - Diagnose-Start mit sichtbarer Konsole: `run_xw_office_debug.cmd`
 - Reines Modul (ohne Fehlerdialog-Wrapper):
-  `doppler run --project xw-office-desktop --config prd -- python -m xw_office`
+  `doppler run --no-fallback --project xw-office-desktop --config prd -- python -m xw_office`
 
 ## 3) Pflichtvariablen (Doppler oder verschluesselter DB-Secret-Store)
 

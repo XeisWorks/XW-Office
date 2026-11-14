@@ -53,7 +53,7 @@ if "%DOPPLER_EXE%"=="" (
     popd
     exit /b 1
 )
-call "%DOPPLER_EXE%" run --project xw-office-desktop --config prd -- "%PY_EXE%" %PY_ARGS% %ENTRYPOINT%
+call "%DOPPLER_EXE%" run --no-fallback --project xw-office-desktop --config prd -- "%PY_EXE%" %PY_ARGS% %ENTRYPOINT%
 set "EXIT_CODE=%ERRORLEVEL%"
 
 if not "%EXIT_CODE%"=="0" (

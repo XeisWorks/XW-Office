@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from xw_office.core.config import AppConfig, load_config
+from xw_office.core import config as config_module
 
 
 def test_default_config_values() -> None:
@@ -24,6 +25,19 @@ def test_default_config_values() -> None:
 def test_load_config_with_missing_file() -> None:
     config = load_config("nonexistent.yaml")
     assert config.app.name == "XeisWorks Office"
+
+
+def test_load_config_does_not_read_local_env_under_doppler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DOPPLER_PROJECT", "xw-office-desktop")
+    monkeypatch.setattr(
+        config_module,
+        "load_dotenv",
+        lambda: pytest.fail("local .env must not be read under Doppler"),
+    )
+
+    assert load_config("nonexistent.yaml").app.name == "XeisWorks Office"
 
 
 @pytest.mark.parametrize("yaml_content", ["[]", "true", "'scalar'"])
