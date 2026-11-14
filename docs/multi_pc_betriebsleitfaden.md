@@ -22,7 +22,8 @@ Ziel:
    - `.venv\\Scripts\\activate`
 5. Abhaengigkeiten installieren:
    - `pip install -e ".[dev]"`
-6. `.env` aus `.env.example` erstellen und lokale Werte setzen.
+6. Doppler CLI installieren und anmelden, siehe [Doppler-Anleitung](DOPPLER.md).
+   Die Desktop-App laedt ihre Geheimnisse beim Start aus `xw-office-desktop/prd`.
 7. Migrationen ausfuehren:
    - `alembic upgrade head`
 8. Windows-Startmenue-Verknuepfungen erzeugen (einmalig, danach idempotent erneut ausfuehrbar):
@@ -38,11 +39,12 @@ Ziel:
 11. "XeisWorks Office" im Startmenue per Rechtsklick -> "An Taskleiste anheften" anheften.
 
 Alternativer Direktstart ohne Verknuepfung (z. B. fuer Codex/Claude Code):
-- Normaler Start: `.venv\\Scripts\\pythonw.exe scripts\\xw_office_gui.pyw`
+- Normaler Start: `.venv\\Scripts\\pythonw.exe scripts\\xw_doppler_bootstrap.pyw office`
 - Diagnose-Start mit sichtbarer Konsole: `run_xw_office_debug.cmd`
-- Reines Modul (aequivalent zum Debug-Start, ohne Fehlerdialog-Wrapper): `python -m xw_office`
+- Reines Modul (ohne Fehlerdialog-Wrapper):
+  `doppler run --project xw-office-desktop --config prd -- python -m xw_office`
 
-## 3) Pflichtvariablen (.env oder Secret-Store)
+## 3) Pflichtvariablen (Doppler oder verschluesselter DB-Secret-Store)
 
 - `DATABASE_URL`
 - `FERNET_MASTER_KEY`
@@ -53,7 +55,8 @@ Alternativer Direktstart ohne Verknuepfung (z. B. fuer Codex/Claude Code):
   - `FON_TEILNEHMER_ID`, `FON_BENUTZER_ID`, `FON_PIN`
 
 Hinweis:
-- Tokens bevorzugt ueber Settings in die verschluesselte DB-Verwaltung pflegen.
+- Tokens, die bereits in der Datenbank gespeichert sind, ueber Settings
+  rotieren. Diese Werte haben Vorrang vor Doppler-Umgebungswerten.
 - Keine Secrets ins Repo committen.
 
 ### UVA-Berechnung und Datenfrische

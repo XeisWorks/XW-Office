@@ -154,6 +154,7 @@ try {
     $VenvPythonw = Join-Path $RepoRoot '.venv\Scripts\pythonw.exe'
     $GuiBootstrap = Join-Path $RepoRoot 'scripts\xw_office_gui.pyw'
     $PrintCenterBootstrap = Join-Path $RepoRoot 'scripts\xw_print_center_gui.pyw'
+    $DopplerBootstrap = Join-Path $RepoRoot 'scripts\xw_doppler_bootstrap.pyw'
     $DebugCmd = Join-Path $RepoRoot 'run_xw_office_debug.cmd'
     $IconPath = Join-Path $RepoRoot 'icons\xw_office.ico'
     $PrintCenterIconPath = Join-Path $RepoRoot 'icons\print_center.ico'
@@ -170,6 +171,9 @@ try {
     }
     if (-not (Test-Path $GuiBootstrap)) {
         Write-Error "GUI-Bootstrap nicht gefunden unter '$GuiBootstrap'."
+    }
+    if (-not (Test-Path $DopplerBootstrap)) {
+        Write-Error "Doppler-Bootstrap nicht gefunden unter '$DopplerBootstrap'."
     }
 
     if (-not (Test-Path $IconPath)) {
@@ -192,7 +196,7 @@ try {
     $PrintCenterIconArg = "$PrintCenterIconPath,0"
     New-XwShortcut -Path (Join-Path $AppFolder 'XeisWorks Druckcenter.lnk') `
         -TargetPath $VenvPythonw `
-        -Arguments "`"$PrintCenterBootstrap`"" `
+        -Arguments "`"$DopplerBootstrap`" print-center" `
         -WorkingDirectory $RepoRoot `
         -IconLocation $PrintCenterIconArg `
         -AppUserModelId $script:PrintCenterAppUserModelId `
@@ -200,7 +204,7 @@ try {
     if ($IncludeDesktopShortcut) {
         New-XwShortcut -Path (Join-Path $Desktop 'XeisWorks Druckcenter.lnk') `
             -TargetPath $VenvPythonw `
-            -Arguments "`"$PrintCenterBootstrap`"" `
+            -Arguments "`"$DopplerBootstrap`" print-center" `
             -WorkingDirectory $RepoRoot `
             -IconLocation $PrintCenterIconArg `
             -AppUserModelId $script:PrintCenterAppUserModelId `
@@ -213,7 +217,7 @@ try {
 
     New-XwShortcut -Path (Join-Path $AppFolder 'XeisWorks Office.lnk') `
         -TargetPath $VenvPythonw `
-        -Arguments "`"$GuiBootstrap`"" `
+        -Arguments "`"$DopplerBootstrap`" office" `
         -WorkingDirectory $RepoRoot `
         -IconLocation $IconArg `
         -AppUserModelId $script:OfficeAppUserModelId `
@@ -235,7 +239,7 @@ try {
     if ($IncludeDesktopShortcut -or (Test-Path $OfficeDesktopShortcut)) {
         New-XwShortcut -Path $OfficeDesktopShortcut `
             -TargetPath $VenvPythonw `
-            -Arguments "`"$GuiBootstrap`"" `
+            -Arguments "`"$DopplerBootstrap`" office" `
             -WorkingDirectory $RepoRoot `
             -IconLocation $IconArg `
             -AppUserModelId $script:OfficeAppUserModelId `
@@ -249,10 +253,11 @@ try {
         Get-ChildItem -Path $TaskbarPinFolder -Filter '*.lnk' -File | ForEach-Object {
             $pinnedShortcut = $script:Shell.CreateShortcut($_.FullName)
             if ($pinnedShortcut.Arguments -like '*xw_office_gui.pyw*' -or
+                $pinnedShortcut.Arguments -like '*xw_doppler_bootstrap.pyw*office*' -or
                 $pinnedShortcut.TargetPath -eq $DebugCmd) {
                 New-XwShortcut -Path $_.FullName `
                     -TargetPath $VenvPythonw `
-                    -Arguments "`"$GuiBootstrap`"" `
+                    -Arguments "`"$DopplerBootstrap`" office" `
                     -WorkingDirectory $RepoRoot `
                     -IconLocation $IconArg `
                     -AppUserModelId $script:OfficeAppUserModelId `

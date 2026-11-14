@@ -41,7 +41,20 @@ pushd "%ROOT%"
 
 rem Support src-layout start without requiring editable install.
 set "PYTHONPATH=%ROOT%src;%PYTHONPATH%"
-call "%PY_EXE%" %PY_ARGS% %ENTRYPOINT%
+set "DOPPLER_EXE=doppler"
+where doppler >nul 2>&1
+if errorlevel 1 (
+    set "DOPPLER_EXE="
+    for /d %%D in ("%LOCALAPPDATA%\Microsoft\WinGet\Packages\Doppler.doppler_*") do (
+        if exist "%%~fD\doppler.exe" set "DOPPLER_EXE=%%~fD\doppler.exe"
+    )
+)
+if "%DOPPLER_EXE%"=="" (
+    echo [XW-Office] Doppler CLI fehlt. Bitte installieren.
+    popd
+    exit /b 1
+)
+call "%DOPPLER_EXE%" run --project xw-office-desktop --config prd -- "%PY_EXE%" %PY_ARGS% %ENTRYPOINT%
 set "EXIT_CODE=%ERRORLEVEL%"
 
 if not "%EXIT_CODE%"=="0" (

@@ -122,9 +122,9 @@ python -m venv .venv
 # Install dependencies
 pip install -e ".[dev]"
 
-# Copy and configure environment
-copy .env.example .env
-# Edit .env with your credentials
+# Set up Doppler for the Windows desktop app (see docs/DOPPLER.md)
+winget install --id Doppler.doppler --exact --source winget
+doppler login
 
 # Run (visible console, for development/diagnosis)
 python -m xw_office
@@ -223,20 +223,21 @@ Logs liegen unabhaengig vom gewaehlten Start immer unter `logs\` im Repo
 # Einmalig auf der bestehenden Office-Datenbank: additive Migration
 .venv\Scripts\python.exe -m alembic upgrade head
 
-# Einmalig: eingeschraenktes Druckcenter-Konto erzeugen (URL nur lokal in .env)
+# Einmalige Legacy-Provisionierung: schreibt die neue URL in die lokale .env
+# Danach XW_PRINT_CENTER_DATABASE_URL sicher nach Doppler uebertragen.
 .venv\Scripts\python.exe scripts\provision_print_center_access.py --apply
 
 # Nur Druckcenter-Verknuepfungen im Startmenue und auf dem Desktop erzeugen
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_windows_shortcuts.ps1 -PrintCenterOnly -IncludeDesktopShortcut
 
 # Alternativ mit Diagnosekonsole
-.venv\Scripts\python.exe -m xw_office.print_center
+doppler run --project xw-office-desktop --config prd -- .venv\Scripts\python.exe -m xw_office.print_center
 ```
 
 Das Druckcenter startet ohne Office-Navigation, Bestandsbuchung oder Wix/sevDesk-Abgleich.
 Nach Updates der Druckcenter-Berechtigungen den Provisionierungsbefehl erneut ausfuehren;
 er ist idempotent und aktualisiert auch bestehende Konten.
-Es nutzt dieselbe `.env`/`DATABASE_URL`-Verbindung und dieselben Office-Druckprofile aus der
+Es nutzt die per Doppler geladene `DATABASE_URL`-Verbindung und dieselben Office-Druckprofile aus der
 Konfiguration. Offizielle und Unreleased-Produkte verwenden dieselbe zentrale
 `inventory.products`-Druckkonfiguration wie XW-Office; Druckpfad und Druckplan sind im
 Druckcenter bearbeitbar. Product-Hub-Stammdaten bleiben readonly;
@@ -280,8 +281,10 @@ Artikel bleiben auf das separate Schema beschraenkt; die zentrale Konfiguration 
 auf `inventory.products` begrenzte Datenbankfunktion geschrieben. Die Provisionierung erzeugt
 zusaetzlich den eingeschraenkten DB-Login `xw_print_center`: nur SELECT auf den benoetigten
 Office-Tabellen, SELECT/INSERT/UPDATE/DELETE auf eigenen Artikeln. Die geheime URL wird
-ausschliesslich in der lokalen `.env` unter `XW_PRINT_CENTER_DATABASE_URL` gespeichert,
-nicht ins Repo oder in Logs. Auf weiteren PCs diese URL sicher in deren `.env` hinterlegen.
+vom Legacy-Provisionierungsskript zunaechst in der lokalen `.env` unter
+`XW_PRINT_CENTER_DATABASE_URL` gespeichert, nicht ins Repo oder in Logs. Fuer den
+regulaeren Desktop-Betrieb die URL nach Doppler `xw-office-desktop/prd` uebertragen;
+weitere PCs benoetigen dann keine eigene Kopie. Siehe [Doppler-Anleitung](docs/DOPPLER.md).
 Ein bereits existierendes Konto wird nicht automatisch rotiert. Ohne diese optionale URL
 nutzt das Druckcenter das vorhandene Office-Konto; die readonly-Transaktion bleibt aktiv,
 aber dann ist die Trennung keine eigenstaendige Datenbank-Berechtigungsgrenze.
@@ -302,15 +305,15 @@ oder einen vermeintlich erfolgreichen Druck ersetzt.
 - **UI Framework:** PySide6 + qt-material
 - **Database:** PostgreSQL on Railway
 - **Printing:** QPrinter fuer Rechnungen/Labels; nativer PDF-XChange-Vektordruck fuer Noten/Produkte mit Windows-Spooler-Bestaetigung (kein automatischer Acrobat-/Raster-Fallback)
-- **Config:** YAML defaults + .env secrets + DB settings
+- **Config:** YAML defaults + Doppler-Umgebung + verschluesselte DB-Secrets
 - **Update:** fast-forward-only, checked silently before the normal desktop start with a confirm dialog (`scripts\update_xw_office.ps1`, invoked automatically or manually)
 
 ## Database (PostgreSQL / Alembic)
 
-With `DATABASE_URL` and optional `FERNET_MASTER_KEY` set in `.env` (see [.env.example](.env.example)):
+With `DATABASE_URL` and `FERNET_MASTER_KEY` supplied by Doppler (see [Doppler setup](docs/DOPPLER.md)):
 
 ```bash
-alembic upgrade head
+doppler run --project xw-office-desktop --config prd -- alembic upgrade head
 ```
 
 Initial schema covers registry, key-value settings, and encrypted API secrets. Apply migrations before relying on DB-backed features in production.
