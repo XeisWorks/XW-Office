@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import ipaddress
+import re
 from typing import Any
 
 import yaml
@@ -33,6 +35,7 @@ class ProviderManifest:
     supported_tenants: frozenset[str]
     document_types: frozenset[str]
     routes: tuple[RouteManifest, ...]
+    portal_hosts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -84,6 +87,7 @@ def _parse_providers(payload: dict[str, Any]) -> list[ProviderManifest]:
         if category not in allowed_categories:
             raise _configuration_error(f"Provider {provider_id} verwendet unbekannte Kategorie")
         routes = _parse_routes(raw.get("routes") or [], provider_id, allowed_methods)
+        portal_hosts = _portal_hosts(raw.get("portal_hosts") or [], provider_id)
         manifests.append(
             ProviderManifest(
                 provider_id=provider_id,
@@ -92,6 +96,7 @@ def _parse_providers(payload: dict[str, Any]) -> list[ProviderManifest]:
                 supported_tenants=frozenset(tenants),
                 document_types=frozenset(types),
                 routes=tuple(routes),
+                portal_hosts=portal_hosts,
             )
         )
     return manifests
@@ -143,6 +148,30 @@ def _required_string(mapping: dict[str, Any], key: str) -> str:
     if not value:
         raise _configuration_error(f"Pflichtfeld fehlt: {key}")
     return value
+
+
+def _portal_hosts(value: Any, provider_id: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise _configuration_error(f"portal_hosts von {provider_id} muss eine Liste sein")
+    hosts: list[str] = []
+    label = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    for raw_host in value:
+        host = str(raw_host).strip().casefold()
+        if (
+            len(host) > 253
+            or "." not in host
+            or not re.fullmatch(rf"{label}(?:\.{label})+", host)
+        ):
+            raise _configuration_error(f"Ungueltiger Provider-Portalhost: {provider_id}")
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            pass
+        else:
+            raise _configuration_error(f"IP-Adressen sind keine Provider-Portalhosts: {provider_id}")
+        if host not in hosts:
+            hosts.append(host)
+    return tuple(hosts)
 
 
 def _string_set(value: Any, key: str) -> set[str]:

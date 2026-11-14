@@ -114,6 +114,35 @@ def test_registry_parses_secret_free_catalog() -> None:
         for provider in catalog.providers
         for route in provider.routes
     )
+    codescene = next(provider for provider in catalog.providers if provider.provider_id == "codescene")
+    assert codescene.portal_hosts == ("codescene.com", "billing.stripe.com")
+
+
+def test_registry_rejects_provider_portal_urls_instead_of_hosts(tmp_path: Path) -> None:
+    path = tmp_path / "bad_portal.yaml"
+    path.write_text(
+        """
+schema_version: 2
+supported_tenants: [xw]
+allowed_document_types: [unknown]
+allowed_route_methods: [manual_import]
+allowed_provider_categories: [expense]
+providers:
+  - id: fixture
+    label: Fixture
+    category: expense
+    supported_tenants: [xw]
+    document_types: [unknown]
+    portal_hosts: ["https://evil.example.test/path"]
+    routes: []
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InvoiceCollectionError) as error:
+        ProviderCatalog.from_yaml(path)
+
+    assert error.value.code is InvoiceErrorCode.CONFIGURATION_ERROR
 
 
 def test_workspace_download_path_sanitizes_traversal_and_windows_devices(
@@ -339,8 +368,16 @@ def test_onedrive_sink_concurrent_identical_publish_uses_unique_temporary_files(
     destination = tmp_path / "onedrive"
     destination.mkdir()
     barrier = Barrier(2)
+    target_check_barrier = Barrier(2)
     temporary_paths: list[str] = []
     original_copyfile = sink_module.shutil.copyfile
+    original_exists = Path.exists
+
+    def synchronized_target_check(path: Path) -> bool:
+        exists = original_exists(path)
+        if path.suffix.casefold() == ".pdf" and path.is_relative_to(destination):
+            target_check_barrier.wait(timeout=5)
+        return exists
 
     def concurrent_copy(source_path, destination_path, *args, **kwargs):
         temporary_paths.append(str(destination_path))
@@ -348,6 +385,7 @@ def test_onedrive_sink_concurrent_identical_publish_uses_unique_temporary_files(
         return original_copyfile(source_path, destination_path, *args, **kwargs)
 
     monkeypatch.setattr(sink_module.shutil, "copyfile", concurrent_copy)
+    monkeypatch.setattr(Path, "exists", synchronized_target_check)
     pipeline = DocumentPipeline(sink=OneDriveLocalSink(destination))
     artifact = DownloadedArtifact(_candidate(_foundation_connection(), source_id="same"), source)
 

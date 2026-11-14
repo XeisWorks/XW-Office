@@ -1,6 +1,6 @@
 # Fortsetzungs-Goal fuer GPT-6-Luna
 
-**Stand:** 14.11.2026 (Fehlerredaktion, routeabhaengige UI-Aktion, Tool-Recherche und Vollsuite 2.426/7 ergaenzt)
+**Stand:** 14.11.2026 (Fehlerredaktion, kataloggesteuerte Portale, Tool-Recherche und Vollsuite 2.428/7 ergaenzt)
 **Repository:** `XeisWorks/XW-Office`, Branch `main`
 **Ausgangslage:** Die technische MVP-Grundlage ist weitgehend implementiert und lokal getestet. Der erste echte Rechnungsabruf ist noch nicht verifiziert. Der Benutzer hat bestaetigt, dass Anbieter-Mailbox und Absenderdomain(s) noch geklaert werden muessen.
 
@@ -64,7 +64,10 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    `official_api` gibt es eine maskierte Eingabe, die das Credential ausschliesslich ueber
    `SecretStore`/Windows Credential Manager sichert; die Mollie-Factory liest diesen SecretRef
    und bekommt den gewaehlten Zeitraum. Erhalte diese Guardrails; vollstaendige
-   capability-basierte Auth-/Retry-/Portalaktionen bleiben ein gesonderter offener T04-Punkt.
+   capability-basierte Auth-/Retryaktionen bleiben ein gesonderter offener T04-Punkt. Provider-
+   Portale werden fuer `portal_hosts` bereits als HTTPS-Menue angeboten; Hostvalidierung und
+   manuelle Login-/Download-Klarstellung nicht entfernen und keine Portalautomation ohne
+   Live-Verifikation erfinden.
    Der allgemeine `BackgroundWorker` protokolliert Ausnahme-Text. Monatsabruf, Graph-Mailbox-
    Probe und manueller PDF-Import redigieren fatale Fehler vor Worker-Logging und UI-Ausgabe.
    Diese Grenzen sind umgesetzt und getestet; neue Workergrenzen duerfen keine rohen

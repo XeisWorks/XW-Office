@@ -42,10 +42,11 @@ current_status:
     - "Mollie invoice pagination rejects untrusted page hosts, repeated links and excessive page counts"
     - "fatal monthly collection, Graph mailbox probe, and manual PDF import errors are sanitized before generic BackgroundWorker logging and UI display"
     - "Graph mailbox probe action is enabled only for catalog routes whose method is mail"
+    - "provider portal menu uses validated manifest portal_hosts and opens each selected host with HTTPS"
     - "selected OneDrive target folder can be opened from the dialog without implying cloud sync"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
-    - "latest full repository suite after Mollie pagination, collector worker-boundary redaction, and route-specific mailbox action: 2426 passed, 7 skipped, 0 failed; repo Ruff, Provider-/Queue-YAML, diff and added-diff secret checks pass"
-    - "targeted MyPy for Mollie connector and dialog passes with foreign imports skipped; broad current-environment MyPy is blocked by absent optional msal_extensions/Playwright and a NumPy stub/Python-version mismatch; 30-file collector/dialog MyPy passed in the prior recorded environment"
+    - "latest full repository suite after Mollie pagination, collector worker-boundary redaction, catalog-driven portal actions and deterministic OneDrive race fixture: 2428 passed, 7 skipped, 0 failed; repo Ruff, Provider-/Queue-YAML, diff and added-diff secret checks pass"
+    - "targeted MyPy for Mollie connector, registry and dialog passes with foreign imports skipped; broad current-environment MyPy is blocked by absent optional msal_extensions/Playwright and a NumPy stub/Python-version mismatch; 30-file collector/dialog MyPy passed in the prior recorded environment"
     - "DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values (prior recorded checks)"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
   not_live_verified:
@@ -232,6 +233,8 @@ tasks:
       - "tests/ui/test_invoice_collector_dialog.py::test_collection_results_show_route_outcomes_without_external_ids (includes provenance labels)"
       - "tests/ui/test_invoice_collector_dialog.py::test_collection_results_distinguish_empty_route_from_success"
       - "tests/ui/test_invoice_collector_dialog.py::test_graph_mailbox_action_is_enabled_only_for_mail_routes"
+      - "tests/ui/test_invoice_collector_dialog.py::test_provider_portal_menu_opens_only_https_hosts_from_catalog"
+      - "tests/unit/test_invoice_collection_foundations.py::test_registry_rejects_provider_portal_urls_instead_of_hosts"
       - "tests/ui/test_invoice_collector_dialog.py::test_manual_import_runs_in_worker_and_publishes_partial_results_on_cancel"
       - "tests/ui/test_invoice_collector_dialog.py::test_manual_import_displays_out_of_period_documents_as_skipped"
     deliverables:
@@ -373,9 +376,10 @@ tasks:
     status: "in_progress"
     depends_on: ["T05", "T06", "T07"]
     evidence:
-      - "python -m pytest tests/ -q: 2426 passed, 7 skipped, 0 failed"
+      - "python -m pytest tests/ -q: 2428 passed, 7 skipped, 0 failed"
+      - "OneDrive identical-publish race test: 5 consecutive passes after synchronizing both target-existence checks"
       - "python -m ruff check .: passed"
-      - "Targeted mypy on changed Mollie connector and dialog with foreign imports skipped: passed; broad local mypy unavailable due missing optional msal_extensions/Playwright and NumPy stub/Python-version mismatch"
+      - "Targeted mypy on changed Mollie connector, registry and dialog with foreign imports skipped: passed; broad local mypy unavailable due missing optional msal_extensions/Playwright and NumPy stub/Python-version mismatch"
       - "Provider and task queue YAML parse: passed"
       - "git diff --check: passed"
       - "Added-diff secret-pattern scan: no matches"

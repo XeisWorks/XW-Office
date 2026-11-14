@@ -137,6 +137,38 @@ def test_graph_mailbox_action_is_enabled_only_for_mail_routes(
     assert not dialog._mail_test_button.isEnabled()
 
 
+def test_provider_portal_menu_opens_only_https_hosts_from_catalog(
+    qtbot: object, tmp_path: Path, monkeypatch: object
+) -> None:
+    dialog = InvoiceCollectorDialog(
+        tenant_id="xw",
+        connection_repository=ConnectionRepository(tmp_path / "connections.sqlite3"),
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    opened: list[str] = []
+    monkeypatch.setattr(
+        dialog_module.QDesktopServices,
+        "openUrl",
+        lambda url: opened.append(url.toString()) or True,
+    )
+    dialog._provider.setCurrentIndex(dialog._provider.findData("codescene"))
+
+    assert dialog._portal_button.isEnabled()
+    assert [action.text() for action in dialog._portal_menu.actions()] == [
+        "codescene.com",
+        "billing.stripe.com",
+    ]
+    dialog._portal_menu.actions()[1].trigger()
+    assert opened == ["https://billing.stripe.com/"]
+    assert "bleiben manuell" in dialog._status.text()
+
+    dialog._open_provider_portal("https://attacker.example.test/path")
+    assert opened == ["https://billing.stripe.com/"]
+    assert "nicht geöffnet" in dialog._status.text()
+    dialog._open_provider_portal("127.0.0.1")
+    assert opened == ["https://billing.stripe.com/"]
+
+
 def test_invoice_collector_dialog_opens_only_an_existing_target_folder(
     qtbot: object, tmp_path: Path, monkeypatch: object
 ) -> None:

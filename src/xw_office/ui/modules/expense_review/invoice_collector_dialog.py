@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 import calendar
 from datetime import date, datetime
+import ipaddress
 import re
 import uuid
 from collections.abc import Callable
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -123,6 +125,7 @@ class InvoiceCollectorDialog(QDialog):
         self._route.currentIndexChanged.connect(self._route_changed)
         self._provider_changed()
         self._build_ui()
+        self._provider_changed()
         self._route_changed()
         self._load_saved_connections()
         saved = str(self._settings.value("invoice_collection/target_folder") or "").strip()
@@ -155,13 +158,16 @@ class InvoiceCollectorDialog(QDialog):
         self._route.clear()
         catalog = getattr(self, "_catalog", None)
         if catalog is None:
+            self._update_provider_portals(())
             return
         provider_id = str(self._provider.currentData() or "")
         provider = next(
             (item for item in catalog.providers if item.provider_id == provider_id), None
         )
         if provider is None:
+            self._update_provider_portals(())
             return
+        self._update_provider_portals(provider.portal_hosts)
         for route in provider.routes:
             self._route.addItem(
                 f"{route.route_key} ({route.method}, {route.maturity})", route
@@ -237,6 +243,11 @@ class InvoiceCollectorDialog(QDialog):
         form.addRow(self._api_token_label, self._api_token)
         root.addLayout(form)
         actions = QHBoxLayout()
+        self._portal_menu = QMenu(self)
+        self._portal_button = QPushButton("Portal öffnen")
+        self._portal_button.setMenu(self._portal_menu)
+        self._portal_button.setEnabled(False)
+        actions.addWidget(self._portal_button)
         self._fetch_button = QPushButton("Alle aktiven Verbindungen abrufen")
         self._fetch_button.clicked.connect(self._fetch_active)
         actions.addWidget(self._fetch_button)
@@ -268,6 +279,34 @@ class InvoiceCollectorDialog(QDialog):
         close = QPushButton("Schließen")
         close.clicked.connect(self.reject)
         root.addWidget(close, alignment=Qt.AlignmentFlag.AlignRight)
+
+    def _update_provider_portals(self, hosts: tuple[str, ...]) -> None:
+        menu = getattr(self, "_portal_menu", None)
+        button = getattr(self, "_portal_button", None)
+        if menu is None or button is None:
+            return
+        menu.clear()
+        for host in hosts:
+            action = menu.addAction(host)
+            action.triggered.connect(
+                lambda _checked=False, current_host=host: self._open_provider_portal(
+                    current_host
+                )
+            )
+        button.setEnabled(bool(hosts))
+
+    def _open_provider_portal(self, host: str) -> None:
+        url = _provider_portal_url(host)
+        if url is None:
+            self._status.setText("Das Provider-Portalziel ist ungültig und wurde nicht geöffnet.")
+            return
+        if not QDesktopServices.openUrl(url):
+            self._status.setText("Das Provider-Portal konnte nicht geöffnet werden.")
+            return
+        self._status.setText(
+            "Provider-Website geöffnet. Anmeldung und Belegdownload bleiben manuell; "
+            "der OneDrive-Cloudstatus wird dadurch nicht bestätigt."
+        )
 
     def _choose_folder(self) -> None:
         selected = QFileDialog.getExistingDirectory(self, "OneDrive-Business-Ordner auswählen")
@@ -992,6 +1031,29 @@ def _safe_collector_error(error: Exception) -> InvoiceCollectionError:
         InvoiceErrorCode.POLICY_BLOCKED: "Die Anbieterregel blockiert diesen Zugriff",
     }.get(code, "Der Vorgang konnte nicht sicher abgeschlossen werden")
     return InvoiceCollectionError(code, message)
+
+
+def _provider_portal_url(host: str) -> QUrl | None:
+    normalized = host.strip().casefold()
+    label = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+    if len(normalized) > 253 or not re.fullmatch(rf"{label}(?:\.{label})+", normalized):
+        return None
+    try:
+        ipaddress.ip_address(normalized)
+    except ValueError:
+        pass
+    else:
+        return None
+    url = QUrl(f"https://{normalized}/")
+    if (
+        not url.isValid()
+        or url.scheme() != "https"
+        or url.host().casefold() != normalized
+        or url.userInfo()
+        or url.port(-1) != -1
+    ):
+        return None
+    return url
 
 
 def _run_manual_import(
