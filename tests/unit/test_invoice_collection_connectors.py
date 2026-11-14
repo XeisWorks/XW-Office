@@ -366,7 +366,9 @@ def test_msal_provider_uses_silent_token_before_visible_interactive_login(
     assert calls == ["silent"]
 
 
-def test_mollie_http_client_paginates_and_rejects_untrusted_pdf_host() -> None:
+def test_mollie_http_client_paginates_and_rejects_untrusted_pdf_host(
+    tmp_path: Path,
+) -> None:
     requests: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -393,6 +395,83 @@ def test_mollie_http_client_paginates_and_rejects_untrusted_pdf_host() -> None:
         "https://api.mollie.com/v2/invoices?limit=100",
         "https://api.mollie.com/page-2",
     ]
+    with pytest.raises(InvoiceCollectionError) as error:
+        client.download_invoice_pdf(
+            {"pdfUrl": "https://evil.example.test/invoice.pdf"},
+            tmp_path / "invoice.pdf",
+        )
+    assert error.value.code is InvoiceErrorCode.POLICY_BLOCKED
+    assert len(requests) == 2
+
+
+def test_mollie_pdf_download_streams_with_size_limit_and_closes_response(
+    tmp_path: Path,
+) -> None:
+    class OversizedStream(httpx.SyncByteStream):
+        def __init__(self) -> None:
+            self.closed = False
+            self.yielded = 0
+
+        def __iter__(self):
+            self.yielded += 1
+            yield b"x" * (64 * 1024 + 1)
+            self.yielded += 1
+            yield b"unread"
+
+        def close(self) -> None:
+            self.closed = True
+
+    body_stream = OversizedStream()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/pdf"},
+            stream=body_stream,
+        )
+
+    client = MollieInvoicesHttpClient(
+        "read-only-token",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_pdf_bytes=8,
+    )
+    destination = tmp_path / "invoice.pdf"
+    with pytest.raises(InvoiceCollectionError) as error:
+        client.download_invoice_pdf(
+            {"pdfUrl": "https://api.mollie.com/invoice.pdf"}, destination
+        )
+
+    assert error.value.code is InvoiceErrorCode.INVALID_DOCUMENT
+    assert body_stream.closed
+    assert body_stream.yielded == 1
+    assert not destination.exists()
+
+
+def test_mollie_pdf_download_retries_rate_limit(tmp_path: Path) -> None:
+    attempts = 0
+    delays: list[float] = []
+    pdf = b"%PDF-1.4 invoice"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        return httpx.Response(200, content=pdf, headers={"content-type": "application/pdf"})
+
+    client = MollieInvoicesHttpClient(
+        "read-only-token",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        sleeper=delays.append,
+    )
+    destination = tmp_path / "invoice.pdf"
+    client.download_invoice_pdf(
+        {"pdfUrl": "https://api.mollie.com/invoice.pdf"}, destination
+    )
+
+    assert attempts == 2
+    assert delays == [0.0]
+    assert destination.read_bytes() == pdf
 
 
 def test_mollie_http_client_retries_rate_limit_with_bounded_backoff() -> None:

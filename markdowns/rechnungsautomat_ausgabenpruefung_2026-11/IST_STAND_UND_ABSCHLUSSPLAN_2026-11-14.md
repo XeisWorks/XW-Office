@@ -18,6 +18,10 @@ Ein Anbieter kann den Dateinamen eines Anhangs oder API-Dokuments kontrollieren.
 
 Der OneDrive-Sink verwendete zuvor einen Tempnamen aus Dateiname und Prozess-ID; parallele Laeufe im selben Prozess konnten dieselbe Tempdatei teilen. Er nutzt jetzt pro Publish eine exklusiv angelegte, eindeutige Tempdatei. Beim Kopierfallback wird eine von diesem Lauf angelegte Teildatei bei Fehlern entfernt, die Zielpruefsumme verifiziert und ein Rennen um denselben Zielpfad hashbasiert als Duplikat oder Konflikt bewertet. Vier gezielte Tests decken erfolgreichen Fallback, Schreibfehler mit Cleanup sowie parallele identische und divergierende Inhalte ab. Die vollstaendige Repository-Suite besteht nach diesem Fix mit **2.411 bestanden, 7 uebersprungen, 0 fehlgeschlagen**; der Lauf zeigt eine externe Starlette/httpx-Deprecation-Warnung.
 
+## Fortschreibung: begrenzter Mollie-PDF-Abruf
+
+Der Mollie-PDF-Download liest den HTTP-Body jetzt gestreamt mit einem konfigurierbaren Limit (standardmaessig 25 MiB); `Content-Length` ist nur eine fruehe Ablehnung, die Bytezaehlung begrenzt den tatsaechlichen Empfang. Der Response wird auch bei Groessen- und Lesefehlern geschlossen; die Zieldatei wird erst nach vollstaendigem Empfang geschrieben. Der bestehende Rate-Limit-/Timeout-Retry gilt auch fuer den Stream, und nicht erlaubte Hosts werden vor dem Request blockiert. Connector-Tests fuer Oversize/Response-Close, Retry und Hostallowlist bestehen. Die vollstaendige Repository-Suite besteht nach Graph-/OneDrive-Haertung und Mollie-Streaming mit **2.413 bestanden, 7 uebersprungen, 0 fehlgeschlagen**.
+
 ## 1. Herkunft und ursprünglich gemeintes Ergebnis
 
 Der konkrete frühere Chat war in den lokal verfügbaren Codex-Sitzungen nicht eindeutig auffindbar. Die am **07.11.2026** erstellte Planungs-Commitfolge belegt das Vorhaben im Repository: `4f5d7acb` („plan secure one-click invoice collector with 2FA and OneDrive“), danach `caf041f1` (modularisierte Planung) und die Implementierungs-Commits ab `b39041fd`. Ein Link oder Wortlaut des ursprünglichen Chats lässt sich daraus nicht ableiten.

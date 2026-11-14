@@ -101,6 +101,9 @@ class MollieInvoicesConnector:
 class MollieInvoicesHttpClient:
     """Small, read-only HTTP client; token is held only in memory by the caller."""
 
+    _PDF_CHUNK_BYTES = 64 * 1024
+    _DEFAULT_MAX_PDF_BYTES = 25 * 1024 * 1024
+
     def __init__(
         self,
         access_token: str,
@@ -108,6 +111,7 @@ class MollieInvoicesHttpClient:
         client: httpx.Client | None = None,
         base_url: str = "https://api.mollie.com",
         max_retries: int = 2,
+        max_pdf_bytes: int = _DEFAULT_MAX_PDF_BYTES,
         sleeper: Any = time.sleep,
     ) -> None:
         if not access_token.strip():
@@ -116,6 +120,9 @@ class MollieInvoicesHttpClient:
         self._client = client or httpx.Client(timeout=httpx.Timeout(30.0))
         self._base_url = base_url.rstrip("/")
         self._max_retries = max(0, int(max_retries))
+        self._max_pdf_bytes = int(max_pdf_bytes)
+        if self._max_pdf_bytes <= 0:
+            raise ValueError("max_pdf_bytes must be positive")
         self._sleeper = sleeper
 
     def list_invoices(self) -> list[dict[str, Any]]:
@@ -154,8 +161,53 @@ class MollieInvoicesHttpClient:
             raise InvoiceCollectionError(
                 InvoiceErrorCode.POLICY_BLOCKED, "Mollie-PDF-Link ist nicht erlaubt"
             )
-        response = self._request("GET", pdf_url)
-        destination.write_bytes(response.content)
+        payload = self._download_pdf_bytes(pdf_url)
+        destination.write_bytes(payload)
+
+    def _download_pdf_bytes(self, url: str) -> bytes:
+        for attempt in range(self._max_retries + 1):
+            try:
+                with self._client.stream(
+                    "GET",
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {self._token}",
+                        "Accept": "application/json",
+                    },
+                ) as response:
+                    if response.status_code in {401, 403}:
+                        raise InvoiceCollectionError(
+                            InvoiceErrorCode.AUTH_REQUIRED,
+                            "Mollie-Zugang wurde abgelehnt",
+                        )
+                    if response.status_code in {429, 500, 502, 503, 504}:
+                        if attempt < self._max_retries:
+                            self._sleeper(_retry_delay(response, attempt))
+                            continue
+                        code = (
+                            InvoiceErrorCode.RATE_LIMITED
+                            if response.status_code == 429
+                            else InvoiceErrorCode.TRANSIENT_NETWORK
+                        )
+                        raise InvoiceCollectionError(
+                            code, "Mollie-PDF-Abruf konnte nicht abgeschlossen werden"
+                        )
+                    response.raise_for_status()
+                    _reject_oversized_content_length(
+                        response, self._max_pdf_bytes
+                    )
+                    return _read_limited_pdf(response, self._max_pdf_bytes)
+            except httpx.TimeoutException as exc:
+                if attempt < self._max_retries:
+                    self._sleeper(min(2**attempt, 8))
+                    continue
+                raise InvoiceCollectionError(
+                    InvoiceErrorCode.TRANSIENT_NETWORK,
+                    "Mollie-Zeitüberschreitung beim PDF-Abruf",
+                ) from exc
+        raise InvoiceCollectionError(
+            InvoiceErrorCode.INTERNAL_ERROR, "Mollie-PDF-Retry wurde unerwartet beendet"
+        )
 
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         parsed = urlparse(url)
@@ -191,12 +243,7 @@ class MollieInvoicesHttpClient:
                 )
             if response.status_code in {429, 500, 502, 503, 504}:
                 if attempt < self._max_retries:
-                    retry_after = response.headers.get("Retry-After", "")
-                    try:
-                        delay = min(max(float(retry_after), 0.0), 30.0)
-                    except ValueError:
-                        delay = min(2**attempt, 8)
-                    self._sleeper(delay)
+                    self._sleeper(_retry_delay(response, attempt))
                     continue
                 code = (
                     InvoiceErrorCode.RATE_LIMITED
@@ -217,6 +264,45 @@ def _pdf_url(invoice: dict[str, Any]) -> str:
     if isinstance(pdf, dict) and pdf.get("href"):
         return str(pdf["href"])
     return str(invoice.get("pdfUrl") or "").strip()
+
+
+def _retry_delay(response: httpx.Response, attempt: int) -> float:
+    retry_after = response.headers.get("Retry-After", "")
+    try:
+        delay = float(str(retry_after))
+        if delay < 0.0:
+            return 0.0
+        if delay > 30.0:
+            return 30.0
+        return delay
+    except ValueError:
+        fallback_delay = 2**attempt
+        return float(fallback_delay if fallback_delay < 8 else 8)
+
+
+def _reject_oversized_content_length(response: httpx.Response, limit: int) -> None:
+    try:
+        declared_length = int(response.headers.get("content-length", ""))
+    except ValueError:
+        return
+    if declared_length > limit:
+        raise InvoiceCollectionError(
+            InvoiceErrorCode.INVALID_DOCUMENT, "Mollie-PDF ueberschreitet das Groessenlimit"
+        )
+
+
+def _read_limited_pdf(response: httpx.Response, limit: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_bytes(chunk_size=MollieInvoicesHttpClient._PDF_CHUNK_BYTES):
+        total += len(chunk)
+        if total > limit:
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.INVALID_DOCUMENT,
+                "Mollie-PDF ueberschreitet das Groessenlimit",
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _parse_date(value: Any) -> date | None:
