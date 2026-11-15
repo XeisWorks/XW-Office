@@ -1322,6 +1322,44 @@ def test_collection_service_wires_saved_routes_to_factory_and_orchestrator(tmp_p
     assert repeated.summary.existing_count == 1
 
 
+def test_collection_checkpoint_is_not_written_when_pipeline_fails(tmp_path: Path) -> None:
+    source = _pdf(tmp_path / "pipeline-failure.pdf")
+    connection = ProviderConnection.create(
+        provider_id="fixture", tenant_id=TenantId.XW, account_alias="billing"
+    )
+    candidate = _candidate(connection, source_id="candidate-1")
+    artifact = DownloadedArtifact(candidate=candidate, path=source)
+    journal = InvoiceJournal(tmp_path / "pipeline-failure-journal.sqlite3")
+    run_id, resumed = journal.begin_or_resume_run(
+        period=DateRange(date(2026, 11, 1), date(2026, 11, 30)),
+        target_fingerprint="target-fingerprint",
+        connection_fingerprints={str(connection.connection_id): "connection-fingerprint"},
+    )
+    assert resumed is False
+
+    class FailingPipeline:
+        sink = OneDriveLocalSink(tmp_path / "unused-target")
+
+        def process(self, _artifact: DownloadedArtifact):
+            raise RuntimeError("pipeline failed")
+
+    class Connector:
+        route_key = "manual_import"
+
+        def discover(self) -> list[DocumentCandidate]:
+            return [candidate]
+
+        def download(self, _candidate, _workspace, _cancel=None) -> DownloadedArtifact:
+            return artifact
+
+    summary = CollectionOrchestrator(
+        FailingPipeline(), journal=journal, run_id=run_id  # type: ignore[arg-type]
+    ).collect([Connector()])
+
+    assert summary.error_count == 1
+    assert journal.checkpoint_count(run_id=run_id, route_key="manual_import") == 0
+
+
 def test_collection_service_marks_run_waiting_when_every_route_needs_auth(
     tmp_path: Path,
 ) -> None:

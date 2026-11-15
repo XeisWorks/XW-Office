@@ -1,6 +1,6 @@
 # Fortsetzungs-Goal fuer GPT-6-Luna
 
-**Stand:** 15.11.2026 (Fehlerredaktion, sichere ACLs, PDF-Bereinigung, optionale exakte Mail-Absenderfilter und Vollsuite 2.443/7 dokumentiert)
+**Stand:** 15.11.2026 (Fehlerredaktion, sichere ACLs, PDF-Bereinigung, exakte Mail-Absenderfilter, eigener/Shared-Mailbox-Modus und Vollsuite 2.446/7 dokumentiert)
 **Repository:** `XeisWorks/XW-Office`, Branch `main`
 **Ausgangslage:** Die technische MVP-Grundlage ist weitgehend implementiert und lokal getestet. Der erste echte Rechnungsabruf ist noch nicht verifiziert. Der Benutzer hat bestaetigt, dass Anbieter-Mailbox und Absenderdomain(s) noch geklaert werden muessen.
 
@@ -76,7 +76,9 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    und bekommt den gewaehlten Zeitraum. Erhalte diese Guardrails. Eine routebezogene Retry-Aktion
    fuer Auth-, Netzwerk-, Rate-Limit- und temporaere Zielordnerfehler ist umgesetzt; Policy-,
    Konfigurations-, Dokument- und Inhaltskonflikte duerfen nicht erneut eingeplant werden.
-   Auth-Erneuerung und weitere Capability-Aktionen bleiben offen. Provider-
+   Graph-Auth-Erneuerung nutzt silent-first den DPAPI-Cache und fällt bei Bedarf auf den
+   sichtbaren MSAL-Login zurück; Mailbox-Probe oder routebezogener Retry lösen dies aus.
+   Dieses Verhalten ist mit einem Fake-App-Test belegt. Provider-
    Portale werden fuer `portal_hosts` bereits als HTTPS-Menue angeboten; Hostvalidierung und
    manuelle Login-/Download-Klarstellung nicht entfernen und keine Portalautomation ohne
    Live-Verifikation erfinden.
@@ -84,9 +86,10 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    Probe und manueller PDF-Import redigieren fatale Fehler vor Worker-Logging und UI-Ausgabe.
    Diese Grenzen sind umgesetzt und getestet; neue Workergrenzen duerfen keine rohen
    Providerfehler, Tokens, signierten URLs oder Exception-Chains protokollieren.
-   Graph-Mailbox-Probe und Mailbox-Eingaben folgen der Katalog-Auth-Capability `microsoft_graph_mail`;
-   geschuetzte Credential-Eingabe folgt `api_token`. Erhalte diese Capability-Steuerung. Eine routebezogene Wiederholung nach Teilfehlern ist umgesetzt; weitere Auth-Erneuerungs- und
-   Capability-Aktionen bleiben offen. Erhalte die routebezogene Retry-Filterung.
+   Graph-Mailbox-Probe und Postfachtyp-Auswahl folgen der Katalog-Auth-Capability
+   `microsoft_graph_mail`; geschuetzte Credential-Eingabe folgt `api_token`. Erhalte diese
+   Capability-Steuerung. Routebezogene Wiederholung und interaktive Auth-Erneuerung sind
+   umgesetzt; erhalte die Retry-Filterung.
 4. Der Live-Mailpilot ist extern blockiert: Anbieter, Rechnungs-Mailbox und bestaetigte
    Absenderdomain(s) sind noch nicht geklaert. Frage nie nach diesen Werten oder Geheimnissen
    im Chat. Wenn der Benutzer soweit ist, gib genau eine lokale UI-Anweisung: in Finanzen >
@@ -94,9 +97,11 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    Absenderdomain(s) konfigurieren, "Graph-Mailbox testen" waehlen und sichtbaren Microsoft-
    Login/Consent abschliessen. Fuehre keinen Liveversuch mit geratenen Werten aus.
    Der optionale exakte Absenderadressfilter ist umgesetzt; Domain und exakte Adresse muessen
-   gemeinsam passen. Keine Adressen vorbefuellen. Falls das geklaerte Pilotpostfach ein
-   freigegebenes Postfach ist, erst den benoetigten Scope und sichtbaren Consent anhand des
-   konkreten Kontotyps klaeren; `Mail.Read.Shared` nicht pauschal hinzufuegen.
+   gemeinsam passen. Keine Adressen vorbefuellen. Das UI bietet „Eigenes Postfach“ und
+   „Freigegebenes Postfach“; nur die explizite Shared-Auswahl fordert `Mail.Read.Shared` an.
+   Microsoft dokumentiert den delegierten Scope fuer eigenes und freigegebenes Mail, nur fuer
+   Arbeits-/Schulkonten: https://learn.microsoft.com/en-us/graph/permissions-reference#mailreadshared .
+   Consent bleibt sichtbar und muss vom Benutzer abgeschlossen werden.
 5. Nach dem lokalen Probe: Zugriffsergebnis allein ist keine Rechnungsrouten-Verifikation.
    Mit echtem Anbieterbeleg muessen Absender, Anhang, Dokumenttyp, Rechnungsdatum, Mandant,
    Wiederholung ohne zweite Datei und Auth-Fehlerverhalten separat nachgewiesen werden.
@@ -124,9 +129,9 @@ Repo-Planungs-/Commit-Historie bestaetigt das Vorhaben.
 
 ## Baseline und Queue-Status 15.11.2026
 
-T00 wurde am pre-feature Stand `caf041f1` reproduzierbar abgeschlossen: 73 Baseline-Tests fuer Ausgabenpruefung, Worker, SecretService und Graph-Mail-Aufrufstellen bestanden. Commit `b39041fd` ist der erste Collector-Code. T01-T03, T06 und T07 sind laut Queue nach Acceptance-Evidenz abgeschlossen. T04 bleibt wegen der offenen capability-gesteuerten Auth-Erneuerung in Arbeit. Fuer T05 sind Domain- plus optionaler exakter Absenderadressfilter jetzt lokal umgesetzt und gezielt getestet; Shared-Mailbox-Unterstuetzung ist anhand des echten Piloten noch zu klaeren, daher bleibt T05 in Arbeit. T08 bleibt extern blockiert, weil der Benutzer Mailbox und Absenderdomain noch klaeren muss. T09 bleibt wegen historischer PDF-Gitobjekte offen.
+T00 wurde am pre-feature Stand `caf041f1` reproduzierbar abgeschlossen: 73 Baseline-Tests fuer Ausgabenpruefung, Worker, SecretService und Graph-Mail-Aufrufstellen bestanden. Commit `b39041fd` ist der erste Collector-Code. T01-T07 sind nach lokaler Acceptance-Evidenz abgeschlossen. T04 deckt Auth-Erneuerung beim expliziten Probe-/Retry-Klick ab. T05 unterstuetzt auswählbar eigenes oder freigegebenes Postfach, mit Scope-Wahl, Consent und Auth-Verhalten durch Fakes geprueft. Exakte optionale Absenderadressen werden zusaetzlich zur bestaetigten Domain geprueft; bei Pipelinefehlern wird kein Checkpoint geschrieben. T08 bleibt extern blockiert, weil der Benutzer Mailboxtyp, Mailbox und Absenderdomain noch klaeren muss. T09 bleibt wegen historischer PDF-Gitobjekte offen.
 
-Die konkrete Umsetzung des exakten Mail-Absenderadressfilters ist in 54 Connector-/Dialogtests geprueft. Es sind keine realen Postfach- oder Absenderdaten eingetragen. Der aktuelle Graph-Scope bleibt `Mail.Read`; eine `Mail.Read.Shared`-Erweiterung darf nur nach Entscheidung anhand des tatsaechlichen Postfachtyps und mit sichtbarem Consent erfolgen.
+Auth-Erneuerung, Mailmatcher, Shared-Mailbox-Modus und Checkpoint-Fehlerverhalten bestehen mit 103 gezielten Connector-/Dialog-/Foundationtests sowie **2446 passed, 7 skipped** in der Vollsuite. Ruff, gezieltes MyPy, Queue-/Provider-YAML, Diff-Check und Diff-Secret-Musterpruefung sind bestanden. Es sind keine realen Postfach- oder Absenderdaten eingetragen. `Mail.Read` bleibt Standard; `Mail.Read.Shared` wird nur nach ausdruecklicher Auswahl des Shared-Mailbox-Typs und mit sichtbarem Consent angefordert.
 
 ## Sicherheitsnachtrag 15.11.2026
 

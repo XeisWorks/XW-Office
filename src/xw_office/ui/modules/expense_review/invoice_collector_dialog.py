@@ -198,6 +198,11 @@ class InvoiceCollectorDialog(QDialog):
         self._mailbox_label = QLabel("Graph-Mailbox")
         self._mailbox.setPlaceholderText("Postfach für Lieferantenbelege")
         self._mailbox.setAccessibleName("Microsoft Graph Rechnungs-Postfach")
+        self._mailbox_mode = QComboBox()
+        self._mailbox_mode.addItem("Eigenes Postfach", "user")
+        self._mailbox_mode.addItem("Freigegebenes Postfach (Mail.Read.Shared)", "shared")
+        self._mailbox_mode.setAccessibleName("Typ des Rechnungs-Postfachs")
+        self._mailbox_mode_label = QLabel("Postfachtyp")
         self._sender_domains = QLineEdit()
         self._sender_domains_label = QLabel("Bestätigte Absenderdomains")
         self._sender_domains.setPlaceholderText("Nur bestätigte Domains, kommasepariert")
@@ -297,9 +302,11 @@ class InvoiceCollectorDialog(QDialog):
         self._api_token_label.setVisible(visible)
         self._api_token.setVisible(visible)
         self._mailbox.setVisible(bool(capabilities and capabilities.mailbox_probe))
+        self._mailbox_mode.setVisible(bool(capabilities and capabilities.mailbox_probe))
         self._sender_domains.setVisible(bool(capabilities and capabilities.mailbox_probe))
         self._sender_addresses.setVisible(bool(capabilities and capabilities.mailbox_probe))
         self._mailbox_label.setVisible(bool(capabilities and capabilities.mailbox_probe))
+        self._mailbox_mode_label.setVisible(bool(capabilities and capabilities.mailbox_probe))
         self._sender_domains_label.setVisible(bool(capabilities and capabilities.mailbox_probe))
         self._sender_addresses_label.setVisible(bool(capabilities and capabilities.mailbox_probe))
         scope = route.required_scope if route is not None else None
@@ -356,6 +363,7 @@ class InvoiceCollectorDialog(QDialog):
         form.addRow("Abrufroute", self._route)
         form.addRow("Kontoalias", self._account_alias)
         form.addRow(self._mailbox_label, self._mailbox)
+        form.addRow(self._mailbox_mode_label, self._mailbox_mode)
         form.addRow(self._sender_domains_label, self._sender_domains)
         form.addRow(self._sender_addresses_label, self._sender_addresses)
         form.addRow("Dokumenttyp", self._document_type)
@@ -659,6 +667,7 @@ class InvoiceCollectorDialog(QDialog):
             self._tenant.setEnabled(True)
             self._account_alias.setText("default")
             self._mailbox.clear()
+            self._mailbox_mode.setCurrentIndex(self._mailbox_mode.findData("user"))
             self._sender_domains.clear()
             self._sender_addresses.clear()
             self._api_token.clear()
@@ -686,6 +695,8 @@ class InvoiceCollectorDialog(QDialog):
                 self._route.setCurrentIndex(route_index)
             options = route_settings.options
             self._mailbox.setText(options.get("mailbox", ""))
+            mailbox_mode = options.get("mailbox_mode", "user")
+            self._mailbox_mode.setCurrentIndex(self._mailbox_mode.findData(mailbox_mode))
             self._sender_domains.setText(options.get("sender_domains", ""))
             self._sender_addresses.setText(options.get("sender_addresses", ""))
             type_index = next(
@@ -872,6 +883,7 @@ class InvoiceCollectorDialog(QDialog):
         options = {
             "connector": str(route.connector),
             "mailbox": mailbox,
+            "mailbox_mode": str(self._mailbox_mode.currentData() or "user"),
             "sender_domains": ",".join(sorted(domains)),
             "sender_addresses": ",".join(sorted(addresses)),
             "document_type": self._selected_document_type().value,
@@ -1131,6 +1143,7 @@ class InvoiceCollectorDialog(QDialog):
             route_options.update(
                 {
                     "mailbox": mailbox,
+                    "mailbox_mode": str(self._mailbox_mode.currentData() or "user"),
                     "sender_domains": ",".join(sorted(domains)),
                     "sender_addresses": ",".join(sorted(addresses)),
                 }

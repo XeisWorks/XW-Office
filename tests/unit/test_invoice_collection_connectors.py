@@ -119,6 +119,32 @@ def test_graph_mail_connector_fails_closed_without_verified_sender_domains(
     assert connector.discover() == []
 
 
+def test_graph_mail_connector_skips_messages_without_pdf_attachments(tmp_path: Path) -> None:
+    class NotificationReader(_MailReader):
+        def list_messages(self) -> list[dict[str, object]]:
+            return [
+                {
+                    "id": "notification-only",
+                    "sender_domain": "billing.example.test",
+                    "sender_address": "billing@billing.example.test",
+                    "attachments": [
+                        {
+                            "id": "html-1",
+                            "name": "notice.html",
+                            "content_type": "text/html",
+                        }
+                    ],
+                }
+            ]
+
+    connector = GraphMailAttachmentConnector(
+        connection=_connection(),
+        reader=NotificationReader(tmp_path),
+        policy=MailMatchPolicy(sender_domains=frozenset({"billing.example.test"})),
+    )
+    assert connector.discover() == []
+
+
 def test_graph_mail_connector_requires_exact_sender_address_when_configured(
     tmp_path: Path,
 ) -> None:
@@ -173,6 +199,7 @@ def test_graph_mail_factory_wires_local_connection_settings_and_selected_period(
         route_key="mail_pdf",
         options={
             "mailbox": "invoices@example.test",
+            "mailbox_mode": "shared",
             "sender_domains": "billing.example.test",
             "sender_addresses": "Invoices@billing.example.test",
             "document_type": DocumentType.EXPENSE_INVOICE.value,
@@ -185,10 +212,39 @@ def test_graph_mail_factory_wires_local_connection_settings_and_selected_period(
     assert isinstance(connector, GraphMailAttachmentConnector)
     assert connector.start == period.start
     assert connector.end == period.end
+    assert connector.reader.token_provider.kwargs["scopes"] == ("Mail.Read.Shared",)
     assert connector.policy.sender_domains == frozenset({"billing.example.test"})
     assert connector.policy.sender_addresses == frozenset({"invoices@billing.example.test"})
     assert connector.policy.document_type is DocumentType.EXPENSE_INVOICE
     connector.close()
+
+    own_mailbox_route = RouteSettings(
+        route_key="mail_pdf",
+        options={
+            "mailbox": "invoices@example.test",
+            "sender_domains": "billing.example.test",
+            "document_type": DocumentType.EXPENSE_INVOICE.value,
+        },
+    )
+    own_mailbox_connector = build_connector_factories(
+        token_provider_factory=TokenProvider
+    ).create("graph_mail_attachment", connection, own_mailbox_route, period)
+    assert own_mailbox_connector.reader.token_provider.kwargs["scopes"] == ("Mail.Read",)
+    own_mailbox_connector.close()
+
+    invalid_route = RouteSettings(
+        route_key="mail_pdf",
+        options={
+            "mailbox": "invoices@example.test",
+            "mailbox_mode": "other",
+            "sender_domains": "billing.example.test",
+        },
+    )
+    with pytest.raises(InvoiceCollectionError) as error:
+        build_connector_factories(token_provider_factory=TokenProvider).create(
+            "graph_mail_attachment", connection, invalid_route, period
+        )
+    assert error.value.code is InvoiceErrorCode.CONFIGURATION_ERROR
 
 
 def test_mollie_factory_reads_keyring_secret_and_forwards_month_period() -> None:
@@ -448,6 +504,36 @@ def test_msal_provider_uses_silent_token_before_visible_interactive_login(
     )
     assert provider.get_access_token() == "silent-token"
     assert calls == ["silent"]
+
+
+def test_msal_provider_renews_expired_auth_with_visible_interactive_login(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    calls: list[str] = []
+
+    class FakeApp:
+        def get_accounts(self):
+            return [{"username": "user@example.test"}]
+
+        def acquire_token_silent(self, scopes, account):
+            calls.append("silent")
+            return {"error": "interaction_required"}
+
+        def acquire_token_interactive(self, scopes):
+            calls.append("interactive")
+            return {"access_token": "renewed-token"}
+
+    provider = MsalInteractiveGraphTokenProvider(
+        client_id="client-id",
+        authority="https://login.microsoftonline.com/common",
+        scopes=("Mail.Read",),
+        cache_path=tmp_path / "local" / "graph.cache",
+        app_factory=lambda *args, **kwargs: FakeApp(),
+        cache_factory=lambda path: object(),
+    )
+    assert provider.get_access_token() == "renewed-token"
+    assert calls == ["silent", "interactive"]
 
 
 def test_mollie_http_client_paginates_and_rejects_untrusted_pdf_host(

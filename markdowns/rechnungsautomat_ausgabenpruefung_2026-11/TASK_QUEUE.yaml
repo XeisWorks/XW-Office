@@ -16,6 +16,7 @@ current_status:
     - "planned routes blocked both at save time and when loading existing connections"
     - "Graph mail factory wired into desktop dialog with mailbox and sender-domain settings"
     - "Optional exact sender-address allowlist is stored locally and narrows the required confirmed-domain match"
+    - "Mailbox type is selected explicitly; own mailbox requests Mail.Read while an explicitly shared mailbox requests delegated Mail.Read.Shared"
     - "explicit delegated Graph mailbox probe using minimal Mail.Read and one-message-ID query"
     - "Graph attachment downloads enforce streaming byte limits for raw and JSON/Base64 response bodies"
     - "Graph message pagination yields normalized messages incrementally instead of retaining the whole mailbox scan"
@@ -51,7 +52,7 @@ current_status:
     - "selected tenant _needs_review folder can be opened only within the selected target; explicit review resolution validates, no-clobber publishes by invoice date, updates schema-5 metadata, then removes the review copy"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
     - "invoice collection LOCALAPPDATA tree disables inherited ACLs recursively and grants full access only to current user, SYSTEM and Administrators; ACL failures fail closed"
-    - "latest full repository suite after all-PDF index cleanup, synthetic invoice/PLC fixtures, Windows ACL hardening and exact optional sender-address matching: 2443 passed, 7 skipped, 0 failed; repo Ruff, Queue-YAML, changed-module MyPy, diff and added-diff secret checks pass"
+    - "latest full repository suite after all-PDF index cleanup, synthetic invoice/PLC fixtures, Windows ACL hardening, exact optional sender-address matching and explicit own/shared mailbox scopes: 2446 passed, 7 skipped, 0 failed; repo Ruff, Queue-YAML, changed-module MyPy, diff and added-diff secret checks pass"
     - "targeted MyPy for Mollie connector, registry and dialog passes with foreign imports skipped; broad current-environment MyPy is blocked by absent optional msal_extensions/Playwright and a NumPy stub/Python-version mismatch; 30-file collector/dialog MyPy passed in the prior recorded environment"
     - "DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values (prior recorded checks)"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
@@ -229,7 +230,7 @@ tasks:
   - id: "T04"
     title: "Provider-unabhängiger Dialog und Orchestrator"
     priority: 4
-    status: "in_progress"
+    status: "done"
     depends_on: ["T03"]
     evidence:
       - "src/xw_office/ui/modules/expense_review/invoice_collector_dialog.py"
@@ -258,6 +259,7 @@ tasks:
       - "tests/ui/test_invoice_collector_dialog.py::test_review_folder_action_opens_only_the_selected_tenant_review_directory"
       - "tests/ui/test_invoice_collector_dialog.py::test_dialog_resolves_review_pdf_after_explicit_date_and_type_confirmation"
       - "tests/ui/test_invoice_collector_dialog.py::test_retry_action_targets_only_routes_that_failed_last_run"
+      - "tests/unit/test_invoice_collection_connectors.py::test_msal_provider_renews_expired_auth_with_visible_interactive_login; AUTH_REQUIRED routes are eligible for the dialog's route-specific retry action"
       - "tests/unit/test_invoice_collection_foundations.py::test_invoice_journal_lists_recent_run_and_route_status_without_context_secrets"
       - "tests/ui/test_invoice_collector_dialog.py::test_run_history_shows_route_status_and_reuses_selected_period (shows completed hashed-checkpoint count)"
       - "tests/ui/test_invoice_collector_dialog.py::test_collector_run_history_applies_period_and_starts_fetch"
@@ -282,7 +284,7 @@ tasks:
   - id: "T05"
     title: "Microsoft-Graph-Mailroute"
     priority: 5
-    status: "in_progress"
+    status: "done"
     depends_on: ["T02", "T03", "T04"]
     parallelizable_with: ["T06", "T07"]
     evidence:
@@ -296,10 +298,17 @@ tasks:
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_connector_requires_exact_sender_address_when_configured; sender domain remains mandatory and exact address only narrows the match"
       - "tests/ui/test_invoice_collector_dialog.py::test_mailbox_and_sender_domain_settings_are_validated_locally; optional sender-address list is normalized and malformed values rejected"
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_factory_wires_local_connection_settings_and_selected_period; exact address settings pass to connector policy"
+      - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_factory_wires_local_connection_settings_and_selected_period; own/shared mailbox modes request Mail.Read or Mail.Read.Shared respectively, invalid modes fail closed"
+      - "tests/ui/test_invoice_collector_dialog.py::test_invoice_collector_dialog_saves_unverified_route_as_disabled_draft and test_saved_connection_can_be_loaded_but_unverified_route_stays_disabled cover mailbox-type persistence"
+      - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_connector_skips_messages_without_pdf_attachments"
+      - "tests/unit/test_invoice_collection_foundations.py::test_collection_checkpoint_is_not_written_when_pipeline_fails"
+      - "Microsoft Graph permission reference: delegated Mail.Read.Shared includes shared mail and is valid only for work/school accounts: https://learn.microsoft.com/en-us/graph/permissions-reference#mailreadshared"
+      - "Targeted foundation, connector and dialog tests after Auth/shared-mailbox additions: 103 passed in 7.73s"
+      - "Full repository suite after Auth/shared-mailbox additions: 2446 passed, 7 skipped, 0 failed in 229.45s; one existing Starlette/httpx deprecation warning"
       - "tests/unit/test_invoice_collection_connectors.py Graph reader pagination test verifies normalized sender address is returned alongside sender domain"
       - "Targeted Graph connector and collector dialog tests after matcher change: 54 passed in 4.92s"
-      - "Full repository suite after sender-address matcher change: 2443 passed, 7 skipped, 0 failed in 228.83s; one existing Starlette/httpx deprecation warning"
-      - "Acceptance gap: no explicit shared-mailbox mode or test; current delegated route requests minimal Mail.Read. Assess the real pilot mailbox before considering separately consented Mail.Read.Shared."
+      - "Full repository suite after sender-address matcher and own/shared mailbox scope change: 2446 passed, 7 skipped, 0 failed in 229.45s; one existing Starlette/httpx deprecation warning"
+      - "Live mailbox type, real Entra consent and route behavior still require the selected pilot account; no real mailbox values are stored in repo."
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_connector_contains_untrusted_filename_in_workspace"
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_connector_requires_real_pdf_attachment_and_stable_ids (receipt date is not invoice-period filter)"
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_factory_wires_local_connection_settings_and_selected_period"
@@ -415,7 +424,7 @@ tasks:
     status: "in_progress"
     depends_on: ["T05", "T06", "T07"]
     evidence:
-      - "python -m pytest -q after sender-address matcher change: 2443 passed, 7 skipped, 0 failed in 228.83s (one external Starlette/httpx deprecation warning)"
+      - "python -m pytest -q after sender-address matcher and own/shared mailbox scope change: 2446 passed, 7 skipped, 0 failed in 229.45s (one external Starlette/httpx deprecation warning)"
       - "Invoice collector foundation/UI slice: 94 passed, including safe run-history list, period reuse and journal injection; retry eligibility includes AUTH_REQUIRED and TRANSIENT_NETWORK, excludes OUT_OF_PERIOD, POLICY_BLOCKED, UNSUPPORTED_ACCOUNT and CONTENT_CONFLICT"
       - "Auth-status correction: 45 invoice foundations tests and 68 foundations/UI tests passed; full suite after invoice-PDF cleanup is 2441 passed, 7 skipped; all-active-routes-auth case persists WAITING_FOR_USER at route and run level"
       - "Payment QR and PLC customs tests no longer read repository PDFs; synthetic invoice/EPC and customs documents are generated per test"

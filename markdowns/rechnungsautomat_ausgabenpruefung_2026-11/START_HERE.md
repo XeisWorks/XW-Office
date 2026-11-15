@@ -63,11 +63,12 @@ Contract-Tests – keine Änderung an Dialog, Orchestrator, PDF-Pipeline oder On
 - **Route und Fallback:** Katalogstatus, Factory-Prüfung und Verbindungsaktivierung sind
   fail-closed. Graph-Mailbox-Probe, Mailbox-Eingaben und maskierte API-Credentials werden bereits aus der
   Katalog-Auth-Capability abgeleitet. Routebezogene Wiederholung behebbarer Fehler ist umgesetzt;
-  gezielte Anmeldungserneuerung, weitere Capability-Aktionen und konfigurierbare Prioritaet
-  bleiben offen.
+  bei Graph-Auth-Fehlern versucht MSAL zuerst den geschützten Cache und öffnet bei Bedarf den
+  sichtbaren interaktiven Login. Konfigurierbare Providerpriorität bleibt offen.
 - **Keine Provider-Sonderlogik in UI/Orchestrator:** Manifest und Connector-Factories sind
   explizit und die gemeinsame Pipeline ist providerunabhängig. Der aktuelle Dialog ist noch ein
-  erster Slice; Auth-Erneuerung und weitere Capability-gesteuerte Aktionen bleiben offen.
+  MVP-Slice; Mailboxprobe, Postfachtyp, Credential-Eingabe, Ordneraktion und Routenretry sind
+  capability-gesteuert. Weitere Aktionen können anhand konkreter Provideranforderungen folgen.
 - **Secrets:** Windows Credential Manager/keyring oder geprüfter verschlüsselter Speicher.
   Keine echten Tokens, Cookies, Passwörter, 2FA-Seeds, PDFs oder Browserprofile in Git,
   OneDrive-Sitzungsordnern, Logs oder Testartefakten.

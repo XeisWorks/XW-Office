@@ -62,6 +62,12 @@ def build_connector_factories(
             for item in str(options.get("sender_addresses") or "").split(",")
             if item.strip()
         )
+        mailbox_mode = str(options.get("mailbox_mode") or "user").strip().casefold()
+        if mailbox_mode not in {"user", "shared"}:
+            raise InvoiceCollectionError(
+                InvoiceErrorCode.CONFIGURATION_ERROR,
+                "Unbekannter Rechnungs-Postfachtyp",
+            )
         if not mailbox or not sender_domains:
             raise InvoiceCollectionError(
                 InvoiceErrorCode.CONFIGURATION_ERROR,
@@ -83,7 +89,7 @@ def build_connector_factories(
         token_provider = provider_factory(
             client_id=client_id,
             authority=f"https://login.microsoftonline.com/{tenant_id}",
-            scopes=("Mail.Read",),
+            scopes=("Mail.Read.Shared" if mailbox_mode == "shared" else "Mail.Read",),
             cache_path=cache_path,
         )
         raw_type = str(options.get("document_type") or DocumentType.UNKNOWN.value)

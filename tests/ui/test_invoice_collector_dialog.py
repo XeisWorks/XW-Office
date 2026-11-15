@@ -142,6 +142,7 @@ def test_graph_mailbox_action_is_enabled_only_for_mail_routes(
     dialog._route.setCurrentIndex(mail_index)
     assert dialog._mail_test_button.isEnabled()
     assert not dialog._mailbox.isHidden()
+    assert not dialog._mailbox_mode.isHidden()
     assert not dialog._sender_domains.isHidden()
     assert not dialog._mailbox_label.isHidden()
     assert not dialog._sender_domains_label.isHidden()
@@ -150,6 +151,7 @@ def test_graph_mailbox_action_is_enabled_only_for_mail_routes(
     dialog._route.setCurrentIndex(api_index)
     assert not dialog._mail_test_button.isEnabled()
     assert dialog._mailbox.isHidden()
+    assert dialog._mailbox_mode.isHidden()
     assert dialog._sender_domains.isHidden()
     assert dialog._mailbox_label.isHidden()
     assert dialog._sender_domains_label.isHidden()
@@ -348,6 +350,7 @@ def test_invoice_collector_dialog_saves_unverified_route_as_disabled_draft(
     )
     dialog._account_alias.setText("billing")
     dialog._mailbox.setText("billing@example.test")
+    dialog._mailbox_mode.setCurrentIndex(dialog._mailbox_mode.findData("shared"))
     dialog._sender_domains.setText("invoices.example.test")
     dialog._sender_addresses.setText("ap@invoices.example.test")
     dialog._save_connection()
@@ -357,6 +360,7 @@ def test_invoice_collector_dialog_saves_unverified_route_as_disabled_draft(
     assert len(connections) == 1
     assert connections[0].enabled is False
     assert connections[0].route_settings[0].options["mailbox"] == "billing@example.test"
+    assert connections[0].route_settings[0].options["mailbox_mode"] == "shared"
     assert connections[0].route_settings[0].options["sender_addresses"] == "ap@invoices.example.test"
     assert "deaktivierter Entwurf" in dialog._status.text()
 
@@ -387,6 +391,7 @@ def test_saved_connection_can_be_loaded_but_unverified_route_stays_disabled(
                 route_key=mail_route.route_key,
                 options={
                     "mailbox": "billing@example.test",
+                    "mailbox_mode": "shared",
                     "sender_domains": "invoices.example.test",
                     "sender_addresses": "ap@invoices.example.test",
                     "document_type": "expense_invoice",
@@ -404,6 +409,7 @@ def test_saved_connection_can_be_loaded_but_unverified_route_stays_disabled(
 
     assert dialog._account_alias.text() == "billing"
     assert dialog._mailbox.text() == "billing@example.test"
+    assert dialog._mailbox_mode.currentData() == "shared"
     assert dialog._sender_domains.text() == "invoices.example.test"
     assert dialog._sender_addresses.text() == "ap@invoices.example.test"
     assert dialog._provider.isEnabled() is False
