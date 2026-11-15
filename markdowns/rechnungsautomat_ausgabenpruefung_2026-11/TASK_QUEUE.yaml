@@ -435,7 +435,7 @@ tasks:
       - "git diff --check: passed"
       - "Added-diff secret-pattern scan: no matches"
       - "Tracked-text credential scan: 0 high-confidence private-key, GitHub, Slack, AWS, OpenAI and Google credential-pattern hits"
-      - "Current-tree PDF audit: all 17 tracked PDF assets removed from the index and globally ignored; local copies remain ignored to avoid data loss. Payment QR and PLC customs tests generate synthetic PDFs at runtime; affected tests and full suite pass. `git ls-files -- *.pdf` is empty. Existing remote Git history still contains the old PDF blobs; AGENTS.md forbids force-push/history rewrite, so T09 documents this historical exposure and makes no erasure claim"
+      - "Current-tree PDF audit: all 17 historically tracked PDF paths are now absent from the index and globally ignored; local copies remain ignored to avoid data loss. Payment QR and PLC customs tests generate synthetic PDFs at runtime; affected tests and full suite pass. `git ls-files -- '*.pdf'` is empty. Read-only audit of origin/main at f36753dc confirmed 17 reachable historical PDF blobs: six personal invoice PDFs from commits 8252d931/002514df plus eleven other music/test/resource PDFs. No blob content was printed or changed. AGENTS.md forbids force-push/history rewrite, so T09 documents the remaining historical exposure and makes no erasure claim"
       - "T08 records the pending local mailbox/sender-domain clarification as blocked_external"
     deliverables:
       - "Unit, contract, UI and integration test report"
