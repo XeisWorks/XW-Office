@@ -435,10 +435,11 @@ tasks:
       - "git diff --check: passed"
       - "Added-diff secret-pattern scan: no matches"
       - "Tracked-text credential scan: 0 high-confidence private-key, GitHub, Slack, AWS, OpenAI and Google credential-pattern hits"
-      - "Current-tree PDF audit: all 17 historically tracked PDF paths are now absent from the index and globally ignored; local copies remain ignored to avoid data loss. Payment QR and PLC customs tests generate synthetic PDFs at runtime; affected tests and full suite pass. `git ls-files -- '*.pdf'` is empty. Read-only audit of origin/main at f36753dc confirmed 17 reachable historical PDF blobs: six personal invoice PDFs from commits 8252d931/002514df plus eleven other music/test/resource PDFs. No blob content was printed or changed. AGENTS.md forbids force-push/history rewrite, so T09 documents the remaining historical exposure and makes no erasure claim"
+      - "Current-tree PDF audit: all 17 historically tracked PDF paths are now absent from the index and globally ignored; local copies remain ignored to avoid data loss. Payment QR and PLC customs tests generate synthetic PDFs at runtime; affected tests and full suite pass. `git ls-files -- '*.pdf'` is empty. Read-only audit at current origin/main d412a3c1 confirmed 17 reachable historical PDF paths: six under docs/invoices and eleven other music/test/resource PDFs. No PDF contents were printed or changed. AGENTS.md forbids force-push/history rewrite, so T09 records the remaining historical exposure and makes no erasure claim"
       - "Historical origin/main path audit found only .env.example among env/cache/profile/log/database-like names; no named MSAL/token cache, browser profile, local database or log paths"
       - "Read-only credential-pattern scan covered 5741 historical text blobs: zero private-key, GitHub, Slack, AWS or Google key patterns. Forty-two broad sk- pattern matches were checked in context and all 42 occur in .mp3 song-filename examples; pattern scan is documented as bounded, not exhaustive"
       - "T08 records the pending local mailbox/sender-domain clarification as blocked_external"
+      - "Revalidated on origin/main d412a3c1 on 2026-11-15: full suite 2446 passed, 7 skipped, 0 failed in 231.73s; Ruff, TASK_QUEUE/PROVIDER_REGISTRY YAML parsing and git diff --check pass. The full-suite warning is the existing Starlette/httpx TestClient deprecation"
     deliverables:
       - "Unit, contract, UI and integration test report"
       - "Ruff, git diff --check, YAML validation and secret scan"
