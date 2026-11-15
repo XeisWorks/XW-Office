@@ -422,7 +422,7 @@ tasks:
       - "missing real invoice in selected period"
       - "missing API entitlement"
       - "user login, 2FA or Entra consent not yet completed"
-      - "user has not yet identified the selected provider mailbox and confirmed sender domain(s); enter them only in the local dialog, then run Graph mailbox test and visible consent/login"
+      - "user has not yet identified the inbound provider-invoice mailbox and own/shared type; enter only those in the local dialog to run the access probe. Confirmed sender domain(s) remain required before saving/enabling the route and collecting invoices; complete visible consent/login only in the local UI"
 
   - id: "T09"
     title: "MVP-Sicherheits-, Regressions- und Releaseprüfung"
