@@ -1,7 +1,11 @@
 """Local paths and redaction helpers for invoice collection."""
 from __future__ import annotations
 
+import csv
+import io
+import os
 import re
+import subprocess
 from pathlib import Path
 
 from xw_office.core.app_paths import invoice_collection_dir, local_app_data_root
@@ -20,7 +24,65 @@ def ensure_invoice_collection_dirs() -> dict[str, Path]:
     }
     for path in directories.values():
         path.mkdir(parents=True, exist_ok=True)
+    _apply_windows_private_acl(root)
     return directories
+
+
+_WINDOWS_SID_RE = re.compile(r"S-1-\d+(?:-\d+)+\Z")
+
+
+def _apply_windows_private_acl(path: Path) -> None:
+    """Restrict local collector state to the current user, SYSTEM and administrators."""
+    if os.name != "nt":
+        return
+    sid = _current_windows_user_sid()
+    command = [
+        "icacls.exe",
+        str(path),
+        "/inheritance:r",
+        "/grant:r",
+        f"*{sid}:(OI)(CI)F",
+        "*S-1-5-18:(OI)(CI)F",
+        "*S-1-5-32-544:(OI)(CI)F",
+        "/T",
+        "/C",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            check=False,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError:
+        raise RuntimeError("Could not secure invoice collection directory permissions") from None
+    if result.returncode != 0:
+        raise RuntimeError("Could not secure invoice collection directory permissions")
+
+
+def _current_windows_user_sid() -> str:
+    """Read the current SID from whoami CSV output without retaining the account name."""
+    try:
+        result = subprocess.run(
+            ["whoami.exe", "/user", "/fo", "csv", "/nh"],
+            capture_output=True,
+            check=False,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError:
+        raise RuntimeError("Could not determine current Windows user permissions") from None
+    if result.returncode != 0:
+        raise RuntimeError("Could not determine current Windows user permissions")
+    for row in csv.reader(io.StringIO(result.stdout.lstrip("\ufeff"))):
+        for value in row:
+            sid = value.strip()
+            if _WINDOWS_SID_RE.fullmatch(sid):
+                return sid
+    raise RuntimeError("Could not determine current Windows user permissions")
 
 
 _AUTH_RE = re.compile(r"(?i)\b(authorization\s*:\s*)bearer\s+[^\s,;\"']+")

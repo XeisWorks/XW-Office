@@ -52,6 +52,7 @@ from xw_office.services.invoice_collection.registry import (
     RouteManifest,
 )
 from xw_office.services.invoice_collection.review import InvoiceReviewService
+from xw_office.services.invoice_collection import security as invoice_security
 from xw_office.services.invoice_collection.security import redact_sensitive_text
 from xw_office.services.invoice_collection.sinks.onedrive_local import OneDriveLocalSink
 from xw_office.services.invoice_collection.sinks import onedrive_local as sink_module
@@ -220,6 +221,50 @@ def test_redaction_never_returns_secret_value() -> None:
     assert "abc123" not in message
     assert "secret-value" not in message
     assert "redacted" in message
+
+
+def test_windows_local_state_acl_is_private_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> object:
+        calls.append(command)
+        result = type("Result", (), {})()
+        if command[0] == "whoami.exe":
+            result.returncode = 0
+            result.stdout = '"test-user","S-1-5-21-1-2-3-1001"'
+        else:
+            result.returncode = 0
+            result.stdout = ""
+        return result
+
+    monkeypatch.setattr(invoice_security.os, "name", "nt")
+    monkeypatch.setattr(invoice_security.subprocess, "run", fake_run)
+    invoice_security._apply_windows_private_acl(tmp_path)
+
+    assert calls[0] == ["whoami.exe", "/user", "/fo", "csv", "/nh"]
+    assert calls[1][0:2] == ["icacls.exe", str(tmp_path)]
+    assert "/inheritance:r" in calls[1]
+    assert "*S-1-5-21-1-2-3-1001:(OI)(CI)F" in calls[1]
+    assert "*S-1-5-18:(OI)(CI)F" in calls[1]
+    assert "*S-1-5-32-544:(OI)(CI)F" in calls[1]
+    assert "/T" in calls[1] and "/C" in calls[1]
+
+    def failed_icacls(command: list[str], **_kwargs: object) -> object:
+        result = type("Result", (), {})()
+        if command[0] == "whoami.exe":
+            result.returncode = 0
+            result.stdout = '"test-user","S-1-5-21-1-2-3-1001"'
+        else:
+            result.returncode = 5
+            result.stdout = "private path"
+        return result
+
+    monkeypatch.setattr(invoice_security.subprocess, "run", failed_icacls)
+    with pytest.raises(RuntimeError, match="Could not secure") as error:
+        invoice_security._apply_windows_private_acl(tmp_path)
+    assert "private path" not in str(error.value)
 
 
 def test_global_log_filter_redacts_bearer_token() -> None:

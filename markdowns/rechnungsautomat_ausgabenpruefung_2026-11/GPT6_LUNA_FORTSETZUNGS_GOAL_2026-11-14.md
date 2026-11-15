@@ -120,7 +120,7 @@ Repo-Planungs-/Commit-Historie bestaetigt das Vorhaben.
 
 ## Sicherheitsnachtrag 15.11.2026
 
-Alle 17 zuvor getrackten PDFs sind aus dem aktuellen Git-Index entfernt und durch repo-weites `*.pdf` in `.gitignore` fuer kuenftige Commits ausgeschlossen. Lokale Kopien bleiben zur Vermeidung von Datenverlust vorhanden und ignoriert. Payment-QR- und PLC-Zollformular-Tests erzeugen synthetische PDFs zur Laufzeit; Vollsuite: 2.441 passed, 7 skipped. `git ls-files -- *.pdf` ist leer. Alte Git-Objekte enthalten die entfernten Dateien weiterhin; `AGENTS.md` verbietet Force-Push und History-Rewrite. T09 bleibt offen, bis die historische Blob-Aufbewahrung bewertet ist; historische Remote-Objekte sind nicht geloescht.
+Die lokale Collector-Datenstruktur unter `%LOCALAPPDATA%` wird auf Windows rekursiv mit `icacls` eingeschraenkt (aktueller Benutzer, SYSTEM, Administratoren), und Initialisierung bricht bei ACL-Fehlern fail-closed ab. Der ACL-Test sowie eine isolierte Windows-Tempverzeichnispruefung sind bestanden. Alle 17 zuvor getrackten PDFs sind aus dem aktuellen Git-Index entfernt und durch repo-weites `*.pdf` in `.gitignore` fuer kuenftige Commits ausgeschlossen. Lokale Kopien bleiben zur Vermeidung von Datenverlust vorhanden und ignoriert. Payment-QR- und PLC-Zollformular-Tests erzeugen synthetische PDFs zur Laufzeit; Vollsuite: 2.442 passed, 7 skipped. `git ls-files -- *.pdf` ist leer. Alte Git-Objekte enthalten die entfernten Dateien weiterhin; `AGENTS.md` verbietet Force-Push und History-Rewrite. T09 bleibt offen, bis die historische Blob-Aufbewahrung bewertet ist; historische Remote-Objekte sind nicht geloescht.
 
 ## Aktueller persoenlicher Schritt
 

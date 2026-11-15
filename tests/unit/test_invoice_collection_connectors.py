@@ -121,6 +121,9 @@ def test_graph_mail_connector_fails_closed_without_verified_sender_domains(
 def test_graph_mail_factory_wires_local_connection_settings_and_selected_period(
     monkeypatch, tmp_path: Path
 ) -> None:
+    from xw_office.services.invoice_collection import security as invoice_security
+
+    monkeypatch.setattr(invoice_security, "_apply_windows_private_acl", lambda _path: None)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     monkeypatch.setenv("MS_GRAPH_CLIENT_ID", "test-public-client-id")
     monkeypatch.setenv("MS_GRAPH_TENANT_ID", "test-tenant-id")

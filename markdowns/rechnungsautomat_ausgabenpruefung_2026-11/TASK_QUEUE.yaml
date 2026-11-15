@@ -49,7 +49,8 @@ current_status:
     - "selected OneDrive target folder can be opened from the dialog without implying cloud sync"
     - "selected tenant _needs_review folder can be opened only within the selected target; explicit review resolution validates, no-clobber publishes by invoice date, updates schema-5 metadata, then removes the review copy"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
-    - "latest full repository suite after all-PDF index cleanup and synthetic invoice/PLC fixtures: 2441 passed, 7 skipped, 0 failed; repo Ruff, Queue-YAML, changed-module MyPy, diff and added-diff secret checks pass"
+    - "invoice collection LOCALAPPDATA tree disables inherited ACLs recursively and grants full access only to current user, SYSTEM and Administrators; ACL failures fail closed"
+    - "latest full repository suite after all-PDF index cleanup, synthetic invoice/PLC fixtures and Windows ACL hardening: 2442 passed, 7 skipped, 0 failed; repo Ruff, Queue-YAML, changed-module MyPy, diff and added-diff secret checks pass"
     - "targeted MyPy for Mollie connector, registry and dialog passes with foreign imports skipped; broad current-environment MyPy is blocked by absent optional msal_extensions/Playwright and a NumPy stub/Python-version mismatch; 30-file collector/dialog MyPy passed in the prior recorded environment"
     - "DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values (prior recorded checks)"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
@@ -161,6 +162,7 @@ tasks:
       - "tests/unit/test_invoice_collection_foundations.py::test_external_id_with_different_hash_is_a_conflict (hash-only lookup; no raw ID stored)"
       - "tests/unit/test_invoice_collection_foundations.py::test_service_resumes_cancelled_run_with_same_context_without_persisting_target_or_mailbox"
       - "tests/unit/test_invoice_collection_foundations.py::test_collection_isolates_invalid_saved_connection_and_keeps_valid_accounts_running"
+      - "tests/unit/test_invoice_collection_foundations.py::test_windows_local_state_acl_is_private_and_fails_closed; isolated Windows temp-directory ACL verified with icacls and PowerShell SID inspection"
     deliverables:
       - "Tested LOCALAPPDATA path helper for profiles, auth, journal, tmp and quarantine"
       - "Gitignore hardening as defense in depth"
@@ -398,7 +400,7 @@ tasks:
     status: "in_progress"
     depends_on: ["T05", "T06", "T07"]
     evidence:
-      - "python -m pytest -q: 2441 passed, 7 skipped, 0 failed (after invoice-PDF index cleanup and synthetic QR tests; one external Starlette/httpx deprecation warning)"
+      - "python -m pytest -q: 2442 passed, 7 skipped, 0 failed (after all-PDF index cleanup, synthetic fixtures and ACL hardening; one external Starlette/httpx deprecation warning)"
       - "Invoice collector foundation/UI slice: 94 passed, including safe run-history list, period reuse and journal injection; retry eligibility includes AUTH_REQUIRED and TRANSIENT_NETWORK, excludes OUT_OF_PERIOD, POLICY_BLOCKED, UNSUPPORTED_ACCOUNT and CONTENT_CONFLICT"
       - "Auth-status correction: 45 invoice foundations tests and 68 foundations/UI tests passed; full suite after invoice-PDF cleanup is 2441 passed, 7 skipped; all-active-routes-auth case persists WAITING_FOR_USER at route and run level"
       - "Payment QR and PLC customs tests no longer read repository PDFs; synthetic invoice/EPC and customs documents are generated per test"
