@@ -2474,6 +2474,104 @@ def test_last_run_print_and_unreleased_panels_restore_after_restart(qtbot: objec
     assert "Marsch für Anna -> Anna Versand [20910]" in restarted._unreleased_text.toPlainText()  # noqa: SLF001
 
 
+def test_legacy_start_history_rebuilds_products_from_saved_invoice_ids(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    monkeypatch.setattr(
+        invoice_service,
+        "load_invoice_summary_by_id",
+        lambda invoice_id: InvoiceSummary(
+            id=invoice_id, invoiceDate="2026-11-15", sumGross="25",
+            contact_name=f"Kunde {invoice_id}",
+        ),
+        raising=False,
+    )
+
+    def resolve(summaries: list[InvoiceSummary], **_kwargs: object) -> OpenInvoiceOverview:
+        invoice_id = summaries[0].id
+        return OpenInvoiceOverview(
+            key=invoice_id, total=1, with_ref=1, physical=1, digital=0,
+            unknown=0, with_note=0, plc=0, complete=True,
+            print_products=[PrintProductAggregate(
+                sku=f"SKU-{invoice_id}", title=f"Produkt {invoice_id}",
+                description="", quantity=1,
+            )],
+        )
+
+    monkeypatch.setattr("xw_office.ui.modules.rechnungen.view.resolve_open_invoice_overview", resolve)
+    legacy = {
+        "schema_version": 2,
+        "runs": [
+            {"invoice_print_ids": ["1"], "print_products": [{"title": "Falsches Produkt"}]},
+            {"invoice_print_ids": ["2"], "print_products": [{"title": "Falsches Produkt"}]},
+        ],
+    }
+    repaired = RechnungenView._repair_legacy_run_history(  # noqa: SLF001
+        legacy, invoice_service, container.resolve(WixOrdersClient)
+    )
+    assert [run["print_products"][0]["sku"] for run in repaired["runs"]] == [
+        "SKU-1", "SKU-2",
+    ]
+    assert [run["customers"][0]["name"] for run in repaired["runs"]] == [
+        "Kunde 1", "Kunde 2",
+    ]
+    assert repaired["_legacy_repaired"] is True
+
+
+def test_start_history_keeps_five_exact_runs_with_customers(qtbot: object) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    view._session_print_products = [  # noqa: SLF001
+        PrintProductAggregate(sku="STALE", title="Fremder Lauf", description="", quantity=99)
+    ]
+    for number in range(1, 7):
+        product = PrintProductAggregate(
+            sku=f"SKU-{number}", title=f"Produkt {number}", description="", quantity=number
+        )
+        overview = OpenInvoiceOverview(
+            key=f"run-{number}", total=1, with_ref=1, physical=1, digital=0,
+            unknown=0, with_note=0, plc=0, complete=True, print_products=[product],
+        )
+        summary = InvoiceSummary(
+            id=str(number), invoiceDate="2026-11-15", sumGross=str(number * 10),
+            contact_name=f"Kunde {number}",
+        )
+        view.mark_print_products_last_run(
+            run_overview=overview, run_summaries=[summary], invoice_print_ids=[str(number)]
+        )
+
+    assert view._print_products_tabs is not None  # noqa: SLF001
+    assert [view._print_products_tabs.tabText(index) for index in range(6)] == [  # noqa: SLF001
+        "AKTUELL", "LAST RUN", "RUN −2", "RUN −3", "RUN −4", "RUN −5",
+    ]
+    for tab, number in enumerate(range(6, 1, -1), start=1):
+        view._print_products_tabs.setCurrentIndex(tab)  # noqa: SLF001
+        assert [item.sku for item in view._print_run_history[tab - 1].print_products] == [  # noqa: SLF001
+            f"SKU-{number}"
+        ]
+        assert f"Kunde {number}" in view._run_customers_text.toPlainText()  # noqa: SLF001
+        assert f"{number * 10},00" in view._run_customers_text.toPlainText()  # noqa: SLF001
+
+    qtbot.waitUntil(lambda: len(invoice_service.last_start_overview.get("runs", [])) == 5)
+    assert invoice_service.last_start_overview["runs"][0]["customers"][0]["name"] == "Kunde 6"
+    restarted = RechnungenView(container)
+    qtbot.addWidget(restarted)
+    restarted._restore_last_start_overview()  # noqa: SLF001
+    qtbot.waitUntil(lambda: len(restarted._print_run_history) == 5)  # noqa: SLF001
+    assert [run.customers[0]["name"] for run in restarted._print_run_history] == [  # noqa: SLF001
+        f"Kunde {number}" for number in range(6, 1, -1)
+    ]
+    assert [run.print_products[0].sku for run in restarted._print_run_history] == [  # noqa: SLF001
+        f"SKU-{number}" for number in range(6, 1, -1)
+    ]
+    qtbot.waitUntil(
+        lambda: view._print_history_worker is None  # noqa: SLF001
+        and restarted._print_history_worker is None  # noqa: SLF001
+    )
+
+
 def test_start_history_settings_write_runs_off_ui_thread_and_keeps_latest_run(
     qtbot: object,
     monkeypatch: MonkeyPatch,

@@ -794,23 +794,29 @@ class InvoiceProcessingService:
                 buyer_note_actions=buyer_note_actions,
             )
             result["processed"] = int(cast(int, result["processed"])) + int(
-                resume_result["processed"]
+                cast(int, resume_result["processed"])
             )
             result["failures"] = int(cast(int, result["failures"])) + int(
-                resume_result["failures"]
+                cast(int, resume_result["failures"])
             )
             result["successful"] = int(cast(int, result["successful"])) + int(
-                resume_result["successful"]
+                cast(int, resume_result["successful"])
             )
             result["aborted"] = bool(result["aborted"]) or bool(resume_result["aborted"])
-            result["resumed"] = int(resume_result["processed"])
-            result["resume_failures"] = int(resume_result["failures"])
+            result["resumed"] = int(cast(int, resume_result["processed"]))
+            result["resume_failures"] = int(cast(int, resume_result["failures"]))
+            result["run_summaries"] = [
+                *cast(list[InvoiceSummary], resume_result.get("run_summaries", [])),
+                *cast(list[InvoiceSummary], result.get("run_summaries", [])),
+            ]
             return result
         updates: dict[str, FulfillmentFlags] = {}
         processed = 0
+        run_summaries: list[InvoiceSummary] = []
         failures = 0
         successful = 0
         skipped = 0
+        skipped_invoice_ids: list[str] = []
         aborted = False
         pending_manual_license_ids: list[str] = []
         invoice_print_ids: list[str] = []
@@ -823,12 +829,15 @@ class InvoiceProcessingService:
                 break
             processed += 1
             summary = self._resolve_current_start_summary(summary)
+            run_summaries.append(summary)
             if self.get_start_hold(str(summary.id)) is not None:
                 skipped += 1
+                skipped_invoice_ids.append(str(summary.id))
                 continue
             note_action = (buyer_note_actions or {}).get(str(summary.id))
             if note_action is not None and note_action[1].action == "skip":
                 skipped += 1
+                skipped_invoice_ids.append(str(summary.id))
                 continue
             label = summary.invoice_number or summary.order_reference or summary.id
             flags = self.read_fulfillment_flags(summary.id)
@@ -938,9 +947,11 @@ class InvoiceProcessingService:
         )
         return {
             "processed": processed,
+            "run_summaries": run_summaries,
             "failures": failures,
             "successful": successful,
             "skipped": skipped,
+            "skipped_invoice_ids": skipped_invoice_ids,
             "full_mode": full_mode,
             "print_products": bool(print_products),
             "aborted": aborted,
@@ -1295,9 +1306,13 @@ class InvoiceProcessingService:
         )
         return {
             "processed": processed,
+            "run_summaries": [
+                summary for summary in summaries if str(summary.id) in processed_ids
+            ],
             "failures": failures,
             "successful": successful,
             "skipped": len(skipped_ids),
+            "skipped_invoice_ids": sorted(skipped_ids),
             "full_mode": True,
             "print_products": bool(print_products),
             "aborted": aborted,
@@ -2301,7 +2316,7 @@ class InvoiceProcessingService:
         should_abort: Callable[[], bool] | None,
         progress_callback: Callable[[str], None] | None,
         mail_recipient_override: str | None,
-    ) -> dict[str, int | bool]:
+    ) -> dict[str, object]:
         """Resume recent finalized invoices from the fulfillment journal.
 
         START normally selects sevDesk drafts only. Once ``sendBy`` succeeds,
@@ -2362,6 +2377,7 @@ class InvoiceProcessingService:
             return {"processed": 0, "failures": 0, "successful": 0, "aborted": False}
 
         processed = 0
+        processed_summaries: list[InvoiceSummary] = []
         failures = 0
         successful = 0
         aborted = False
@@ -2437,6 +2453,7 @@ class InvoiceProcessingService:
             flags = states[str(summary.id)]
             label = summary.invoice_number or summary.order_reference or summary.id
             processed += 1
+            processed_summaries.append(summary)
             if delivery_kind == "digital":
                 logger.info("START resume digital invoice=%s", summary.id)
                 post_tasks.append(_StartPostTask(summary=summary, flags=flags, digital_only=True))
@@ -2584,6 +2601,7 @@ class InvoiceProcessingService:
         )
         return {
             "processed": processed,
+            "run_summaries": processed_summaries,
             "failures": failures,
             "successful": successful,
             "aborted": aborted,

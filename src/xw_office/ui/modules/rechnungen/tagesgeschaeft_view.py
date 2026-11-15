@@ -62,6 +62,11 @@ from xw_office.ui.modules.rechnungen.customer_aftercare_review_dialog import (
 )
 from xw_office.services.transfers.service import OffeneUeberweisungenService
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
+from xw_office.services.wix.client import WixOrdersClient
+from xw_office.ui.modules.rechnungen.open_invoice_overview import (
+    OpenInvoiceOverview,
+    resolve_open_invoice_overview,
+)
 from xw_office.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 from xw_office.ui.modules.rechnungen.reprint_dialog import ReprintPreviewDialog
 from xw_office.ui.modules.rechnungen.buyer_note_review_dialog import BuyerNoteReviewDialog
@@ -1681,8 +1686,28 @@ class TagesgeschaeftView(QWidget):
                                     *inventory_report.warnings,
                                 ],
                             )
+            skipped_ids = set(_string_items(batch_result.get("skipped_invoice_ids", [])))
+            raw_run_summaries = batch_result.get("run_summaries", [])
+            run_summaries = [
+                summary for summary in (raw_run_summaries if isinstance(raw_run_summaries, list) else [])
+                if isinstance(summary, InvoiceSummary) and str(summary.id) not in skipped_ids
+            ]
+            run_overview: OpenInvoiceOverview | None = None
+            if run_summaries:
+                try:
+                    run_overview = resolve_open_invoice_overview(
+                        run_summaries,
+                        seq=0,
+                        invoice_service=invoice_service,
+                        wix_client=self._container.resolve(WixOrdersClient),
+                        sku_filter=invoice_service.is_flagged_sku,
+                    )
+                except Exception:
+                    logger.exception("START run overview could not be resolved")
             return {
                 "batch": batch_result,
+                "run_overview": run_overview,
+                "run_summaries": run_summaries,
                 "inventory_report": inventory_report,
                 "inventory_warning": inventory_warning,
                 "product_apply": apply_result,
@@ -1787,6 +1812,8 @@ class TagesgeschaeftView(QWidget):
                     mode_label=mode_label,
                     invoice_print_ids=_string_items(batch.get("invoice_print_ids", [])),
                     label_print_ids=_string_items(batch.get("label_print_ids", [])),
+                    run_overview=result.get("run_overview"),
+                    run_summaries=result.get("run_summaries"),
                 )
             self._rechnungen_view._reload_first_page(preserve_print_tab=True)
         self._refresh_badges()

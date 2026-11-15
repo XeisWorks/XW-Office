@@ -76,6 +76,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
 from xw_office.core.performance_metrics import performance_metrics
 from xw_office.core.signals import AppSignals
@@ -186,6 +187,8 @@ class _PrintRunSnapshot:
     print_products: list[PrintProductAggregate]
     buyer_notes: list[BuyerNote]
     unreleased_assignments: list[UnreleasedAssignment]
+    customers: list[dict[str, str]]
+    products_complete: bool
     saved_at: str
     invoice_print_ids: list[str]
     label_print_ids: list[str]
@@ -1748,6 +1751,14 @@ class RechnungenView(QWidget):
         self._open_products_text.setReadOnly(True)
         self._open_products_text.hide()
 
+        self._gb_run_customers = QGroupBox("KUNDEN (aktuelle Seite)")
+        run_customers_layout = QVBoxLayout(self._gb_run_customers)
+        run_customers_layout.setContentsMargins(7, 5, 7, 5)
+        self._run_customers_text = QTextBrowser()
+        self._run_customers_text.setReadOnly(True)
+        self._run_customers_text.setFixedHeight(128)
+        run_customers_layout.addWidget(self._run_customers_text)
+
         self._gb_unreleased = QGroupBox("UNRELEASED")
         unreleased_layout = QVBoxLayout(self._gb_unreleased)
         unreleased_layout.setContentsMargins(10, 8, 10, 10)
@@ -1797,6 +1808,7 @@ class RechnungenView(QWidget):
         current_layout.setContentsMargins(0, 0, 0, 0)
         current_layout.setSpacing(10)
         current_layout.addWidget(self._gb_open_products)
+        current_layout.addWidget(self._gb_run_customers)
         current_layout.addWidget(self._gb_buyer_notes)
         current_layout.addWidget(self._gb_unreleased)
         self._print_product_tab_pages = [current_page]
@@ -3242,6 +3254,8 @@ class RechnungenView(QWidget):
 
     def _refresh_open_invoice_overview(self) -> None:
         open_rows = [s for s in self._summaries if s.status_code == 100]
+        if self._active_print_history_index is None:
+            self._render_run_customers()
         overview = overview_from_visible_summaries(
             open_rows,
             digital_cache=self._wix_digital_cache,
@@ -3578,6 +3592,7 @@ class RechnungenView(QWidget):
         self._merge_session_buyer_notes(overview.buyer_notes)
         self._merge_session_unreleased(overview.unreleased_assignments)
         self._render_open_print_products(self._print_product_display_overview(overview))
+        self._render_run_customers()
         self._render_buyer_notes(overview)
         self._render_unreleased_assignments(overview)
 
@@ -3674,12 +3689,33 @@ class RechnungenView(QWidget):
         mode_label: str = "START",
         invoice_print_ids: list[str] | None = None,
         label_print_ids: list[str] | None = None,
+        run_overview: object = None,
+        run_summaries: object = None,
     ) -> None:
         """Freeze, rotate and persist the PRINT/UNRELEASED dashboard after START."""
+        exact_run = isinstance(run_summaries, list)
+        overview = run_overview if isinstance(run_overview, OpenInvoiceOverview) else None
+        summaries = (
+            [row for row in run_summaries if isinstance(row, InvoiceSummary)]
+            if isinstance(run_summaries, list) else []
+        )
+        customers = [
+            {
+                "date": row.formatted_date_short,
+                "name": row.contact_name or "—",
+                "gross": row.formatted_brutto,
+            }
+            for row in dict((str(row.id), row) for row in summaries).values()
+        ]
+        products = list(overview.print_products) if overview else []
+        notes = list(overview.buyer_notes) if overview else []
+        assignments = list(overview.unreleased_assignments) if overview else []
         snapshot = _PrintRunSnapshot(
-            print_products=list(self._session_print_products),
-            buyer_notes=list(self._session_buyer_notes),
-            unreleased_assignments=list(self._session_unreleased),
+            print_products=products if exact_run else list(self._session_print_products),
+            buyer_notes=notes if exact_run else list(self._session_buyer_notes),
+            unreleased_assignments=assignments if exact_run else list(self._session_unreleased),
+            customers=customers,
+            products_complete=not exact_run or bool(overview and overview.complete),
             saved_at=datetime.now().astimezone().isoformat(timespec="seconds"),
             invoice_print_ids=list(dict.fromkeys(invoice_print_ids or [])),
             label_print_ids=list(dict.fromkeys(label_print_ids or [])),
@@ -3689,7 +3725,7 @@ class RechnungenView(QWidget):
             selected_only=bool(selected_only),
         )
         self._print_run_history.insert(0, snapshot)
-        self._print_run_history = self._print_run_history[:3]
+        self._print_run_history = self._print_run_history[:5]
         self._last_run_print_products = list(snapshot.print_products)
         self._last_run_buyer_notes = list(snapshot.buyer_notes)
         self._last_run_unreleased = list(snapshot.unreleased_assignments)
@@ -3746,7 +3782,12 @@ class RechnungenView(QWidget):
             page = self._print_product_tab_pages[index]
             layout = page.layout()
             if layout is not None and self._gb_open_products.parentWidget() is not page:
-                for panel in (self._gb_open_products, self._gb_buyer_notes, self._gb_unreleased):
+                for panel in (
+                    self._gb_open_products,
+                    self._gb_run_customers,
+                    self._gb_buyer_notes,
+                    self._gb_unreleased,
+                ):
                     panel.setParent(page)
                     layout.addWidget(panel)
         self._active_print_history_index = index - 1 if index > 0 else None
@@ -3756,6 +3797,7 @@ class RechnungenView(QWidget):
     def _render_active_print_tab(self) -> None:
         if self._active_print_history_index is None:
             self._gb_open_products.setTitle("PRINT-PRODUKTE")
+            self._gb_run_customers.setTitle("KUNDEN (aktuelle Seite)")
             self._gb_buyer_notes.setTitle("KÄUFER-NOTIZEN")
             self._gb_unreleased.setTitle("UNRELEASED")
             overview = OpenInvoiceOverview(
@@ -3776,6 +3818,7 @@ class RechnungenView(QWidget):
             snapshot = self._print_run_history[self._active_print_history_index]
             title = "last run" if self._active_print_history_index == 0 else f"run −{self._active_print_history_index + 1}"
             self._gb_open_products.setTitle(f"PRINT PRODUKTE ({title})")
+            self._gb_run_customers.setTitle(f"KUNDEN ({title})")
             self._gb_buyer_notes.setTitle(f"KÄUFER-NOTIZEN ({title})")
             self._gb_unreleased.setTitle(f"UNRELEASED ({title})")
             overview = OpenInvoiceOverview(
@@ -3793,9 +3836,42 @@ class RechnungenView(QWidget):
                 unreleased_assignments=list(snapshot.unreleased_assignments),
             )
         self._render_open_print_products(overview)
+        self._render_run_customers()
         self._render_buyer_notes(overview)
         self._render_unreleased_assignments(overview)
         self._update_print_run_output_buttons()
+
+    def _render_run_customers(self) -> None:
+        if self._active_print_history_index is None:
+            customers = [
+                {
+                    "date": row.formatted_date_short,
+                    "name": row.contact_name or "—",
+                    "gross": row.formatted_brutto,
+                }
+                for row in self._summaries if row.status_code == 100
+            ]
+            empty = "Keine offenen Rechnungen auf dieser Seite."
+        else:
+            customers = self._print_run_history[self._active_print_history_index].customers
+            empty = "Für diesen Lauf wurden keine Kundendaten gespeichert."
+        if not customers:
+            self._run_customers_text.setPlainText(empty)
+            return
+        rows = "".join(
+            "<tr>"
+            f"<td>{html.escape(row['date'])}</td>"
+            f"<td>{html.escape(row['name'])}</td>"
+            f"<td align='right'>{html.escape(row['gross'])}</td>"
+            "</tr>"
+            for row in customers
+        )
+        self._run_customers_text.setHtml(
+            "<table width='100%' cellspacing='2' cellpadding='1'>"
+            "<tr><th align='left'>Datum</th><th align='left'>Name</th>"
+            "<th align='right'>Brutto</th></tr>"
+            f"{rows}</table>"
+        )
 
     def _merge_session_print_products(self, products: list[PrintProductAggregate]) -> None:
         """Append new products and retain the largest quantity seen this session."""
@@ -3891,6 +3967,8 @@ class RechnungenView(QWidget):
             "selected_only": snapshot.selected_only,
             "invoice_print_ids": list(snapshot.invoice_print_ids),
             "label_print_ids": list(snapshot.label_print_ids),
+            "customers": list(snapshot.customers),
+            "products_complete": snapshot.products_complete,
             "print_products": [
                 {
                     "sku": item.sku,
@@ -3921,9 +3999,103 @@ class RechnungenView(QWidget):
             ],
         }
 
+    @staticmethod
+    def _repair_legacy_run_history(
+        payload: dict[str, object],
+        service: InvoiceProcessingService,
+        wix_client: WixOrdersClient,
+    ) -> dict[str, object]:
+        """Recover exact products from the invoice IDs saved by older START runs."""
+        if _int_or_default(payload.get("schema_version"), 0) >= 3:
+            return payload
+        raw_runs = payload.get("runs")
+        if not isinstance(raw_runs, list):
+            raw_runs = [payload]
+        repaired: list[object] = []
+        changed = False
+        retry_needed = False
+        for raw in raw_runs:
+            if not isinstance(raw, dict):
+                repaired.append(raw)
+                continue
+            run = dict(raw)
+            raw_ids = _list_payload(run.get("invoice_print_ids")) or _list_payload(
+                run.get("label_print_ids")
+            )
+            ids = list(dict.fromkeys(
+                str(item).strip() for item in raw_ids
+                if str(item).strip()
+            ))
+            if not ids:
+                repaired.append(run)
+                continue
+            summaries: list[InvoiceSummary] = []
+            for invoice_id in ids:
+                try:
+                    summaries.append(service.load_invoice_summary_by_id(invoice_id))
+                except Exception as exc:  # noqa: BLE001 - preserve every other recoverable invoice.
+                    logger.warning("Historical START invoice %s could not be loaded: %s", invoice_id, exc)
+            overview: OpenInvoiceOverview | None = None
+            if summaries:
+                try:
+                    overview = resolve_open_invoice_overview(
+                        summaries,
+                        seq=0,
+                        invoice_service=service,
+                        wix_client=wix_client,
+                        sku_filter=service.is_flagged_sku,
+                    )
+                except Exception:
+                    logger.exception("Historical START products could not be reconstructed")
+            if overview is None or not overview.complete:
+                retry_needed = True
+                repaired.append(run)
+                continue
+            run["print_products"] = [
+                {
+                    "sku": item.sku, "title": item.title,
+                    "description": item.description, "quantity": item.quantity,
+                    "category_label": item.category_label,
+                }
+                for item in overview.print_products
+            ]
+            run["buyer_notes"] = [
+                {
+                    "customer_name": item.customer_name, "note": item.note,
+                    "order_reference": item.order_reference, "source": item.source,
+                    "source_label": item.source_label,
+                }
+                for item in overview.buyer_notes
+            ]
+            run["unreleased_assignments"] = [
+                {
+                    "title": item.title, "shipping_name": item.shipping_name,
+                    "order_reference": item.order_reference,
+                }
+                for item in overview.unreleased_assignments
+            ]
+            run["customers"] = [
+                {
+                    "date": summary.formatted_date_short,
+                    "name": summary.contact_name or "—",
+                    "gross": summary.formatted_brutto,
+                }
+                for summary in summaries
+            ]
+            run["products_complete"] = len(summaries) == len(ids)
+            if not run["products_complete"]:
+                retry_needed = True
+            repaired.append(run)
+            changed = True
+        if not changed:
+            return payload
+        if retry_needed:
+            return {**payload, "runs": repaired}
+        return {**payload, "runs": repaired, "schema_version": 3, "_legacy_repaired": True}
+
     def _persist_print_run_history(self) -> None:
         payload = {
-            "schema_version": 2,
+            "schema_version": 3,
             "saved_at": self._print_run_history[0].saved_at if self._print_run_history else "",
             "runs": [self._snapshot_payload(snapshot) for snapshot in self._print_run_history],
         }
@@ -3972,7 +4144,12 @@ class RechnungenView(QWidget):
                 service: InvoiceProcessingService = container.resolve(InvoiceProcessingService)
                 reader = getattr(service, "read_last_start_overview", None)
                 result = reader() if callable(reader) else {}
-                return {} if result is None else result
+                if not isinstance(result, dict):
+                    return {}
+                if _int_or_default(result.get("schema_version"), 0) >= 3:
+                    return result
+                wix_client: WixOrdersClient = container.resolve(WixOrdersClient)
+                return self._repair_legacy_run_history(result, service, wix_client)
 
             worker = BackgroundWorker(read)
             self._print_history_worker = worker
@@ -3991,7 +4168,7 @@ class RechnungenView(QWidget):
         if not isinstance(raw_runs, list):
             raw_runs = [payload] if str(payload.get("saved_at") or "").strip() else []
         restored: list[_PrintRunSnapshot] = []
-        for raw in raw_runs[:3]:
+        for raw in raw_runs[:5]:
             if not isinstance(raw, dict):
                 continue
             products: list[PrintProductAggregate] = []
@@ -4049,6 +4226,18 @@ class RechnungenView(QWidget):
                 print_products=products,
                 buyer_notes=buyer_notes,
                 unreleased_assignments=assignments,
+                customers=[
+                    {
+                        "date": str(row.get("date") or "").strip(),
+                        "name": str(row.get("name") or "").strip(),
+                        "gross": str(row.get("gross") or "").strip(),
+                    }
+                    for row in _list_payload(raw.get("customers")) if isinstance(row, dict)
+                ],
+                products_complete=bool(raw.get(
+                    "products_complete",
+                    _int_or_default(payload.get("schema_version"), 0) >= 3,
+                )),
                 saved_at=str(raw.get("saved_at") or ""),
                 invoice_print_ids=[
                     str(item).strip()
@@ -4075,6 +4264,8 @@ class RechnungenView(QWidget):
         self._print_products_last_run = True
         self._rebuild_print_product_tabs(select_history=True)
         self._render_active_print_tab()
+        if payload.get("_legacy_repaired"):
+            self._persist_print_run_history()
 
     def _clear_unreleased_rows(self) -> None:
         while self._unreleased_rows_layout.count():
@@ -4277,7 +4468,16 @@ class RechnungenView(QWidget):
             self._update_print_all_products_button()
             return
         if not overview.print_products:
-            self._set_open_products_message("Keine geflaggten Print-Produkte in den offenen Rechnungen gefunden.")
+            incomplete_history = (
+                self._active_print_history_index is not None
+                and not self._print_run_history[self._active_print_history_index].products_complete
+            )
+            message = (
+                "Print-Produkte dieses Laufs konnten nicht vollständig ermittelt werden."
+                if incomplete_history else
+                "Keine geflaggten Print-Produkte in den offenen Rechnungen gefunden."
+            )
+            self._set_open_products_message(message)
             self._update_print_all_products_button()
             return
         self._clear_open_print_product_rows()
@@ -4297,6 +4497,15 @@ class RechnungenView(QWidget):
             note.setStyleSheet("color: #94a3b8; font-size: 11px;")
             self._open_products_rows_layout.addWidget(note)
             plain_lines.append("Weitere Print-Produkte werden noch ermittelt.")
+        if (
+            self._active_print_history_index is not None
+            and not self._print_run_history[self._active_print_history_index].products_complete
+        ):
+            message = "Historische Produktliste ist möglicherweise unvollständig."
+            note = QLabel(message)
+            note.setStyleSheet("color: #fbbf24; font-size: 11px;")
+            self._open_products_rows_layout.addWidget(note)
+            plain_lines.append(message)
         self._open_products_rows_layout.addStretch(1)
         self._open_products_text.setPlainText("\n".join(plain_lines))
         self._update_print_all_products_button()
@@ -6393,7 +6602,9 @@ class RechnungenView(QWidget):
 
         def on_result(payload: object) -> None:
             if (
-                not isinstance(payload, _PlcArchiveLookup)
+                self._shutting_down
+                or not isValid(self._table)
+                or not isinstance(payload, _PlcArchiveLookup)
                 or payload.key != key
                 or payload.generation != self._plc_archive_generation
             ):

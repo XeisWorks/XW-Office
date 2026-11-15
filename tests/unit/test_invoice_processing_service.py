@@ -965,6 +965,7 @@ def test_start_fullflow_processes_only_requested_invoice_ids() -> None:
 
     assert result["processed"] == 1
     assert result["successful"] == 1
+    assert [row.id for row in result["run_summaries"]] == ["12"]
     assert client.last_send_document == {
         "invoice_id": "12",
         "send_type": "VPDF",
