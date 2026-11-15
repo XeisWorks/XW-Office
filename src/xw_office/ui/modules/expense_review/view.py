@@ -855,7 +855,12 @@ class ExpenseReviewView(QWidget):
         return page
 
     def _open_invoice_collector(self) -> None:
-        dialog = InvoiceCollectorDialog(tenant_id=self._tenant_key, parent=self)
+        secret_service = self._container.resolve(SecretService)
+        dialog = InvoiceCollectorDialog(
+            tenant_id=self._tenant_key,
+            graph_config_getter=secret_service.get_secret,
+            parent=self,
+        )
         dialog.exec()
 
     def _configure_manual_table(self) -> None:

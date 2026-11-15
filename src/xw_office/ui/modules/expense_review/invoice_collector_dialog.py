@@ -160,6 +160,7 @@ class InvoiceCollectorDialog(QDialog):
         connection_repository: ConnectionRepository | None = None,
         collection_service: InvoiceCollectionService | None = None,
         secret_store: SecretStore | None = None,
+        graph_config_getter: Callable[[str], str | None] | None = None,
         invoice_journal: InvoiceJournal | None = None,
     ) -> None:
         super().__init__(parent)  # type: ignore[arg-type]
@@ -171,6 +172,7 @@ class InvoiceCollectorDialog(QDialog):
         self._editing_connection: ProviderConnection | None = None
         self._saved_connections_by_id: dict[str, ProviderConnection] = {}
         self._collection_service = collection_service
+        self._graph_config_getter = graph_config_getter
         self._invoice_journal = invoice_journal
         self._fetch_worker: BackgroundWorker | None = None
         self._mail_test_worker: BackgroundWorker | None = None
@@ -594,7 +596,8 @@ class InvoiceCollectorDialog(QDialog):
         return InvoiceCollectionService(
             connections=self._connection_repository,
             factories=build_connector_factories(
-                secret_store_factory=self._secret_store_for_ui
+                secret_store_factory=self._secret_store_for_ui,
+                graph_config_getter=self._graph_config_getter,
             ),
             target_root=Path(self._folder.text()),
             journal=self._journal_for_review(),
@@ -894,7 +897,9 @@ class InvoiceCollectorDialog(QDialog):
             account_alias=self._account_alias.text().strip() or "mailbox-test",
             route_settings=(RouteSettings(route_key=route.route_key, options=options),),
         )
-        factories = build_connector_factories()
+        factories = build_connector_factories(
+            graph_config_getter=self._graph_config_getter
+        )
         try:
             connector = factories.create(str(route.connector), connection, connection.route_settings[0])
         except Exception as exc:  # noqa: BLE001 - show safe configuration failure

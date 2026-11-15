@@ -39,6 +39,7 @@ from xw_office.services.invoice_collection.security import ensure_invoice_collec
 def build_connector_factories(
     *,
     token_provider_factory: Callable[..., GraphTokenProvider] | None = None,
+    graph_config_getter: Callable[[str], str | None] | None = None,
     secret_store_factory: Callable[[], SecretStore] | None = None,
     mollie_api_factory: Callable[[str], MollieInvoiceApi] | None = None,
 ) -> ConnectorFactoryRegistry:
@@ -73,8 +74,8 @@ def build_connector_factories(
                 InvoiceErrorCode.CONFIGURATION_ERROR,
                 "Rechnungs-Postfach oder bestätigte Absenderdomains fehlen",
             )
-        client_id = os.environ.get("MS_GRAPH_CLIENT_ID", "").strip()
-        tenant_id = os.environ.get("MS_GRAPH_TENANT_ID", "").strip()
+        client_id = _graph_config_value(graph_config_getter, "MS_GRAPH_CLIENT_ID")
+        tenant_id = _graph_config_value(graph_config_getter, "MS_GRAPH_TENANT_ID")
         if not client_id or not tenant_id:
             raise InvoiceCollectionError(
                 InvoiceErrorCode.CONFIGURATION_ERROR,
@@ -139,3 +140,11 @@ def build_connector_factories(
 
     factories.register("mollie_invoices_v2", mollie_invoices)
     return factories
+
+
+def _graph_config_value(
+    getter: Callable[[str], str | None] | None,
+    key: str,
+) -> str:
+    configured = str(getter(key) or "").strip() if getter is not None else ""
+    return configured or str(os.environ.get(key) or "").strip()

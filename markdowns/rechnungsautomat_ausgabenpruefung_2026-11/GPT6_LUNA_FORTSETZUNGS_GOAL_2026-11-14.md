@@ -1,8 +1,8 @@
 # Fortsetzungs-Goal fuer GPT-6-Luna
 
-**Stand:** 15.11.2026 (Fehlerredaktion, sichere ACLs, PDF-Bereinigung, exakte Mail-Absenderfilter, eigener/Shared-Mailbox-Modus, katalogautoritative Connector-Auswahl und Vollsuite 2.447/7 dokumentiert)
+**Stand:** 15.11.2026 (Fehlerredaktion, sichere ACLs, PDF-Bereinigung, exakte Mail-Absenderfilter, eigener/Shared-Mailbox-Modus, katalogautoritative Connector-Auswahl, SecretService-Graph-Wiring und Vollsuite 2.449/7 dokumentiert)
 **Repository:** `XeisWorks/XW-Office`, Branch `main`
-**Ausgangslage:** Die technische MVP-Grundlage ist weitgehend implementiert und lokal getestet. Der erste echte Rechnungsabruf ist noch nicht verifiziert. Der Benutzer hat bestaetigt, dass Anbieter-Mailbox und Absenderdomain(s) noch geklaert werden muessen.
+**Ausgangslage:** Die technische MVP-Grundlage ist weitgehend implementiert und lokal getestet. Der erste echte Rechnungsabruf ist noch nicht verifiziert. Der Graph-Collector liest Client-ID und Tenant-ID über den vorhandenen `SecretService`; der Benutzer muss weiterhin das Postfach, in dem Lieferantenbelege eingehen, und die bestätigten Absenderdomain(en) klären. Die vom Benutzer genannten Steuer-Mail-Adressen sind im Repo Versandabsender/-empfänger und ersetzen diese Werte nicht.
 
 Fuer Bestandsaufnahme, Codebefunde und Provideruebersicht siehe:
 

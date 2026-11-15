@@ -218,6 +218,20 @@ def test_graph_mail_factory_wires_local_connection_settings_and_selected_period(
     assert connector.policy.document_type is DocumentType.EXPENSE_INVOICE
     connector.close()
 
+    existing_graph_settings = {
+        "MS_GRAPH_CLIENT_ID": "stored-public-client-id",
+        "MS_GRAPH_TENANT_ID": "stored-tenant-id",
+    }
+    stored_connector = build_connector_factories(
+        token_provider_factory=TokenProvider,
+        graph_config_getter=existing_graph_settings.get,
+    ).create("graph_mail_attachment", connection, route, period)
+    assert stored_connector.reader.token_provider.kwargs["client_id"] == "stored-public-client-id"
+    assert stored_connector.reader.token_provider.kwargs["authority"].endswith(
+        "/stored-tenant-id"
+    )
+    stored_connector.close()
+
     own_mailbox_route = RouteSettings(
         route_key="mail_pdf",
         options={
