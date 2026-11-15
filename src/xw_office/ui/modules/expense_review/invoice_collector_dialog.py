@@ -876,9 +876,9 @@ class InvoiceCollectorDialog(QDialog):
         if route is None or not route.capabilities.mailbox_probe:
             self._status.setText("Bitte zuerst eine Mailroute auswählen.")
             return
-        if not _looks_like_mailbox(mailbox) or not domains or addresses is None:
+        if not _looks_like_mailbox(mailbox) or addresses is None:
             self._status.setText(
-                "Bitte Rechnungs-Postfach und bestätigte Absenderdomains eintragen."
+                "Bitte ein gültiges Rechnungs-Postfach eintragen."
             )
             return
         if self._mail_test_worker is not None and self._mail_test_worker.isRunning():
@@ -898,7 +898,8 @@ class InvoiceCollectorDialog(QDialog):
             route_settings=(RouteSettings(route_key=route.route_key, options=options),),
         )
         factories = build_connector_factories(
-            graph_config_getter=self._graph_config_getter
+            graph_config_getter=self._graph_config_getter,
+            allow_empty_sender_domains_for_probe=True,
         )
         try:
             connector = factories.create(str(route.connector), connection, connection.route_settings[0])
@@ -937,7 +938,9 @@ class InvoiceCollectorDialog(QDialog):
     def _on_mail_test_result(self, result: object) -> None:
         if result is True:
             self._status.setText(
-                "Mailboxzugriff bestätigt. Dieser Probe markiert keine Rechnungsroute als verified."
+                "Mailboxzugriff bestätigt. Für Speichern und Rechnungsabruf musst du zusätzlich "
+                "mindestens eine bestätigte Anbieter-Absenderdomain eintragen. Dieser Probe "
+                "markiert keine Rechnungsroute als verified."
             )
 
     def _on_mail_test_error(self, error: Exception) -> None:

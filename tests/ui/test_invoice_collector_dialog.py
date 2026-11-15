@@ -551,6 +551,77 @@ def test_mailbox_and_sender_domain_settings_are_validated_locally() -> None:
     assert _parse_sender_addresses("not-an-email") is None
 
 
+def test_graph_mailbox_probe_does_not_require_sender_domain(
+    qtbot: object, tmp_path: Path, monkeypatch: object
+) -> None:
+    calls: dict[str, object] = {}
+
+    class Signal:
+        def connect(self, _callback: object) -> None:
+            pass
+
+    class Signals:
+        result = Signal()
+        error = Signal()
+        finished = Signal()
+
+    class Worker:
+        def __init__(self, _target: object) -> None:
+            self.signals = Signals()
+            self.started = False
+
+        def start(self) -> None:
+            self.started = True
+
+        def isRunning(self) -> bool:
+            return False
+
+    class ProbeConnector:
+        def probe(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class FactoryRegistry:
+        def create(self, key, connection, settings):
+            calls["key"] = key
+            calls["settings"] = settings
+            return ProbeConnector()
+
+    def factory_builder(**kwargs: object) -> FactoryRegistry:
+        calls["factory_kwargs"] = kwargs
+        return FactoryRegistry()
+
+    monkeypatch.setattr(dialog_module, "BackgroundWorker", Worker)
+    monkeypatch.setattr(dialog_module, "build_connector_factories", factory_builder)
+    dialog = InvoiceCollectorDialog(
+        tenant_id="xw",
+        connection_repository=ConnectionRepository(tmp_path / "connections.sqlite3"),
+    )
+    qtbot.addWidget(dialog)  # type: ignore[attr-defined]
+    dialog._provider.setCurrentIndex(dialog._provider.findData("browserstack"))
+    mail_index = next(
+        index for index in range(dialog._route.count())
+        if dialog._route.itemData(index).route_key == "mail_pdf"
+    )
+    dialog._route.setCurrentIndex(mail_index)
+    dialog._mailbox.setText("billing@example.test")
+    dialog._sender_domains.clear()
+    dialog._sender_addresses.clear()
+
+    dialog._test_mailbox_access()
+
+    factory_kwargs = calls["factory_kwargs"]
+    assert isinstance(factory_kwargs, dict)
+    assert factory_kwargs["allow_empty_sender_domains_for_probe"] is True
+    settings = calls["settings"]
+    assert isinstance(settings, RouteSettings)
+    assert settings.options["sender_domains"] == ""
+    assert isinstance(dialog._mail_test_worker, Worker)
+    assert dialog._mail_test_worker.started
+
+
 def test_collection_results_show_route_outcomes_without_external_ids(
     qtbot: object, tmp_path: Path
 ) -> None:

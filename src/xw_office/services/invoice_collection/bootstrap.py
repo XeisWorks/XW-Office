@@ -40,6 +40,7 @@ def build_connector_factories(
     *,
     token_provider_factory: Callable[..., GraphTokenProvider] | None = None,
     graph_config_getter: Callable[[str], str | None] | None = None,
+    allow_empty_sender_domains_for_probe: bool = False,
     secret_store_factory: Callable[[], SecretStore] | None = None,
     mollie_api_factory: Callable[[str], MollieInvoiceApi] | None = None,
 ) -> ConnectorFactoryRegistry:
@@ -69,7 +70,7 @@ def build_connector_factories(
                 InvoiceErrorCode.CONFIGURATION_ERROR,
                 "Unbekannter Rechnungs-Postfachtyp",
             )
-        if not mailbox or not sender_domains:
+        if not mailbox or (not sender_domains and not allow_empty_sender_domains_for_probe):
             raise InvoiceCollectionError(
                 InvoiceErrorCode.CONFIGURATION_ERROR,
                 "Rechnungs-Postfach oder bestätigte Absenderdomains fehlen",

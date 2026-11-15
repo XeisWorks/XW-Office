@@ -232,6 +232,25 @@ def test_graph_mail_factory_wires_local_connection_settings_and_selected_period(
     )
     stored_connector.close()
 
+    probe_route = RouteSettings(
+        route_key="mail_pdf",
+        options={"mailbox": "invoices@example.test"},
+    )
+    probe_connector = build_connector_factories(
+        token_provider_factory=TokenProvider,
+        graph_config_getter=existing_graph_settings.get,
+        allow_empty_sender_domains_for_probe=True,
+    ).create("graph_mail_attachment", connection, probe_route, period)
+    assert probe_connector.policy.sender_domains == frozenset()
+    assert not probe_connector.policy.accepts({"sender_domain": "billing.example.test"})
+    probe_connector.close()
+    with pytest.raises(InvoiceCollectionError) as missing_domain:
+        build_connector_factories(
+            token_provider_factory=TokenProvider,
+            graph_config_getter=existing_graph_settings.get,
+        ).create("graph_mail_attachment", connection, probe_route, period)
+    assert missing_domain.value.code is InvoiceErrorCode.CONFIGURATION_ERROR
+
     own_mailbox_route = RouteSettings(
         route_key="mail_pdf",
         options={

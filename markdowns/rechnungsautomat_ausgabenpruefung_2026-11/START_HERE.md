@@ -41,8 +41,10 @@ Contract-Tests – keine Änderung an Dialog, Orchestrator, PDF-Pipeline oder On
 1. **Lokales Setup:** Zielordner wählen. Der Zeitraum ist mit dem aktuellen Kalendermonat in
    `Europe/Vienna` vorbelegt. Verbindungsangaben für eine noch nicht verifizierte Route lassen
    sich lokal als deaktivierter Entwurf speichern; aktivieren lässt sie sich erst, wenn die
-   konkrete Route im Katalog als `verified` steht. Der Graph-Mailbox-Probe testet Zugriff,
-   verifiziert aber keine Rechnungsroute.
+   konkrete Route im Katalog als `verified` steht. Der Graph-Mailbox-Probe benötigt nur
+   Postfach und Postfachtyp und prüft den Zugriff mit einer einzelnen Nachrichten-ID. Eine
+   bestätigte Anbieter-Absenderdomain bleibt vor dem Speichern und Sammellauf Pflicht; der
+   Probe verifiziert keine Rechnungsroute und liest weder Nachrichtentext noch Anhänge.
 2. **Monatslauf:** **„Alle aktiven Verbindungen abrufen“** verarbeitet nur aktivierte, aktuell
    verifizierte Routen. Unabhängige Verbindungen laufen begrenzt parallel; pro Konto läuft
    höchstens ein Job. Ohne Live-verifizierte Route bleibt **„PDF manuell hinzufügen“** der
@@ -118,9 +120,12 @@ Datensatz; Schema 5 speichert zusätzlich Kontoalias, Belegart und Rechnungsdatu
 ## Persönliche Schritte – nur wenn die Implementierung sie tatsächlich benötigt
 
 - OneDrive-Business-Zielordner auswählen.
-- Für den ersten Mail-Pilot Provider, Rechnungs-Mailbox und bestätigte Absenderdomains lokal
-  klären und nur im Dialog eintragen; keine dieser Angaben im Chat posten.
-- Danach Graph-Mailbox-Test und sichtbaren Microsoft-Login/Consent im lokalen UI abschließen.
+- Für den Mailbox-Probe zuerst das tatsächlich eingehende Rechnungs-Postfach sowie dessen Typ
+  (eigenes/freigegebenes Postfach) klären und lokal im Dialog eintragen. Die vom Rechnungsversand
+  verwendete Absender-Mailbox ist nicht automatisch das Eingangsfach.
+- Graph-Mailbox-Test und sichtbaren Microsoft-Login/Consent im lokalen UI abschließen. Danach
+  die echte Anbieter-Absenderdomain prüfen und vor dem Speichern der Route im Dialog eintragen;
+  keine dieser Angaben oder Geheimnisse im Chat posten.
 - Echten Rechnungsbeleg und Wiederholung lokal prüfen; ein erfolgreicher Mailbox-Probe allein
   reicht nicht zur Route-Verifikation.
 - Ein API-Credential nur bei einer offiziellen API-Route über das maskierte Eingabefeld

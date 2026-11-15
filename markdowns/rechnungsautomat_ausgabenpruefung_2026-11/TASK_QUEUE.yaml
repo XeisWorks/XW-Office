@@ -16,6 +16,7 @@ current_status:
     - "planned routes blocked both at save time and when loading existing connections"
     - "when a provider catalog is supplied, only its verified route connector is used; a saved local connector override cannot select a different factory"
     - "invoice collector reuses MS_GRAPH_CLIENT_ID and MS_GRAPH_TENANT_ID through the existing SecretService getter, with environment fallback; it keeps the collector's own least-privilege token cache and scopes"
+    - "Graph mailbox access probe requires only mailbox and own/shared mode; confirmed sender domains remain mandatory for saving connections and collecting documents"
     - "Graph mail factory wired into desktop dialog with mailbox and sender-domain settings"
     - "Optional exact sender-address allowlist is stored locally and narrows the required confirmed-domain match"
     - "Mailbox type is selected explicitly; own mailbox requests Mail.Read while an explicitly shared mailbox requests delegated Mail.Read.Shared"
@@ -54,7 +55,7 @@ current_status:
     - "selected tenant _needs_review folder can be opened only within the selected target; explicit review resolution validates, no-clobber publishes by invoice date, updates schema-5 metadata, then removes the review copy"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
     - "invoice collection LOCALAPPDATA tree disables inherited ACLs recursively and grants full access only to current user, SYSTEM and Administrators; ACL failures fail closed"
-    - "latest full repository suite after SecretService-backed Graph configuration wiring: 2449 passed, 7 skipped, 0 failed; repo Ruff and targeted MyPy for the changed modules pass"
+    - "latest full repository suite after domain-independent mailbox probe: 2450 passed, 7 skipped, 0 failed; repo Ruff and targeted MyPy for the changed modules pass"
     - "targeted MyPy for Mollie connector, registry and dialog passes with foreign imports skipped; broad current-environment MyPy is blocked by absent optional msal_extensions/Playwright and a NumPy stub/Python-version mismatch; 30-file collector/dialog MyPy passed in the prior recorded environment"
     - "DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values (prior recorded checks)"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
@@ -405,6 +406,7 @@ tasks:
       - "User stated mailbox or sender domain must first be clarified; exact values are not available and have not been guessed"
       - "User supplied an outgoing tax-mail sender and SevDesk tax-mail recipient; source inspection confirms these are not evidence of the inbound supplier-invoice mailbox or vendor sender domains"
       - "Graph tenant/client settings now flow from the shared SecretService into the collector; the source mailbox and confirmed invoice sender domain(s) still need user confirmation"
+      - "Mailbox access probe now runs without sender domains and reads only one message ID; sender domains are still fail-closed for save and monthly collection. This lets the user verify mailbox/auth before sourcing vendor sender rules"
     deliverables:
       - "Verification report per tested route and account type"
       - "At least one real mail route assessed"
@@ -445,6 +447,7 @@ tasks:
       - "T08 records the pending local mailbox/sender-domain clarification as blocked_external"
       - "Revalidated on origin/main d412a3c1 on 2026-11-15: full suite 2446 passed, 7 skipped, 0 failed in 231.73s; Ruff, TASK_QUEUE/PROVIDER_REGISTRY YAML parsing and git diff --check pass. The full-suite warning is the existing Starlette/httpx TestClient deprecation"
       - "After 95bfce26, verified-route dispatch uses the connector declared by the ProviderCatalog rather than a saved route.options connector value; a mismatch regression passes. Existing SecretService-backed MS Graph tenant/client settings are now wired through ExpenseReviewView into both collector factory creation and the mailbox probe, while environment fallback remains supported. Graph/collector/UI targeted suite: 51 passed; full suite: 2449 passed, 7 skipped, 0 failed in 253.09s; repo Ruff, changed-module MyPy, YAML parsing and git diff --check pass. Existing Starlette/httpx TestClient deprecation warning remains"
+      - "After domain-independent Graph probe change, Graph connector/collector UI suite: 57 passed; full repository suite: 2450 passed, 7 skipped, 0 failed in 261.62s. Repo Ruff, targeted MyPy, YAML and diff checks pass; one existing Starlette/httpx TestClient deprecation warning remains"
     deliverables:
       - "Unit, contract, UI and integration test report"
       - "Ruff, git diff --check, YAML validation and secret scan"
