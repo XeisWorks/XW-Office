@@ -120,7 +120,7 @@ Repo-Planungs-/Commit-Historie bestaetigt das Vorhaben.
 
 ## Sicherheitsnachtrag 15.11.2026
 
-Sechs echte Rechnungs-PDFs mit personenbezogenen Finanzdaten wurden aus dem aktuellen Git-Index entfernt; `.gitignore` verhindert kuenftige Aufnahme aus `docs/invoices/`. Lokale Kopien wurden zur Vermeidung von Datenverlust behalten und ignoriert. Die Payment-QR-Tests nutzen jetzt synthetische, zur Laufzeit erzeugte PDFs; die Vollsuite nach Index-Bereinigung besteht mit 2.441 passed und 7 skipped. Alte Git-Objekte enthalten die Rechnungen weiterhin; `AGENTS.md` verbietet Force-Push und History-Rewrite. Nicht behaupten, die historischen Remote-Objekte seien geloescht. T09 bleibt offen, bis die verbleibenden elf Produkt-/Test-PDFs und der Umgang mit der alten Git-Historie fachlich eingeordnet sind.
+Alle 17 zuvor getrackten PDFs sind aus dem aktuellen Git-Index entfernt und durch repo-weites `*.pdf` in `.gitignore` fuer kuenftige Commits ausgeschlossen. Lokale Kopien bleiben zur Vermeidung von Datenverlust vorhanden und ignoriert. Payment-QR- und PLC-Zollformular-Tests erzeugen synthetische PDFs zur Laufzeit; Vollsuite: 2.441 passed, 7 skipped. `git ls-files -- *.pdf` ist leer. Alte Git-Objekte enthalten die entfernten Dateien weiterhin; `AGENTS.md` verbietet Force-Push und History-Rewrite. T09 bleibt offen, bis die historische Blob-Aufbewahrung bewertet ist; historische Remote-Objekte sind nicht geloescht.
 
 ## Aktueller persoenlicher Schritt
 

@@ -33,9 +33,6 @@ from xw_office.ui.modules.rechnungen.plc_label_dialog import (
 )
 
 
-CUSTOMS_SAMPLE = Path("resources/api_specs/plc/Zollerklaerung_TEST.pdf")
-
-
 def _container() -> Container:
     container = Container(AppConfig())
     container.register(AppSignals, lambda _: AppSignals())
@@ -472,6 +469,7 @@ def test_archived_plc_reprint_queue_is_async_and_cannot_be_submitted_twice(
 def test_customs_result_archives_both_pdfs_before_first_print_job(
     qtbot: object,
     tmp_path: Path,
+    synthetic_plc_customs_pdf_bytes: bytes,
 ) -> None:
     class PlcServiceStub:
         def mark_print_queued(self, _shipment: PlcShipmentDraft, _job_id: str) -> None:
@@ -511,7 +509,7 @@ def test_customs_result_archives_both_pdfs_before_first_print_job(
             webservice_result=PlcWebserviceResult(
                 pdf_bytes=b"%PDF-1.7\nPLC label",
                 tracking_codes=(),
-                shipment_documents=CUSTOMS_SAMPLE.read_bytes(),
+                shipment_documents=synthetic_plc_customs_pdf_bytes,
             ),
         ),
     )
@@ -524,6 +522,7 @@ def test_customs_result_archives_both_pdfs_before_first_print_job(
 def test_customs_only_result_creates_and_prints_cn23_without_queuing_label(
     qtbot: object,
     tmp_path: Path,
+    synthetic_plc_customs_pdf_bytes: bytes,
 ) -> None:
     dialog = PlcLabelPrintDialog(_container(), None, customs_only=True)
     qtbot.addWidget(dialog)
@@ -547,7 +546,7 @@ def test_customs_only_result_creates_and_prints_cn23_without_queuing_label(
             webservice_result=PlcWebserviceResult(
                 pdf_bytes=b"%PDF-1.7\nPLC label that must not print",
                 tracking_codes=(),
-                shipment_documents=CUSTOMS_SAMPLE.read_bytes(),
+                shipment_documents=synthetic_plc_customs_pdf_bytes,
             ),
         ),
     )
@@ -565,6 +564,7 @@ def test_customs_result_keeps_both_archives_when_first_print_queue_fails(
     qtbot: object,
     monkeypatch: object,
     tmp_path: Path,
+    synthetic_plc_customs_pdf_bytes: bytes,
 ) -> None:
     dialog = PlcLabelPrintDialog(_container(), None)
     qtbot.addWidget(dialog)
@@ -590,7 +590,7 @@ def test_customs_result_keeps_both_archives_when_first_print_queue_fails(
             webservice_result=PlcWebserviceResult(
                 pdf_bytes=b"%PDF-1.7\nPLC label",
                 tracking_codes=(),
-                shipment_documents=CUSTOMS_SAMPLE.read_bytes(),
+                shipment_documents=synthetic_plc_customs_pdf_bytes,
             ),
         ),
     )

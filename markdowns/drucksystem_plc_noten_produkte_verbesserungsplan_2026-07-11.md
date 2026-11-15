@@ -51,7 +51,7 @@ Noch offen:
 - `src/xw_office/services/inventory/service.py`
 - `src/xw_office/services/products/print_decision.py`
 - `config/default.yaml` und die druckbezogenen Unit-/UI-Tests
-- sieben Noten-/Produkt-PDFs in `docs/` sowie `resources/api_specs/plc/PLC-Test-Label.pdf`
+- PDF-Quellen liegen lokal und werden nicht versioniert; die Tests erzeugen synthetische PDF-Dokumente zur Laufzeit.
 - Legacy-Hinweise und bestehende Umbaupläne im Repository
 
 Relevanter Testlauf am 11. Juli 2026: **34 Tests bestanden** (`test_print_jobs`, `test_planned_pdf_printer`, `test_print_queue`, `test_no_external_pdf_printing`, `test_printing_parity_e2e`, `test_rechnungen_product_print`, `test_plc_label_archive`). Diese Tests bestätigen die programmatische Verdrahtung, aber nicht Layout- oder Druckqualität auf realer Hardware.

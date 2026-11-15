@@ -16,11 +16,10 @@ from xw_office.services.plc.customs_document import (
 )
 
 
-SAMPLE = Path("resources/api_specs/plc/Zollerklaerung_TEST.pdf")
-
-
-def test_sample_customs_pdf_becomes_af_a5_portrait_without_losing_pages() -> None:
-    prepared = build_customs_a5_print_pdf(SAMPLE.read_bytes())
+def test_synthetic_customs_pdf_becomes_af_a5_portrait_without_losing_pages(
+    synthetic_plc_customs_pdf_bytes: bytes,
+) -> None:
+    prepared = build_customs_a5_print_pdf(synthetic_plc_customs_pdf_bytes)
 
     document = fitz.open(stream=prepared, filetype="pdf")
     try:
@@ -56,10 +55,12 @@ def test_multi_page_customs_pdf_keeps_every_page() -> None:
         prepared.close()
 
 
-def test_print_ready_file_is_persistent_and_not_transformed_twice(tmp_path: Path) -> None:
+def test_print_ready_file_is_persistent_and_not_transformed_twice(
+    tmp_path: Path, synthetic_plc_customs_pdf_bytes: bytes
+) -> None:
     original = tmp_path / "customs" / "20868 - RE-1 - Zollformular.pdf"
     original.parent.mkdir(parents=True)
-    original.write_bytes(SAMPLE.read_bytes())
+    original.write_bytes(synthetic_plc_customs_pdf_bytes)
 
     prepared = ensure_customs_a5_print_file(original)
 
@@ -67,7 +68,7 @@ def test_print_ready_file_is_persistent_and_not_transformed_twice(tmp_path: Path
     assert prepared.parent == original.parent / "print_ready"
     assert prepared.is_file()
     assert ensure_customs_a5_print_file(prepared) == prepared
-    assert original.read_bytes() == SAMPLE.read_bytes()
+    assert original.read_bytes() == synthetic_plc_customs_pdf_bytes
 
 
 def test_invalid_customs_document_is_rejected() -> None:

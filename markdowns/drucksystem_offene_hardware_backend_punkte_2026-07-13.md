@@ -162,7 +162,7 @@ Pruefen, ob der intermittierende Versatz/Beschnitt durch die neuen expliziten A5
 Geeignet sind:
 
 - ein echtes archiviertes PLC-Label aus `state/plc_labels/`
-- alternativ `resources/api_specs/plc/PLC-Test-Label.pdf`
+- Ein PLC-Testlabel wurde lokal als A5 vermessen; die Quelldatei ist nicht versioniert. Tests verwenden synthetische, zur Laufzeit erzeugte Dokumente.
 
 ### Testablauf
 

@@ -17,7 +17,7 @@ Am 2026-06-24 wurden die lokalen Dateien unter `resources/api_specs/plc` gegen d
 - `PLC_API_Beschreibung.xlsx`, Version **2.0 vom 26.02.2025**, ist die fachliche Referenz. Sie bestaetigt `ImportShipment` mit `ShipmentRow`, `pdfData`, `zplLabelData`, `shipmentDocuments`, `errorCode` und `errorMessage`.
 - `request.txt` zeigt den produktiven Datenvertrag mit `ClientID`, `OrgUnitID`, `OrgUnitGuid`, `DeliveryServiceThirdPartyID`, Empfaenger/Absender, `ColloList` und `PrinterObject`.
 - Gültige Druckwerte sind `LanguageID=PDF`, `LabelFormatID=100x200` und unter anderem `PaperLayoutID=100x200` oder `2xA5inA4`. XW-Office verwendet fuer den Direktdruck ein einzelnes `100x200`-PDF; der Drucker ist separat konfigurierbar.
-- `PLC-Test-Label.pdf` ist A5. Das bestaetigt, dass das von PLC gelieferte PDF unmittelbar an die lokale Druckwarteschlange gehen kann.
+- Ein lokales PLC-Testlabel wurde als A5 vermessen. Das Beispiel-PDF wird nicht versioniert; Drucklayout-Tests sollen synthetische Dokumente erzeugen.
 - Die Spezifikation nennt fuer Nicht-EU seit 2019 zwingend: Telefon oder E-Mail von Absender **und** Empfaenger sowie pro Artikel Inhalt, Ursprung, Waehrung, Warenwert, Zolltarifnummer, Nettogewicht und Menge. `DeclarationOfOrigin` ist am Artikelobjekt ein Pflichtfeld.
 - Die Fehlercodes differenzieren fachliche Ablehnung und technischen Transportfehler. Insbesondere darf ein Timeout nicht wie eine sichere Ablehnung behandelt werden.
 

@@ -12,6 +12,20 @@ from xw_office.core.config import AppConfig
 from xw_office.core.container import Container
 
 
+@pytest.fixture
+def synthetic_plc_customs_pdf_bytes() -> bytes:
+    """Build a geometry-only CN23 sample with no real sender or recipient data."""
+    import fitz
+
+    document = fitz.open()
+    page = document.new_page(width=595, height=842)
+    page.insert_text((30, 40), "SYNTHETIC CN23 TEST DOCUMENT")
+    page.draw_rect(fitz.Rect(20, 20, 575, 822))
+    result = document.tobytes(garbage=4, deflate=True)
+    document.close()
+    return result
+
+
 @pytest.fixture(autouse=True)
 def isolate_tests_from_credentials_and_external_network(
     monkeypatch: pytest.MonkeyPatch,

@@ -16,9 +16,6 @@ from xw_office.services.secrets.service import SecretService
 from xw_office.ui.modules.rechnungen.plc_label_dialog import PlcLabelPrintDialog
 
 
-CUSTOMS_SAMPLE = Path("resources/api_specs/plc/Zollerklaerung_TEST.pdf")
-
-
 def _shipment(*, reference: str = "20868", invoice_number: str = "RE-261952") -> PlcShipmentDraft:
     return PlcShipmentDraft(
         reference=reference,
@@ -76,10 +73,12 @@ def test_archive_keeps_customs_form_separate_from_label_lookup(tmp_path) -> None
     assert archive.find(shipment) is None
 
 
-def test_archive_keeps_original_and_calibrated_customs_print_pdf(tmp_path) -> None:
+def test_archive_keeps_original_and_calibrated_customs_print_pdf(
+    tmp_path, synthetic_plc_customs_pdf_bytes: bytes
+) -> None:
     archive = PlcLabelArchive(tmp_path)
     shipment = _shipment()
-    original_bytes = CUSTOMS_SAMPLE.read_bytes()
+    original_bytes = synthetic_plc_customs_pdf_bytes
     original = archive.save_customs_document(shipment, original_bytes)
 
     print_ready = archive.ensure_customs_print_document(shipment)
@@ -226,9 +225,11 @@ def test_webservice_label_queue_uses_explicit_a5_layout(tmp_path) -> None:
     assert queued[0].alignment == "center"
 
 
-def test_customs_document_queue_uses_af_pdf_on_dedicated_100_percent_queue(tmp_path) -> None:
+def test_customs_document_queue_uses_af_pdf_on_dedicated_100_percent_queue(
+    tmp_path, synthetic_plc_customs_pdf_bytes: bytes
+) -> None:
     pdf_path = tmp_path / "cn23.pdf"
-    pdf_path.write_bytes(CUSTOMS_SAMPLE.read_bytes())
+    pdf_path.write_bytes(synthetic_plc_customs_pdf_bytes)
     queued: list[PdfPrintJob] = []
 
     class QueueStub:
