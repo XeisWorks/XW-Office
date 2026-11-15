@@ -31,13 +31,19 @@ class GraphAttachmentReader(Protocol):
 @dataclass(frozen=True)
 class MailMatchPolicy:
     sender_domains: frozenset[str] = frozenset()
+    sender_addresses: frozenset[str] = frozenset()
     document_type: DocumentType = DocumentType.EXPENSE_INVOICE
 
     def accepts(self, message: dict[str, Any]) -> bool:
         if not self.sender_domains:
             return False
         domain = str(message.get("sender_domain") or "").strip().casefold()
-        return domain in self.sender_domains
+        if domain not in self.sender_domains:
+            return False
+        if not self.sender_addresses:
+            return True
+        address = str(message.get("sender_address") or "").strip().casefold()
+        return address in self.sender_addresses
 
 
 class GraphMailAttachmentConnector:

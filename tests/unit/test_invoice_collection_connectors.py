@@ -62,6 +62,7 @@ class _MailReader:
             {
                 "id": "message-1",
                 "received_at": "2026-11-05T10:00:00Z",
+                "sender_address": "billing@billing.example.test",
                 "sender_domain": "billing.example.test",
                 "attachments": [
                     {"id": "pdf-1", "name": self.filename, "content_type": "application/pdf"},
@@ -118,6 +119,34 @@ def test_graph_mail_connector_fails_closed_without_verified_sender_domains(
     assert connector.discover() == []
 
 
+def test_graph_mail_connector_requires_exact_sender_address_when_configured(
+    tmp_path: Path,
+) -> None:
+    reader = _MailReader(tmp_path)
+    policy = MailMatchPolicy(
+        sender_domains=frozenset({"billing.example.test"}),
+        sender_addresses=frozenset({"invoices@billing.example.test"}),
+    )
+    connector = GraphMailAttachmentConnector(connection=_connection(), reader=reader, policy=policy)
+    assert connector.discover() == []
+
+    exact_reader = _MailReader(tmp_path)
+    exact_reader.list_messages = lambda: [
+        {
+            "id": "message-1",
+            "sender_address": "invoices@billing.example.test",
+            "sender_domain": "billing.example.test",
+            "attachments": [
+                {"id": "pdf-1", "name": "invoice.pdf", "content_type": "application/pdf"}
+            ],
+        }
+    ]
+    exact_connector = GraphMailAttachmentConnector(
+        connection=_connection(), reader=exact_reader, policy=policy
+    )
+    assert len(exact_connector.discover()) == 1
+
+
 def test_graph_mail_factory_wires_local_connection_settings_and_selected_period(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -145,6 +174,7 @@ def test_graph_mail_factory_wires_local_connection_settings_and_selected_period(
         options={
             "mailbox": "invoices@example.test",
             "sender_domains": "billing.example.test",
+            "sender_addresses": "Invoices@billing.example.test",
             "document_type": DocumentType.EXPENSE_INVOICE.value,
         },
     )
@@ -156,6 +186,7 @@ def test_graph_mail_factory_wires_local_connection_settings_and_selected_period(
     assert connector.start == period.start
     assert connector.end == period.end
     assert connector.policy.sender_domains == frozenset({"billing.example.test"})
+    assert connector.policy.sender_addresses == frozenset({"invoices@billing.example.test"})
     assert connector.policy.document_type is DocumentType.EXPENSE_INVOICE
     connector.close()
 
@@ -256,6 +287,7 @@ def test_graph_reader_paginates_and_downloads_attachment_bytes(tmp_path: Path) -
     assert requests == []
     messages = list(message_iterator)
     assert messages[0]["sender_domain"] == "example.test"
+    assert messages[0]["sender_address"] == "billing@example.test"
     assert first_page_params["$filter"] == "hasAttachments eq true"
     assert requests[:2] == [
         "/v1.0/users/invoices@example.test/messages",

@@ -1,6 +1,6 @@
 # Fortsetzungs-Goal fuer GPT-6-Luna
 
-**Stand:** 14.11.2026 (Fehlerredaktion, kataloggesteuerte Portale, Tool-Recherche und Vollsuite 2.433/7 und mandantenspezifische Prüfablage und Auth-Capabilities ergaenzt)
+**Stand:** 15.11.2026 (Fehlerredaktion, sichere ACLs, PDF-Bereinigung, optionale exakte Mail-Absenderfilter und Vollsuite 2.443/7 dokumentiert)
 **Repository:** `XeisWorks/XW-Office`, Branch `main`
 **Ausgangslage:** Die technische MVP-Grundlage ist weitgehend implementiert und lokal getestet. Der erste echte Rechnungsabruf ist noch nicht verifiziert. Der Benutzer hat bestaetigt, dass Anbieter-Mailbox und Absenderdomain(s) noch geklaert werden muessen.
 
@@ -93,6 +93,10 @@ Arbeite die Queue nach Abhaengigkeiten ab und konzentriere dich auf den noch off
    Ausgabenpruefung > Rechnungen abrufen Anbieter/Verbindung mit Mailbox und bestaetigten
    Absenderdomain(s) konfigurieren, "Graph-Mailbox testen" waehlen und sichtbaren Microsoft-
    Login/Consent abschliessen. Fuehre keinen Liveversuch mit geratenen Werten aus.
+   Der optionale exakte Absenderadressfilter ist umgesetzt; Domain und exakte Adresse muessen
+   gemeinsam passen. Keine Adressen vorbefuellen. Falls das geklaerte Pilotpostfach ein
+   freigegebenes Postfach ist, erst den benoetigten Scope und sichtbaren Consent anhand des
+   konkreten Kontotyps klaeren; `Mail.Read.Shared` nicht pauschal hinzufuegen.
 5. Nach dem lokalen Probe: Zugriffsergebnis allein ist keine Rechnungsrouten-Verifikation.
    Mit echtem Anbieterbeleg muessen Absender, Anhang, Dokumenttyp, Rechnungsdatum, Mandant,
    Wiederholung ohne zweite Datei und Auth-Fehlerverhalten separat nachgewiesen werden.
@@ -118,9 +122,15 @@ urspruengliche Chat gefunden wurde: lokaler Verlauf lieferte keinen eindeutigen 
 Repo-Planungs-/Commit-Historie bestaetigt das Vorhaben.
 ```
 
+## Baseline und Queue-Status 15.11.2026
+
+T00 wurde am pre-feature Stand `caf041f1` reproduzierbar abgeschlossen: 73 Baseline-Tests fuer Ausgabenpruefung, Worker, SecretService und Graph-Mail-Aufrufstellen bestanden. Commit `b39041fd` ist der erste Collector-Code. T01-T03, T06 und T07 sind laut Queue nach Acceptance-Evidenz abgeschlossen. T04 bleibt wegen der offenen capability-gesteuerten Auth-Erneuerung in Arbeit. Fuer T05 sind Domain- plus optionaler exakter Absenderadressfilter jetzt lokal umgesetzt und gezielt getestet; Shared-Mailbox-Unterstuetzung ist anhand des echten Piloten noch zu klaeren, daher bleibt T05 in Arbeit. T08 bleibt extern blockiert, weil der Benutzer Mailbox und Absenderdomain noch klaeren muss. T09 bleibt wegen historischer PDF-Gitobjekte offen.
+
+Die konkrete Umsetzung des exakten Mail-Absenderadressfilters ist in 54 Connector-/Dialogtests geprueft. Es sind keine realen Postfach- oder Absenderdaten eingetragen. Der aktuelle Graph-Scope bleibt `Mail.Read`; eine `Mail.Read.Shared`-Erweiterung darf nur nach Entscheidung anhand des tatsaechlichen Postfachtyps und mit sichtbarem Consent erfolgen.
+
 ## Sicherheitsnachtrag 15.11.2026
 
-Die lokale Collector-Datenstruktur unter `%LOCALAPPDATA%` wird auf Windows rekursiv mit `icacls` eingeschraenkt (aktueller Benutzer, SYSTEM, Administratoren), und Initialisierung bricht bei ACL-Fehlern fail-closed ab. Der ACL-Test sowie eine isolierte Windows-Tempverzeichnispruefung sind bestanden. Alle 17 zuvor getrackten PDFs sind aus dem aktuellen Git-Index entfernt und durch repo-weites `*.pdf` in `.gitignore` fuer kuenftige Commits ausgeschlossen. Lokale Kopien bleiben zur Vermeidung von Datenverlust vorhanden und ignoriert. Payment-QR- und PLC-Zollformular-Tests erzeugen synthetische PDFs zur Laufzeit; Vollsuite: 2.442 passed, 7 skipped. `git ls-files -- *.pdf` ist leer. Alte Git-Objekte enthalten die entfernten Dateien weiterhin; `AGENTS.md` verbietet Force-Push und History-Rewrite. T09 bleibt offen, bis die historische Blob-Aufbewahrung bewertet ist; historische Remote-Objekte sind nicht geloescht.
+Die lokale Collector-Datenstruktur unter `%LOCALAPPDATA%` wird auf Windows rekursiv mit `icacls` eingeschraenkt (aktueller Benutzer, SYSTEM, Administratoren), und Initialisierung bricht bei ACL-Fehlern fail-closed ab. Der ACL-Test sowie eine isolierte Windows-Tempverzeichnispruefung sind bestanden. Alle 17 zuvor getrackten PDFs sind aus dem aktuellen Git-Index entfernt und durch repo-weites `*.pdf` in `.gitignore` fuer kuenftige Commits ausgeschlossen. Lokale Kopien bleiben zur Vermeidung von Datenverlust vorhanden und ignoriert. Payment-QR- und PLC-Zollformular-Tests erzeugen synthetische PDFs zur Laufzeit; Vollsuite: 2.443 passed, 7 skipped. `git ls-files -- *.pdf` ist leer. Alte Git-Objekte enthalten die entfernten Dateien weiterhin; `AGENTS.md` verbietet Force-Push und History-Rewrite. T09 bleibt offen, bis die historische Blob-Aufbewahrung bewertet ist; historische Remote-Objekte sind nicht geloescht.
 
 ## Aktueller persoenlicher Schritt
 

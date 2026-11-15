@@ -72,6 +72,7 @@ class GraphMailAttachmentReader:
                 yield {
                     "id": raw.get("id"),
                     "received_at": raw.get("receivedDateTime"),
+                    "sender_address": _sender_address(sender.get("address")),
                     "sender_domain": _sender_domain(sender.get("address")),
                     "attachments": attachments,
                 }
@@ -217,3 +218,9 @@ def _invalid_attachment_size() -> InvoiceCollectionError:
 def _sender_domain(address: Any) -> str:
     text = str(address or "").strip().casefold()
     return text.rsplit("@", 1)[-1] if "@" in text else ""
+
+
+def _sender_address(address: Any) -> str:
+    text = str(address or "").strip().casefold()
+    local, separator, domain = text.partition("@")
+    return text if separator and local and domain and "@" not in domain else ""

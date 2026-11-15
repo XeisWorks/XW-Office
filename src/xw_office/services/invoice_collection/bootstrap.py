@@ -57,6 +57,11 @@ def build_connector_factories(
             for item in str(options.get("sender_domains") or "").split(",")
             if item.strip()
         )
+        sender_addresses = frozenset(
+            item.strip().casefold()
+            for item in str(options.get("sender_addresses") or "").split(",")
+            if item.strip()
+        )
         if not mailbox or not sender_domains:
             raise InvoiceCollectionError(
                 InvoiceErrorCode.CONFIGURATION_ERROR,
@@ -97,6 +102,7 @@ def build_connector_factories(
             reader=reader,
             policy=MailMatchPolicy(
                 sender_domains=sender_domains,
+                sender_addresses=sender_addresses,
                 document_type=document_type,
             ),
             start=date_start,

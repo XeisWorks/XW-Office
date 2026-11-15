@@ -39,6 +39,7 @@ from xw_office.ui.modules.expense_review.invoice_collector_dialog import (
     _collect_active_safely,
     _looks_like_mailbox,
     _parse_sender_domains,
+    _parse_sender_addresses,
     _run_collector_operation_safely,
 )
 
@@ -348,6 +349,7 @@ def test_invoice_collector_dialog_saves_unverified_route_as_disabled_draft(
     dialog._account_alias.setText("billing")
     dialog._mailbox.setText("billing@example.test")
     dialog._sender_domains.setText("invoices.example.test")
+    dialog._sender_addresses.setText("ap@invoices.example.test")
     dialog._save_connection()
     assert repository.list_enabled() == []
     connections, issues = repository.list_all_with_issues()
@@ -355,6 +357,7 @@ def test_invoice_collector_dialog_saves_unverified_route_as_disabled_draft(
     assert len(connections) == 1
     assert connections[0].enabled is False
     assert connections[0].route_settings[0].options["mailbox"] == "billing@example.test"
+    assert connections[0].route_settings[0].options["sender_addresses"] == "ap@invoices.example.test"
     assert "deaktivierter Entwurf" in dialog._status.text()
 
 
@@ -385,6 +388,7 @@ def test_saved_connection_can_be_loaded_but_unverified_route_stays_disabled(
                 options={
                     "mailbox": "billing@example.test",
                     "sender_domains": "invoices.example.test",
+                    "sender_addresses": "ap@invoices.example.test",
                     "document_type": "expense_invoice",
                 },
             ),
@@ -401,6 +405,7 @@ def test_saved_connection_can_be_loaded_but_unverified_route_stays_disabled(
     assert dialog._account_alias.text() == "billing"
     assert dialog._mailbox.text() == "billing@example.test"
     assert dialog._sender_domains.text() == "invoices.example.test"
+    assert dialog._sender_addresses.text() == "ap@invoices.example.test"
     assert dialog._provider.isEnabled() is False
     dialog._toggle_saved_connection()
     assert "live verifiziert" in dialog._status.text()
@@ -533,6 +538,11 @@ def test_mailbox_and_sender_domain_settings_are_validated_locally() -> None:
         {"billing.example", "invoices.vendor.example"}
     )
     assert _parse_sender_domains("trusted.example, https://bad.example") == frozenset()
+    assert _parse_sender_addresses(" AP@invoices.example, invoices@example.test ") == frozenset(
+        {"ap@invoices.example", "invoices@example.test"}
+    )
+    assert _parse_sender_addresses("") == frozenset()
+    assert _parse_sender_addresses("not-an-email") is None
 
 
 def test_collection_results_show_route_outcomes_without_external_ids(

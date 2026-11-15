@@ -202,6 +202,10 @@ class InvoiceCollectorDialog(QDialog):
         self._sender_domains_label = QLabel("Bestätigte Absenderdomains")
         self._sender_domains.setPlaceholderText("Nur bestätigte Domains, kommasepariert")
         self._sender_domains.setAccessibleName("Bestätigte Rechnungs-Absenderdomains")
+        self._sender_addresses = QLineEdit()
+        self._sender_addresses_label = QLabel("Absenderadressen (optional)")
+        self._sender_addresses.setPlaceholderText("Exakte Absenderadressen, kommasepariert")
+        self._sender_addresses.setAccessibleName("Optionale exakte Rechnungs-Absenderadressen")
         now = datetime.now(ZoneInfo("Europe/Vienna")).date()
         month_start = now.replace(day=1)
         month_end = now.replace(day=calendar.monthrange(now.year, now.month)[1])
@@ -294,8 +298,10 @@ class InvoiceCollectorDialog(QDialog):
         self._api_token.setVisible(visible)
         self._mailbox.setVisible(bool(capabilities and capabilities.mailbox_probe))
         self._sender_domains.setVisible(bool(capabilities and capabilities.mailbox_probe))
+        self._sender_addresses.setVisible(bool(capabilities and capabilities.mailbox_probe))
         self._mailbox_label.setVisible(bool(capabilities and capabilities.mailbox_probe))
         self._sender_domains_label.setVisible(bool(capabilities and capabilities.mailbox_probe))
+        self._sender_addresses_label.setVisible(bool(capabilities and capabilities.mailbox_probe))
         scope = route.required_scope if route is not None else None
         self._api_token_label.setText(
             f"API-Zugang ({scope})" if scope else "API-Zugang"
@@ -351,6 +357,7 @@ class InvoiceCollectorDialog(QDialog):
         form.addRow("Kontoalias", self._account_alias)
         form.addRow(self._mailbox_label, self._mailbox)
         form.addRow(self._sender_domains_label, self._sender_domains)
+        form.addRow(self._sender_addresses_label, self._sender_addresses)
         form.addRow("Dokumenttyp", self._document_type)
         form.addRow(self._api_token_label, self._api_token)
         root.addLayout(form)
@@ -653,6 +660,7 @@ class InvoiceCollectorDialog(QDialog):
             self._account_alias.setText("default")
             self._mailbox.clear()
             self._sender_domains.clear()
+            self._sender_addresses.clear()
             self._api_token.clear()
             self._connection_toggle_button.setEnabled(False)
             self._route_changed()
@@ -679,6 +687,7 @@ class InvoiceCollectorDialog(QDialog):
             options = route_settings.options
             self._mailbox.setText(options.get("mailbox", ""))
             self._sender_domains.setText(options.get("sender_domains", ""))
+            self._sender_addresses.setText(options.get("sender_addresses", ""))
             type_index = next(
                 (
                     i for i in range(self._document_type.count())
@@ -849,10 +858,11 @@ class InvoiceCollectorDialog(QDialog):
         route = self._route.currentData()
         mailbox = self._mailbox.text().strip()
         domains = _parse_sender_domains(self._sender_domains.text())
+        addresses = _parse_sender_addresses(self._sender_addresses.text())
         if route is None or not route.capabilities.mailbox_probe:
             self._status.setText("Bitte zuerst eine Mailroute auswählen.")
             return
-        if not _looks_like_mailbox(mailbox) or not domains:
+        if not _looks_like_mailbox(mailbox) or not domains or addresses is None:
             self._status.setText(
                 "Bitte Rechnungs-Postfach und bestätigte Absenderdomains eintragen."
             )
@@ -863,6 +873,7 @@ class InvoiceCollectorDialog(QDialog):
             "connector": str(route.connector),
             "mailbox": mailbox,
             "sender_domains": ",".join(sorted(domains)),
+            "sender_addresses": ",".join(sorted(addresses)),
             "document_type": self._selected_document_type().value,
         }
         connection = ProviderConnection.create(
@@ -1110,7 +1121,8 @@ class InvoiceCollectorDialog(QDialog):
         if selected_route.capabilities.mailbox_probe:
             mailbox = self._mailbox.text().strip()
             domains = _parse_sender_domains(self._sender_domains.text())
-            if not _looks_like_mailbox(mailbox) or not domains:
+            addresses = _parse_sender_addresses(self._sender_addresses.text())
+            if not _looks_like_mailbox(mailbox) or not domains or addresses is None:
                 self._status.setText(
                     "Für Mailabruf müssen ein Rechnungs-Postfach und mindestens eine "
                     "bestätigte Absenderdomain eingetragen sein."
@@ -1120,6 +1132,7 @@ class InvoiceCollectorDialog(QDialog):
                 {
                     "mailbox": mailbox,
                     "sender_domains": ",".join(sorted(domains)),
+                    "sender_addresses": ",".join(sorted(addresses)),
                 }
             )
         route_options["document_type"] = self._selected_document_type().value
@@ -1523,3 +1536,10 @@ def _parse_sender_domains(value: str) -> frozenset[str]:
     if any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", item) for item in domains):
         return frozenset()
     return frozenset(domains)
+
+
+def _parse_sender_addresses(value: str) -> frozenset[str] | None:
+    addresses = {part.strip().casefold() for part in value.split(",") if part.strip()}
+    if any(not _looks_like_mailbox(address) for address in addresses):
+        return None
+    return frozenset(addresses)

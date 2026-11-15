@@ -15,6 +15,7 @@ current_status:
     - "route-local discovery failure isolation, connection-ID locks and connector cleanup"
     - "planned routes blocked both at save time and when loading existing connections"
     - "Graph mail factory wired into desktop dialog with mailbox and sender-domain settings"
+    - "Optional exact sender-address allowlist is stored locally and narrows the required confirmed-domain match"
     - "explicit delegated Graph mailbox probe using minimal Mail.Read and one-message-ID query"
     - "Graph attachment downloads enforce streaming byte limits for raw and JSON/Base64 response bodies"
     - "Graph message pagination yields normalized messages incrementally instead of retaining the whole mailbox scan"
@@ -50,7 +51,7 @@ current_status:
     - "selected tenant _needs_review folder can be opened only within the selected target; explicit review resolution validates, no-clobber publishes by invoice date, updates schema-5 metadata, then removes the review copy"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
     - "invoice collection LOCALAPPDATA tree disables inherited ACLs recursively and grants full access only to current user, SYSTEM and Administrators; ACL failures fail closed"
-    - "latest full repository suite after all-PDF index cleanup, synthetic invoice/PLC fixtures and Windows ACL hardening: 2442 passed, 7 skipped, 0 failed; repo Ruff, Queue-YAML, changed-module MyPy, diff and added-diff secret checks pass"
+    - "latest full repository suite after all-PDF index cleanup, synthetic invoice/PLC fixtures, Windows ACL hardening and exact optional sender-address matching: 2443 passed, 7 skipped, 0 failed; repo Ruff, Queue-YAML, changed-module MyPy, diff and added-diff secret checks pass"
     - "targeted MyPy for Mollie connector, registry and dialog passes with foreign imports skipped; broad current-environment MyPy is blocked by absent optional msal_extensions/Playwright and a NumPy stub/Python-version mismatch; 30-file collector/dialog MyPy passed in the prior recorded environment"
     - "DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values (prior recorded checks)"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
@@ -108,9 +109,15 @@ tasks:
   - id: "T00"
     title: "Ist-Zustand und Baseline festhalten"
     priority: 0
-    status: "todo"
+    status: "done"
     depends_on: []
-    evidence: []
+    evidence:
+      - "Planning-only commits 4f5d7acb and caf041f1 precede the first collector-code commit b39041fd"
+      - "Baseline command at caf041f1: pytest of expense review, worker/cancellation, SecretService and Graph mail consumers: 73 passed in 8.97s"
+      - "Both tenants and expense-review lifecycle covered by tests/ui/test_expense_review_view.py; worker, background shutdown, secret and Graph call sites covered by named unit suites"
+      - "Existing GraphMailClient baseline documented from source: default cache state/msal_cache.json, plaintext serialized cache, broad Mail.Read/Mail.Read.Shared/Mail.Send/Mail.Send.Shared scopes; collector does not reuse it"
+      - "Repo-local log/state paths and intended LOCALAPPDATA paths/scopes documented in ARCHITEKTUR.md and SICHERHEIT_UND_2FA.md"
+      - "Affected file map and code-vs-plan diff documented in IST_STAND_UND_ABSCHLUSSPLAN_2026-11-14.md"
     deliverables:
       - "Architecture diff against current repo and affected-file map"
       - "Baseline results for expense, worker, secret and Graph mail tests"
@@ -123,7 +130,7 @@ tasks:
   - id: "T01"
     title: "Domain, Ports und Registry-Schema"
     priority: 1
-    status: "in_progress"
+    status: "done"
     depends_on: ["T00"]
     evidence:
       - "src/xw_office/services/invoice_collection/domain.py"
@@ -146,7 +153,7 @@ tasks:
   - id: "T02"
     title: "Lokale Sicherheits- und Zustandsbasis"
     priority: 2
-    status: "in_progress"
+    status: "done"
     depends_on: ["T01"]
     evidence:
       - "src/xw_office/core/app_paths.py::local_app_data_dir"
@@ -162,7 +169,7 @@ tasks:
       - "tests/unit/test_invoice_collection_foundations.py::test_external_id_with_different_hash_is_a_conflict (hash-only lookup; no raw ID stored)"
       - "tests/unit/test_invoice_collection_foundations.py::test_service_resumes_cancelled_run_with_same_context_without_persisting_target_or_mailbox"
       - "tests/unit/test_invoice_collection_foundations.py::test_collection_isolates_invalid_saved_connection_and_keeps_valid_accounts_running"
-      - "tests/unit/test_invoice_collection_foundations.py::test_windows_local_state_acl_is_private_and_fails_closed; isolated Windows temp-directory ACL verified with icacls and PowerShell SID inspection"
+      - "tests/unit/test_invoice_collection_foundations.py::test_windows_local_state_acl_is_private_and_fails_closed; isolated Windows temp ACL verified with icacls and PowerShell SID inspection"
     deliverables:
       - "Tested LOCALAPPDATA path helper for profiles, auth, journal, tmp and quarantine"
       - "Gitignore hardening as defense in depth"
@@ -178,7 +185,7 @@ tasks:
   - id: "T03"
     title: "PDF-Pipeline, OneDrive-Sink und manueller vertikaler Slice"
     priority: 3
-    status: "in_progress"
+    status: "done"
     depends_on: ["T02"]
     evidence:
       - "src/xw_office/services/invoice_collection/pdf_validation.py"
@@ -286,6 +293,13 @@ tasks:
       - "src/xw_office/services/invoice_collection/connectors/graph_reader.py::probe_mailbox"
       - "tests/unit/test_invoice_collection_connectors.py"
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_connector_fails_closed_without_verified_sender_domains"
+      - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_connector_requires_exact_sender_address_when_configured; sender domain remains mandatory and exact address only narrows the match"
+      - "tests/ui/test_invoice_collector_dialog.py::test_mailbox_and_sender_domain_settings_are_validated_locally; optional sender-address list is normalized and malformed values rejected"
+      - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_factory_wires_local_connection_settings_and_selected_period; exact address settings pass to connector policy"
+      - "tests/unit/test_invoice_collection_connectors.py Graph reader pagination test verifies normalized sender address is returned alongside sender domain"
+      - "Targeted Graph connector and collector dialog tests after matcher change: 54 passed in 4.92s"
+      - "Full repository suite after sender-address matcher change: 2443 passed, 7 skipped, 0 failed in 228.83s; one existing Starlette/httpx deprecation warning"
+      - "Acceptance gap: no explicit shared-mailbox mode or test; current delegated route requests minimal Mail.Read. Assess the real pilot mailbox before considering separately consented Mail.Read.Shared."
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_connector_contains_untrusted_filename_in_workspace"
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_connector_requires_real_pdf_attachment_and_stable_ids (receipt date is not invoice-period filter)"
       - "tests/unit/test_invoice_collection_connectors.py::test_graph_mail_factory_wires_local_connection_settings_and_selected_period"
@@ -302,7 +316,7 @@ tasks:
       - "Generic Graph attachment discovery/download with pagination and checkpoints"
       - "Incremental Graph page iteration while preserving trusted-host validation on every nextLink"
       - "Bounded attachment response streaming with hard decoded and encoded body limits"
-      - "Validated provider matcher config for sender domain, alias and attachment"
+      - "Validated provider matcher config for confirmed sender domain, optional exact sender-address alias and real PDF attachment"
     acceptance:
       - "Mock messages cover pagination, shared-mailbox option, PDF and non-PDF attachment"
       - "Notification mail without PDF does not become a document"
@@ -314,7 +328,7 @@ tasks:
   - id: "T06"
     title: "Mollie-Invoices-API-Route"
     priority: 6
-    status: "in_progress"
+    status: "done"
     depends_on: ["T02", "T03", "T04"]
     parallelizable_with: ["T05", "T07"]
     evidence:
@@ -345,7 +359,7 @@ tasks:
   - id: "T07"
     title: "Playwright-Engine und Fake-Portal"
     priority: 7
-    status: "in_progress"
+    status: "done"
     depends_on: ["T02", "T03", "T04"]
     parallelizable_with: ["T05", "T06"]
     evidence:
@@ -377,6 +391,7 @@ tasks:
     evidence:
       - "PROVIDER_REGISTRY.yaml parsed: 18 providers and 26 routes; all 26 remain planned as of 2026-11-15"
       - "User stated provider mailbox and sender domain still need clarification; Graph probe not run"
+      - "User stated mailbox or sender domain must first be clarified; exact values are not available and have not been guessed"
     deliverables:
       - "Verification report per tested route and account type"
       - "At least one real mail route assessed"
@@ -400,7 +415,7 @@ tasks:
     status: "in_progress"
     depends_on: ["T05", "T06", "T07"]
     evidence:
-      - "python -m pytest -q: 2442 passed, 7 skipped, 0 failed (after all-PDF index cleanup, synthetic fixtures and ACL hardening; one external Starlette/httpx deprecation warning)"
+      - "python -m pytest -q after sender-address matcher change: 2443 passed, 7 skipped, 0 failed in 228.83s (one external Starlette/httpx deprecation warning)"
       - "Invoice collector foundation/UI slice: 94 passed, including safe run-history list, period reuse and journal injection; retry eligibility includes AUTH_REQUIRED and TRANSIENT_NETWORK, excludes OUT_OF_PERIOD, POLICY_BLOCKED, UNSUPPORTED_ACCOUNT and CONTENT_CONFLICT"
       - "Auth-status correction: 45 invoice foundations tests and 68 foundations/UI tests passed; full suite after invoice-PDF cleanup is 2441 passed, 7 skipped; all-active-routes-auth case persists WAITING_FOR_USER at route and run level"
       - "Payment QR and PLC customs tests no longer read repository PDFs; synthetic invoice/EPC and customs documents are generated per test"
