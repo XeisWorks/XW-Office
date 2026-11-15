@@ -128,6 +128,7 @@ class InvoiceCollectionService:
                 route_identity = (str(connection.connection_id), route.route_key)
                 route_context[route_identity] = connection
                 try:
+                    manifest = None
                     if self.catalog is not None:
                         manifest = self.catalog.route(connection.provider_id, route.route_key)
                         if manifest is None:
@@ -140,7 +141,11 @@ class InvoiceCollectionService:
                                 code=InvoiceErrorCode.UNSUPPORTED_ACCOUNT,
                                 message="Abrufroute ist nicht live verifiziert",
                             )
-                    connector_key = str(route.options.get("connector") or route.route_key)
+                    connector_key = (
+                        manifest.connector
+                        if manifest is not None
+                        else str(route.options.get("connector") or route.route_key)
+                    )
                     connectors.append(
                         self.factories.create(connector_key, connection, route, period)
                     )

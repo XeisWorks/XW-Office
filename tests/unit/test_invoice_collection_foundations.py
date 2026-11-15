@@ -1607,3 +1607,76 @@ def test_collection_service_blocks_saved_route_that_catalog_marks_planned(tmp_pa
     assert run.summary.items == ()
     assert len(run.issues) == 1
     assert run.issues[0].message.startswith("UNSUPPORTED_ACCOUNT:")
+
+
+def test_collection_service_uses_catalog_connector_for_verified_route(tmp_path: Path) -> None:
+    repository = ConnectionRepository(tmp_path / "connections.sqlite3")
+    connection = ProviderConnection.create(
+        provider_id="fixture",
+        tenant_id=TenantId.XW,
+        account_alias="billing",
+        route_settings=(
+            RouteSettings(route_key="mail_pdf", options={"connector": "untrusted_override"}),
+        ),
+    )
+    repository.save(connection)
+    target = tmp_path / "onedrive"
+    target.mkdir()
+    factory_calls: list[str] = []
+
+    class EmptyMailConnector:
+        route_key = "mail_pdf"
+
+        def __init__(self, saved: ProviderConnection) -> None:
+            self.connection = saved
+
+        def discover(self) -> list[DocumentCandidate]:
+            return []
+
+        def download(self, *_args: object, **_kwargs: object) -> DownloadedArtifact:
+            pytest.fail("empty connector should not download")
+
+    def canonical_factory(
+        saved: ProviderConnection, _settings: RouteSettings, _period: DateRange | None
+    ) -> EmptyMailConnector:
+        factory_calls.append("canonical_mail_connector")
+        return EmptyMailConnector(saved)
+
+    factories = ConnectorFactoryRegistry()
+    factories.register("canonical_mail_connector", canonical_factory)
+    factories.register(
+        "untrusted_override",
+        lambda *_args: pytest.fail("saved connector override must not be used"),
+    )
+    catalog = ProviderCatalog(
+        schema_version=2,
+        providers=(
+            ProviderManifest(
+                provider_id="fixture",
+                label="Fixture",
+                category="expense",
+                supported_tenants=frozenset({"xw"}),
+                document_types=frozenset({"expense_invoice"}),
+                routes=(
+                    RouteManifest(
+                        route_key="mail_pdf",
+                        method="mail",
+                        connector="canonical_mail_connector",
+                        priority=10,
+                        maturity="verified",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    run = InvoiceCollectionService(
+        connections=repository,
+        factories=factories,
+        target_root=target,
+        journal=InvoiceJournal(tmp_path / "journal.sqlite3"),
+        catalog=catalog,
+    ).collect_active()
+
+    assert factory_calls == ["canonical_mail_connector"]
+    assert run.issues == ()
