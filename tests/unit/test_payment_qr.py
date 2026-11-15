@@ -3,6 +3,8 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
+import fitz
+
 from xw_office.services.transfers.models import TransferPaymentData
 from xw_office.services.transfers.payment_qr import (
     PaymentQrError,
@@ -12,6 +14,33 @@ from xw_office.services.transfers.payment_qr import (
     extract_payment_data_from_sources,
     _strip_json_fence,
 )
+
+
+def _synthetic_epc_invoice_pdf(tmp_path: Path) -> bytes:
+    payment = TransferPaymentData(
+        recipient="Example Supplier GmbH",
+        iban="AT611904300234573201",
+        bic="BKAUATWW",
+        amount=Decimal("988.44"),
+        remittance_text="TEST-AR-2026-001",
+        invoice_number="TEST-AR-2026-001",
+    )
+    qr_path = create_epc_qr_from_payment_data(
+        payment, output_dir=tmp_path, filename_hint="synthetic-epc"
+    )
+    pdf_path = tmp_path / "synthetic-invoice.pdf"
+    with fitz.open() as document:
+        page = document.new_page()
+        page.insert_text(
+            (72, 72),
+            "Rechnung TEST-AR-2026-001\n"
+            "Example Supplier GmbH\n"
+            "IBAN: AT611904300234573201\n"
+            "BIC: BKAUATWW",
+        )
+        page.insert_image(fitz.Rect(150, 150, 360, 360), filename=str(qr_path))
+        document.save(pdf_path)
+    return pdf_path.read_bytes()
 
 
 def test_create_epc_qr_generates_png(tmp_path) -> None:
@@ -122,32 +151,38 @@ def test_extract_prefers_existing_epc_qr(monkeypatch) -> None:
     assert payment.source_by_field["iban"].value == "pdf_existing_qr"
 
 
-def test_extract_detects_beleg_original_qr_with_crlf_payload() -> None:
-    pdf = Path("docs/invoices/Beleg_020-AR2604363 (1).pdf")
-    assert pdf.exists()
+def test_extract_detects_epc_qr_embedded_in_synthetic_invoice(tmp_path: Path) -> None:
+    pdf_bytes = _synthetic_epc_invoice_pdf(tmp_path)
 
-    payload = _extract_existing_epc_payload(pdf.read_bytes())
-    payment = extract_payment_data_from_sources(pdf_bytes=pdf.read_bytes(), use_openai_fallback=False)
+    payload = _extract_existing_epc_payload(pdf_bytes)
+    payment = extract_payment_data_from_sources(
+        pdf_bytes=pdf_bytes, use_openai_fallback=False
+    )
 
-    assert payload.startswith("BCD\n")
-    assert payment.recipient == "BENEDIKTINERSTIFT ADMONT"
-    assert payment.iban == "AT623821500007032402"
-    assert payment.bic == "RZSTAT2G215"
+    assert payload.splitlines()[0] == "BCD"
+    assert payment.recipient == "Example Supplier GmbH"
+    assert payment.iban == "AT611904300234573201"
+    assert payment.bic == "BKAUATWW"
     assert payment.amount == Decimal("988.44")
-    assert payment.remittance_text == "020-AR2604363"
-    assert payment.invoice_number == "020-AR2604363"
+    assert payment.remittance_text == "TEST-AR-2026-001"
+    assert payment.invoice_number == "TEST-AR-2026-001"
     assert payment.source_by_field["iban"].value == "pdf_existing_qr"
 
 
-def test_extract_pdf_text_uses_pymupdf_footer_bank_data_for_beleg() -> None:
-    pdf = Path("docs/invoices/Beleg_020-AR2604363 (1).pdf")
-    assert pdf.exists()
-
-    text = _extract_pdf_text(pdf.read_bytes())
+def test_extract_pdf_text_uses_pymupdf_for_synthetic_invoice(tmp_path: Path) -> None:
+    text = _extract_pdf_text(_synthetic_epc_invoice_pdf(tmp_path))
 
     assert "IBAN" in text
-    assert "AT623821500007032402" in text.replace(" ", "")
-    assert "RZSTAT2G215" in text
+    assert "AT611904300234573201" in text.replace(" ", "")
+    assert "BKAUATWW" in text
+
+
+def test_epc_payload_normalizes_crlf_line_endings() -> None:
+    from xw_office.services.transfers.payment_qr import _normalize_epc_payload
+
+    source = "BCD" + chr(13) + chr(10) + "002" + chr(13)
+    expected = "BCD" + chr(10) + "002"
+    assert _normalize_epc_payload(source) == expected
 
 
 def test_extract_wraps_pdf_bytes_for_pypdf(monkeypatch) -> None:

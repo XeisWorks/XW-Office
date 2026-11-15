@@ -49,7 +49,7 @@ current_status:
     - "selected OneDrive target folder can be opened from the dialog without implying cloud sync"
     - "selected tenant _needs_review folder can be opened only within the selected target; explicit review resolution validates, no-clobber publishes by invoice date, updates schema-5 metadata, then removes the review copy"
     - "encrypted PDFs produce QUARANTINED and remain in local review quarantine"
-    - "latest full repository suite after safe run-history UI: 2439 passed, 7 skipped, 0 failed; repo Ruff, Queue-YAML, changed-module MyPy, diff and added-diff secret checks pass"
+    - "latest full repository suite after invoice-PDF index cleanup and synthetic QR tests: 2441 passed, 7 skipped, 0 failed; repo Ruff, Queue-YAML, changed-module MyPy, diff and added-diff secret checks pass"
     - "targeted MyPy for Mollie connector, registry and dialog passes with foreign imports skipped; broad current-environment MyPy is blocked by absent optional msal_extensions/Playwright and a NumPy stub/Python-version mismatch; 30-file collector/dialog MyPy passed in the prior recorded environment"
     - "DPAPI roundtrip, CLI doctor, and Doppler Graph app-variable presence check pass without printing values (prior recorded checks)"
     - "Graph mail, Mollie API and Playwright adapter contracts covered with local fakes"
@@ -398,9 +398,10 @@ tasks:
     status: "in_progress"
     depends_on: ["T05", "T06", "T07"]
     evidence:
-      - "python -m pytest -q: 2440 passed, 7 skipped, 0 failed (after auth-status correction; one external Starlette/httpx deprecation warning)"
+      - "python -m pytest -q: 2441 passed, 7 skipped, 0 failed (after invoice-PDF index cleanup and synthetic QR tests; one external Starlette/httpx deprecation warning)"
       - "Invoice collector foundation/UI slice: 94 passed, including safe run-history list, period reuse and journal injection; retry eligibility includes AUTH_REQUIRED and TRANSIENT_NETWORK, excludes OUT_OF_PERIOD, POLICY_BLOCKED, UNSUPPORTED_ACCOUNT and CONTENT_CONFLICT"
-      - "Auth-status correction: 45 invoice foundations tests and 68 foundations/UI tests passed; all-active-routes-auth case persists WAITING_FOR_USER at route and run level"
+      - "Auth-status correction: 45 invoice foundations tests and 68 foundations/UI tests passed; full suite after invoice-PDF cleanup is 2441 passed, 7 skipped; all-active-routes-auth case persists WAITING_FOR_USER at route and run level"
+      - "Payment QR tests no longer read real docs/invoices PDFs; synthetic invoice+EPC QR fixtures are generated per test, and CRLF normalization is covered directly"
       - "OneDrive identical-publish race test: 5 consecutive passes after synchronizing both target-existence checks"
       - "python -m ruff check .: passed"
       - "Targeted mypy on changed invoice collection service and dialog with foreign imports skipped: passed using --disable-error-code=unused-ignore --disable-error-code=no-any-return (the latter suppresses the Any propagated by skipped repository imports). Broad local mypy is blocked by missing optional msal_extensions/Playwright and NumPy stub/Python-version mismatch"
@@ -408,7 +409,7 @@ tasks:
       - "git diff --check: passed"
       - "Added-diff secret-pattern scan: no matches"
       - "Tracked-text credential scan: 0 high-confidence private-key, GitHub, Slack, AWS, OpenAI and Google credential-pattern hits"
-      - "Tracked artifact audit: 17 existing PDFs; docs/invoices files predate the collector (first history 2026-07-10) and are referenced by payment QR tests; collector changes add or modify no PDFs. Blanket repository-wide no-PDF gate remains unresolved, so T09 stays in_progress"
+      - "Privacy remediation: six real invoice PDFs removed from the current Git index and ignored via docs/invoices/*.pdf; local copies are retained ignored and QR tests generate synthetic PDFs. Eleven other tracked PDF assets remain for separate product/test uses, so the broad zero-PDF gate is open. Previous Git objects retain the old invoice blobs; AGENTS.md forbids force-push/history rewrite, so T09 records historical exposure and does not claim erasure"
       - "T08 records the pending local mailbox/sender-domain clarification as blocked_external"
     deliverables:
       - "Unit, contract, UI and integration test report"
