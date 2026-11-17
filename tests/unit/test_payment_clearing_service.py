@@ -720,7 +720,8 @@ def test_wix_refund_with_verified_credit_note_is_booked(tmp_path: Path) -> None:
     sevdesk.invoice = InvoiceRecord(7, "RE-100", "Wix | 12345", money("29.90"), 1000, "Anna")
     service = _service(sevdesk, [refund], tmp_path, _RefundFeed([{
         "wix_refund_id": "wix-refund-1", "wix_order_number": "12345",
-        "provider_refund_id": None, "sevdesk_invoice_id": "7", "amount": "29.90",
+        "provider_refund_id": "11111111-2222-4333-8444-555555555555",
+        "sevdesk_invoice_id": "7", "amount": "29.90",
         "currency": "EUR", "external_refund": 0, "wix_refund_status": "SUCCEEDED",
         "process_status": "done_creditnote", "sevdesk_credit_note_id": "44",
     }]))
@@ -753,6 +754,10 @@ def test_wix_refund_with_wrong_invoice_or_duplicate_provider_refund_is_not_booke
     assert not mismatch.selected
 
     feed_row["sevdesk_invoice_id"] = "7"
+    feed_row["provider_refund_id"] = "re_other"
+    wrong_provider = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
+    assert wrong_provider.status == MatchStatus.REFUND_REVIEW
+    feed_row.pop("provider_refund_id")
     second = ProviderTransaction(
         provider="stripe", provider_ref="re_2", provider_order_id="pi_1",
         kind=TransactionKind.REFUND, amount=money("-29.90"),

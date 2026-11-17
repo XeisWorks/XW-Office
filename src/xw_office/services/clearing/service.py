@@ -13,6 +13,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Callable
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from xw_office.repositories.settings_kv import SettingKvRepository
@@ -73,6 +74,13 @@ def _order_number(value: object) -> str:
         return text
     matches = set(_ORDER_NUMBER.findall(text))
     return next(iter(matches)) if len(matches) == 1 else ""
+
+
+def _wix_uuid(value: str) -> bool:
+    try:
+        return str(UUID(value)) == value.lower()
+    except (ValueError, AttributeError):
+        return False
 
 
 def _invoice_number(value: object) -> str:
@@ -685,6 +693,7 @@ class PaymentClearingService:
             and (
                 not str(row.get("provider_refund_id") or "").strip()
                 or str(row.get("provider_refund_id")).strip() == candidate.provider_ref
+                or _wix_uuid(str(row.get("provider_refund_id") or "").strip())
             )
         ]
         if len(matches) != 1:
