@@ -321,6 +321,7 @@ class InvoiceProcessingService:
         self._wix_address_cache: dict[str, list[str]] = {}
         self._wix_digital_cache: dict[str, bool] = {}
         self._wix_order_summary_cache: dict[str, dict[str, str]] = {}
+        self._contact_name_cache: dict[str, str] = {}
         self._wix_hint_cache: dict[str, InvoiceListHintFlags] = {}
         self._payment_check_account_cache: dict[str, int | None] = {}
         self._sku_flags_cache: tuple[set[str], tuple[str, ...], tuple[str, ...]] | None = None
@@ -796,6 +797,7 @@ class InvoiceProcessingService:
         return candidate_from_summary(
             summary,
             wix_name=str(wix.get("wix_customer_name") or ""),
+            wix_company=str(wix.get("wix_customer_company") or ""),
             wix_country=str(wix.get("wix_shipping_country") or ""),
             digital_only=self._start_delivery_kind(summary) != "physical",
             plc=plc,
@@ -2724,6 +2726,26 @@ class InvoiceProcessingService:
         if not raw:
             raise ValueError(f"Rechnung {invoice_id} nicht gefunden")
         summary = InvoiceSummary.from_api_object(raw)
+        if not summary.contact_name:
+            contact = raw.get("contact")
+            contact_id = (
+                str(contact.get("id") or raw.get("contactId") or "").strip()
+                if isinstance(contact, dict)
+                else str(contact or raw.get("contactId") or "").strip()
+            )
+            fetch_name = getattr(self._invoices, "fetch_contact_name", None)
+            if contact_id and callable(fetch_name):
+                name = self._contact_name_cache.get(contact_id)
+                if name is None:
+                    try:
+                        name = str(fetch_name(contact_id) or "").strip()
+                    except Exception as exc:  # noqa: BLE001 - keep invoice available without contact API.
+                        logger.warning("Invoice contact lookup failed id=%s: %s", contact_id, exc)
+                        name = ""
+                    if name:
+                        self._contact_name_cache[contact_id] = name
+                if name:
+                    summary = summary.model_copy(update={"contact_name": name})
         self._apply_sensitive_country_flags([summary])
         self._apply_unreleased_sku_flags([summary])
         return summary

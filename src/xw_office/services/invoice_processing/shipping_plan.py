@@ -17,6 +17,24 @@ def country_code(value: object) -> str:
     return country_iso2(value)
 
 
+def compact_customer_name(name: object, *, company: object = "") -> str:
+    """Show a company alone in compact buyer lists; keep personal names otherwise."""
+    firm = str(company or "").strip()
+    if firm:
+        return firm
+    text = str(name or "").strip()
+    for separator in (" | ", " / "):
+        if separator in text:
+            return text.split(separator, 1)[0].strip()
+    return text
+
+
+def missing_customer_name(value: object) -> bool:
+    return str(value or "").strip().casefold() in {
+        "", "-", "—", "---", "käufer nicht verfügbar", "kunde nicht verfügbar",
+    }
+
+
 @dataclass(frozen=True)
 class ShippingCandidate:
     invoice_id: str
@@ -32,6 +50,7 @@ def candidate_from_summary(
     summary: InvoiceSummary,
     *,
     wix_name: str = "",
+    wix_company: str = "",
     wix_country: str = "",
     digital_only: bool = False,
     plc: bool = False,
@@ -39,10 +58,19 @@ def candidate_from_summary(
     country = country_code(wix_country) or country_code(summary.display_country)
     is_plc = plc or summary.has_plc_label_candidate()
     lane = "digital" if digital_only else "at" if is_plc or country == "AT" else "abroad"
+    contact_name = str(summary.contact_name or "").strip()
+    contact_company = (
+        compact_customer_name(contact_name)
+        if any(separator in contact_name for separator in (" | ", " / "))
+        else ""
+    )
     return ShippingCandidate(
         invoice_id=str(summary.id),
         invoice_date=str(summary.invoice_date or ""),
-        customer_name=wix_name.strip() or summary.contact_name.strip() or "—",
+        customer_name=(
+            compact_customer_name(wix_name, company=wix_company or contact_company)
+            or compact_customer_name(contact_name) or "—"
+        ),
         order_reference=str(summary.order_reference or "").strip(),
         lane=lane,
         eu_ch=country in EU_CH_CODES,

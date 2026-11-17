@@ -2519,6 +2519,72 @@ def test_legacy_start_history_rebuilds_products_from_saved_invoice_ids(
     assert repaired["_legacy_repaired"] is True
 
 
+def test_history_repair_keeps_saved_products_when_wix_result_is_empty(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    monkeypatch.setattr(
+        "xw_office.ui.modules.rechnungen.view.resolve_open_invoice_overview",
+        lambda _summaries, **_kw: OpenInvoiceOverview(
+            key="old", total=1, with_ref=1, physical=1, digital=0,
+            unknown=0, with_note=0, plc=0, complete=True,
+        ),
+    )
+    monkeypatch.setattr(
+        invoice_service, "load_invoice_summary_by_id",
+        lambda invoice_id: InvoiceSummary(id=invoice_id), raising=False,
+    )
+    original = {"schema_version": 2, "runs": [{
+        "invoice_print_ids": ["42"],
+        "print_products": [{"sku": "XW-010", "title": "Richtige Noten", "quantity": 2}],
+    }]}
+    repaired = RechnungenView._repair_legacy_run_history(  # noqa: SLF001
+        original, invoice_service, container.resolve(WixOrdersClient)
+    )
+    assert repaired["runs"][0]["print_products"] == original["runs"][0]["print_products"]
+
+
+def test_delayed_history_restore_keeps_visible_current_products(qtbot: object) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    view._apply_open_invoice_overview(  # noqa: SLF001
+        OpenInvoiceOverview(
+            key="current", total=1, with_ref=1, physical=1, digital=0,
+            unknown=0, with_note=0, plc=0, complete=True,
+            print_products=[PrintProductAggregate(
+                sku="XW-010", title="Sichtbare Noten", description="", quantity=2,
+            )],
+        )
+    )
+    view._restore_last_start_overview({  # noqa: SLF001
+        "schema_version": 4, "runs": [{"saved_at": "2026-11-17", "print_products": []}],
+    })
+    assert view._print_products_tabs.currentIndex() == 0  # noqa: SLF001
+    assert "Sichtbare Noten" in view._open_products_text.toPlainText()  # noqa: SLF001
+
+
+def test_history_restore_recovers_blank_last_run_names(monkeypatch: MonkeyPatch) -> None:
+    container, invoice_service = _build_rechnungen_test_container()
+    monkeypatch.setattr(
+        invoice_service, "load_invoice_summary_by_id",
+        lambda invoice_id: InvoiceSummary(id=invoice_id, contact_name="Muster GmbH | Anna Muster"),
+        raising=False,
+    )
+    payload = {"schema_version": 4, "runs": [{
+        "invoice_print_ids": ["42"],
+        "customers": [{"date": "12.11.26", "name": "—", "gross": "25,00 €"}],
+        "print_products": [{"sku": "XW-010", "title": "Noten", "quantity": 1}],
+    }]}
+    fixed = RechnungenView._enrich_run_history_customer_names(  # noqa: SLF001
+        payload, invoice_service, container.resolve(WixOrdersClient), {}
+    )
+    row = fixed["runs"][0]["customers"][0]
+    assert row["invoice_id"] == "42"
+    assert row["name"] == "Muster GmbH | Anna Muster"
+    assert fixed["runs"][0]["print_products"] == payload["runs"][0]["print_products"]
+
+
 def test_start_history_keeps_five_exact_runs_with_customers(qtbot: object) -> None:
     container, invoice_service = _build_rechnungen_test_container()
     view = RechnungenView(container)

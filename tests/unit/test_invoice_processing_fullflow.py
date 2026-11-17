@@ -100,3 +100,17 @@ def test_start_refresh_preserves_embedded_contact_name(monkeypatch) -> None:
     finalized = service._refresh_finalized_start_summary(refreshed)
     assert finalized.contact_name == "Anna Versand"
     assert finalized.invoice_date == "2026-11-17"
+
+
+def test_exact_invoice_load_resolves_name_from_contact_id(monkeypatch) -> None:
+    invoice_client = _InvoiceClientStub()
+    invoice_client.fetch_invoice_by_id = lambda _invoice_id: {
+        "id": "42", "contact": {"id": "7"}, "invoiceDate": "2026-11-17",
+    }
+    invoice_client.fetch_contact_name = lambda contact_id: (
+        "Muster GmbH | Anna Muster" if contact_id == "7" else ""
+    )
+    service = InvoiceProcessingService(AppConfig(), invoice_client, _RepoStub(), None)
+    monkeypatch.setattr(service, "_apply_sensitive_country_flags", lambda _rows: None)
+    monkeypatch.setattr(service, "_apply_unreleased_sku_flags", lambda _rows: None)
+    assert service.load_invoice_summary_by_id("42").contact_name == "Muster GmbH | Anna Muster"

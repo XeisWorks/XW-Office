@@ -94,7 +94,11 @@ from xw_office.services.draft_invoice.service import (
     UnreleasedTitleIssue,
 )
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
-from xw_office.services.invoice_processing.shipping_plan import valid_iso_date
+from xw_office.services.invoice_processing.shipping_plan import (
+    compact_customer_name,
+    missing_customer_name,
+    valid_iso_date,
+)
 from xw_office.ui.modules.rechnungen.start_hold_dialog import StartHoldDialog
 from xw_office.services.invoice_processing.context import InvoiceWorkContext
 from xw_office.services.digital_licenses import DigitalLicenseService
@@ -3668,7 +3672,7 @@ class RechnungenView(QWidget):
             self._open_product_prepared_target = target
             overview = self._open_product_current_overview
             if overview is not None and self._open_product_preparation_key(overview) == target:
-                self._apply_open_invoice_overview(overview)
+                self._render_open_print_products(self._print_product_display_overview(overview))
 
     def _on_open_product_preparation_error(
         self, exc: Exception, seq: int, target: tuple[object, ...]
@@ -3683,7 +3687,7 @@ class RechnungenView(QWidget):
             self._open_product_prepared_target = target
             self._open_product_prepared_blocks = {}
             self._open_product_ready_cache = {}
-            self._apply_open_invoice_overview(overview)
+            self._render_open_print_products(self._print_product_display_overview(overview))
 
     def _on_open_product_preparation_finished(self) -> None:
         self._open_product_preparation_worker = None
@@ -3719,7 +3723,11 @@ class RechnungenView(QWidget):
             {
                 "invoice_id": str(row.id),
                 "date": row.formatted_date_short,
-                "name": (customer_names or {}).get(str(row.id)) or row.contact_name or "—",
+                "name": (
+                    (customer_names or {}).get(str(row.id))
+                    if not missing_customer_name((customer_names or {}).get(str(row.id)))
+                    else row.contact_name or "—"
+                ),
                 "gross": row.formatted_brutto,
                 "planned_date": (shipping_dates or {}).get(str(row.id), ""),
                 "shipped_date": "",
@@ -3868,7 +3876,7 @@ class RechnungenView(QWidget):
                 {
                     "invoice_id": str(row.id),
                     "date": row.formatted_date_short,
-                    "name": row.contact_name or "—",
+                    "name": compact_customer_name(row.contact_name) or "—",
                     "gross": row.formatted_brutto,
                     "planned_date": "",
                     "shipped_date": "",
@@ -3897,7 +3905,7 @@ class RechnungenView(QWidget):
         rows = "".join(
             "<tr>"
             f"<td>{html.escape(row.get('date', ''))}</td>"
-            f"<td>{html.escape(row.get('name', ''))}</td>"
+            f"<td>{html.escape(compact_customer_name(row.get('name', '')))}</td>"
             f"<td>{shipping_cell(row)}</td>"
             f"<td align='right'>{html.escape(row.get('gross', ''))}</td>"
             "</tr>"
@@ -4152,8 +4160,7 @@ class RechnungenView(QWidget):
         wix_client: WixOrdersClient,
     ) -> dict[str, object]:
         """Recover run products and customer names from exact invoice IDs."""
-        if _int_or_default(payload.get("schema_version"), 0) >= 4:
-            return payload
+        schema_version = _int_or_default(payload.get("schema_version"), 0)
         raw_runs = payload.get("runs")
         if not isinstance(raw_runs, list):
             raw_runs = [payload]
@@ -4165,6 +4172,9 @@ class RechnungenView(QWidget):
                 repaired.append(raw)
                 continue
             run = dict(raw)
+            if schema_version >= 3 and _list_payload(run.get("print_products")):
+                repaired.append(run)
+                continue
             raw_ids = _list_payload(run.get("invoice_print_ids")) or _list_payload(
                 run.get("label_print_ids")
             )
@@ -4197,7 +4207,7 @@ class RechnungenView(QWidget):
                 retry_needed = True
                 repaired.append(run)
                 continue
-            run["print_products"] = [
+            rebuilt_products = [
                 {
                     "sku": item.sku, "title": item.title,
                     "description": item.description, "quantity": item.quantity,
@@ -4205,7 +4215,16 @@ class RechnungenView(QWidget):
                 }
                 for item in overview.print_products
             ]
-            run["buyer_notes"] = [
+            if not rebuilt_products and overview.physical:
+                retry_needed = True
+                repaired.append(run)
+                continue
+            # An overview can classify every order while Wix still lacks its
+            # line items. Never replace a saved run's nonempty work list with
+            # that partial reconstruction.
+            if rebuilt_products and (schema_version < 3 or not _list_payload(run.get("print_products"))):
+                run["print_products"] = rebuilt_products
+            rebuilt_notes = [
                 {
                     "customer_name": item.customer_name, "note": item.note,
                     "order_reference": item.order_reference, "source": item.source,
@@ -4213,13 +4232,17 @@ class RechnungenView(QWidget):
                 }
                 for item in overview.buyer_notes
             ]
-            run["unreleased_assignments"] = [
+            if rebuilt_notes and not _list_payload(run.get("buyer_notes")):
+                run["buyer_notes"] = rebuilt_notes
+            rebuilt_assignments = [
                 {
                     "title": item.title, "shipping_name": item.shipping_name,
                     "order_reference": item.order_reference,
                 }
                 for item in overview.unreleased_assignments
             ]
+            if rebuilt_assignments and not _list_payload(run.get("unreleased_assignments")):
+                run["unreleased_assignments"] = rebuilt_assignments
             rebuilt_customers = [
                 {
                     "invoice_id": str(summary.id),
@@ -4237,16 +4260,85 @@ class RechnungenView(QWidget):
             # only name physical invoices. Preserve those extra buyer rows.
             if not old_customers or len(old_customers) == len(ids) == len(summaries):
                 run["customers"] = rebuilt_customers
-            run["products_complete"] = len(summaries) == len(ids)
+            run["products_complete"] = bool(run.get("products_complete")) or len(summaries) == len(ids)
             if not run["products_complete"]:
                 retry_needed = True
             repaired.append(run)
             changed = True
-        if not changed:
+        if not changed and schema_version >= 4:
             return payload
         if retry_needed:
-            return {**payload, "runs": repaired}
+            return {**payload, "runs": repaired, "_legacy_repaired": changed}
         return {**payload, "runs": repaired, "schema_version": 4, "_legacy_repaired": True}
+
+    @staticmethod
+    def _enrich_run_history_customer_names(
+        payload: dict[str, object],
+        service: InvoiceProcessingService,
+        wix_client: WixOrdersClient,
+        ledger: dict[str, dict[str, str]],
+    ) -> dict[str, object]:
+        """Fill old blank buyer rows without rewriting products or other run data."""
+        raw_runs = payload.get("runs")
+        if not isinstance(raw_runs, list):
+            return payload
+        updated_runs: list[object] = []
+        changed = False
+        for raw in raw_runs:
+            if not isinstance(raw, dict):
+                updated_runs.append(raw)
+                continue
+            run = dict(raw)
+            customers = _list_payload(run.get("customers"))
+            ids = [str(item).strip() for item in _list_payload(run.get("invoice_print_ids"))]
+            if not ids:
+                ids = [str(item).strip() for item in _list_payload(run.get("label_print_ids"))]
+            mapped_ids = ids if len(ids) == len(customers) else []
+            fixed_customers: list[object] = []
+            for index, item in enumerate(customers):
+                if not isinstance(item, dict):
+                    fixed_customers.append(item)
+                    continue
+                row = dict(item)
+                invoice_id = str(row.get("invoice_id") or "").strip()
+                if not invoice_id and mapped_ids:
+                    invoice_id = mapped_ids[index]
+                    row["invoice_id"] = invoice_id
+                    changed = True
+                if invoice_id and missing_customer_name(row.get("name")):
+                    record = ledger.get(invoice_id, {})
+                    name = str(record.get("customer_name") or "").strip()
+                    if missing_customer_name(name):
+                        load_summary = getattr(service, "load_invoice_summary_by_id", None)
+                        summary: InvoiceSummary | None = None
+                        if callable(load_summary):
+                            try:
+                                summary = load_summary(invoice_id)
+                            except Exception as exc:  # noqa: BLE001 - preserve other rows.
+                                logger.warning("Run customer lookup failed id=%s: %s", invoice_id, exc)
+                        if summary is not None:
+                            name = str(summary.contact_name or "").strip()
+                            if missing_customer_name(name) and summary.order_reference:
+                                resolve_order = getattr(wix_client, "resolve_order_summary", None)
+                                if callable(resolve_order):
+                                    try:
+                                        wix = resolve_order(summary.order_reference)
+                                        if isinstance(wix, dict):
+                                            name = str(
+                                                wix.get("wix_customer_company")
+                                                or wix.get("wix_customer_name") or ""
+                                            ).strip()
+                                    except Exception as exc:  # noqa: BLE001
+                                        logger.warning("Wix customer lookup failed ref=%s: %s", summary.order_reference, exc)
+                    if not missing_customer_name(name):
+                        row["name"] = name
+                        changed = True
+                fixed_customers.append(row)
+            run["customers"] = fixed_customers
+            updated_runs.append(run)
+        if not changed:
+            return payload
+        return {**payload, "runs": updated_runs, "_legacy_repaired": True}
 
     def _persist_print_run_history(self) -> None:
         payload = {
@@ -4302,9 +4394,12 @@ class RechnungenView(QWidget):
                 if not isinstance(result, dict):
                     return {}
                 wix_client: WixOrdersClient = container.resolve(WixOrdersClient)
-                repaired = self._repair_legacy_run_history(result, service, wix_client)
                 shipping_reader = getattr(service, "read_shipping_dates", None)
                 ledger = shipping_reader() if callable(shipping_reader) else {}
+                repaired = self._repair_legacy_run_history(result, service, wix_client)
+                repaired = self._enrich_run_history_customer_names(
+                    repaired, service, wix_client, ledger if isinstance(ledger, dict) else {},
+                )
                 return {**repaired, "_shipping_dates": ledger}
 
             worker = BackgroundWorker(read)
@@ -4433,9 +4528,12 @@ class RechnungenView(QWidget):
         self._last_run_print_products = list(restored[0].print_products)
         self._last_run_buyer_notes = list(restored[0].buyer_notes)
         self._last_run_unreleased = list(restored[0].unreleased_assignments)
-        self._active_print_history_index = 0
-        self._print_products_last_run = True
-        self._rebuild_print_product_tabs(select_history=True)
+        # The async restore must not replace a populated current work list
+        # that the user has already seen while the history was loading.
+        keep_current = bool(self._open_overview_products)
+        self._active_print_history_index = None if keep_current else 0
+        self._print_products_last_run = not keep_current
+        self._rebuild_print_product_tabs(select_history=not keep_current)
         self._render_active_print_tab()
         if payload.get("_legacy_repaired"):
             self._persist_print_run_history()

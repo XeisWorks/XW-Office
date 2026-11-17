@@ -37,6 +37,20 @@ def test_invoice_summary_from_api_object() -> None:
     assert "19,99 €" in summary.formatted_brutto
 
 
+def test_invoice_client_resolves_contact_name_from_contact_id() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/Contact/42")
+        return httpx.Response(200, json={"objects": [{
+            "name": "Muster GmbH", "surename": "Anna", "familyname": "Muster",
+        }]})
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://example.test/api/v1"
+    )
+    invoice_client = InvoiceClient(SevdeskConnection(client=client, config=AppConfig()))
+    assert invoice_client.fetch_contact_name("42") == "Muster GmbH | Anna Muster"
+
+
 def test_invoice_summary_flags_delivery_override_and_sensitive_country() -> None:
     raw = {
         "id": 99,

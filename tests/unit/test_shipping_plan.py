@@ -5,7 +5,7 @@ import pytest
 
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.services.invoice_processing.shipping_plan import (
-    abroad_with_at_default, candidate_from_summary, pending_abroad,
+    abroad_with_at_default, candidate_from_summary, compact_customer_name, pending_abroad,
 )
 from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 
@@ -17,6 +17,21 @@ def test_physical_lanes_keep_plc_with_austria_and_exclude_digital() -> None:
     assert plc.plc
     assert candidate_from_summary(summary, wix_country="Deutschland").lane == "abroad"
     assert candidate_from_summary(summary, digital_only=True, plc=True).lane == "digital"
+
+
+def test_compact_buyer_names_keep_company_only() -> None:
+    assert compact_customer_name("Muster GmbH | Anna Muster") == "Muster GmbH"
+    assert compact_customer_name("Muster GmbH / Anna Muster") == "Muster GmbH"
+    assert compact_customer_name("Anna Muster") == "Anna Muster"
+    summary = InvoiceSummary(id="7", contact_name="Anna Muster")
+    candidate = candidate_from_summary(
+        summary, wix_name="Muster GmbH / Anna Muster", wix_company="Muster GmbH",
+    )
+    assert candidate.customer_name == "Muster GmbH"
+    summary_with_company = InvoiceSummary(id="8", contact_name="Muster GmbH | Anna Muster")
+    assert candidate_from_summary(
+        summary_with_company, wix_name="Anna Muster",
+    ).customer_name == "Muster GmbH"
 
 
 def test_abroad_batch_counts_pending_eu_but_not_digital_or_non_eu() -> None:

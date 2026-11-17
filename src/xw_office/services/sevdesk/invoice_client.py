@@ -864,6 +864,27 @@ class InvoiceClient:
                     return item
         return {}
 
+    def fetch_contact_name(self, contact_id: str) -> str:
+        """Resolve a contact when an invoice response contains only its ID."""
+        response = self._conn.get(f"/Contact/{str(contact_id).strip()}")
+        payload = response.json()
+        if isinstance(payload, dict):
+            raw = payload.get("objects", payload)
+        else:
+            raw = payload
+        if isinstance(raw, list):
+            raw = next((item for item in raw if isinstance(item, dict)), {})
+        if not isinstance(raw, dict):
+            return ""
+        company = str(raw.get("name") or "").strip()
+        person = " ".join(
+            part for part in (
+                str(raw.get("surename") or "").strip(),
+                str(raw.get("familyname") or "").strip(),
+            ) if part
+        )
+        return f"{company} | {person}" if company and person else company or person
+
     @staticmethod
     def invoice_reference(invoice: dict[str, Any]) -> str:
         for ref_key in (
