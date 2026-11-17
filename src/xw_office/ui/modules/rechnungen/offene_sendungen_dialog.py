@@ -416,7 +416,9 @@ class OffeneSendungenDialog(QDialog):
         container = self._container
         current_service = self._service
 
-        def job() -> tuple[OffeneSendungenService, list[SendungCase], dict[str, str]]:
+        def job() -> tuple[
+            OffeneSendungenService, list[SendungCase], dict[str, str], dict[str, str]
+        ]:
             service = current_service or container.resolve(OffeneSendungenService)
             if refresh:
                 service.refresh_from_graph(
@@ -427,7 +429,14 @@ class OffeneSendungenDialog(QDialog):
             cases = service.load_open_cases()
             names_loader = getattr(service, "load_cached_recipient_names", None)
             names = names_loader(cases) if callable(names_loader) else {}
-            return service, cases, names if isinstance(names, dict) else {}
+            summaries_loader = getattr(service, "load_cached_summaries", None)
+            summaries = summaries_loader(cases) if callable(summaries_loader) else {}
+            return (
+                service,
+                cases,
+                names if isinstance(names, dict) else {},
+                summaries if isinstance(summaries, dict) else {},
+            )
 
         self._load_worker = BackgroundWorker(job)
         self._load_worker.signals.result.connect(
@@ -455,8 +464,13 @@ class OffeneSendungenDialog(QDialog):
             return
         if seq != self._load_seq:
             return
-        if isinstance(result, tuple) and len(result) == 3:
+        if isinstance(result, tuple) and len(result) == 4:
+            service, cases, names, summaries = result
+            self._cached_summaries = dict(summaries)
+            self._service = service
+        elif isinstance(result, tuple) and len(result) == 3:
             service, cases, names = result
+            self._cached_summaries = {}
             self._service = service
         else:
             cases, names = result, {}
@@ -557,8 +571,6 @@ class OffeneSendungenDialog(QDialog):
         self._thread.setPlainText(
             original_text if is_flow_share else self._compact_thread_text(original_text)
         )
-        self._set_detail_loading("Lade Auswertung…")
-        self._summary.setText(case.subject or "Sendung wird geladen...")
         self._extract_selected(force=False)
 
     def _extract_selected(self, *, force: bool) -> None:
@@ -569,6 +581,10 @@ class OffeneSendungenDialog(QDialog):
         seq = self._detail_seq
         case_id = case.id
         self._set_detail_loading("Analysiere Mailverlauf..." if force else "Lade Details...")
+        preview = getattr(self, "_cached_summaries", {}).get(case_id, "")
+        self._summary.setText(
+            preview or f"Mail-Vorschau: {(case.snippet or case.body or case.subject).strip()[:320]}"
+        )
 
         def job() -> tuple[str, SendungExtraction, dict[str, object]]:
             service = self._require_service()
@@ -630,6 +646,8 @@ class OffeneSendungenDialog(QDialog):
         if case is None or case.id != case_id or not isinstance(extraction, SendungExtraction):
             return
         self._summary.setText(extraction.summary)
+        self._cached_summaries = getattr(self, "_cached_summaries", {})
+        self._cached_summaries[case_id] = extraction.summary
         self._set_case_metadata(case, extraction)
         if extraction.thread_text and case.source_type != "xw_flow_share":
             self._thread.setPlainText(self._compact_thread_text(extraction.thread_text))
@@ -690,7 +708,7 @@ class OffeneSendungenDialog(QDialog):
         if case.id.startswith("nachlieferung-"):
             metadata.insert(0, "Typ: NACHLIEFERUNG")
         if case.source_type != "xw_flow_share":
-            order_number = extraction.order_number if extraction is not None else case.order_number
+            order_number = extraction.order_number if extraction is not None else ""
             invoice_number = (
                 extraction.invoice_number if extraction is not None else case.invoice_number
             )

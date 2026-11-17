@@ -726,6 +726,9 @@ def test_sender_name_confirms_order_shipping_address() -> None:
     assert OffeneSendungenService._name_matches_case(  # noqa: SLF001
         "Hans Stroeber", case, "Hallo Herr Stroeber, bitte versenden."
     )
+    assert OffeneSendungenService._name_matches_case(  # noqa: SLF001
+        "Thorsten Ströher", case, "Hallo Herr Stroeher, bitte versenden."
+    )
 
 
 def test_matching_sevdesk_and_wix_names_confirm_order_address() -> None:
@@ -760,6 +763,50 @@ def test_matching_sevdesk_and_wix_names_confirm_order_address() -> None:
         case, "Bitte an die Adresse aus der Bestellung senden."
     )
     assert context.address_lines == ("Max Muster", "Neuweg 2", "1010 Wien")
+
+
+def test_stroeher_order_address_matches_umlaut_spelling_in_mail() -> None:
+    class _Wix:
+        def resolve_latest_shipping_address(self, **kwargs: object) -> dict[str, object]:
+            assert kwargs["reference"] == "21694"
+            return {
+                "address_lines": ["Thorsten Ströher", "Hugo-Herrmann-Straße 15", "72766 Reutlingen", "DE"],
+                "order_number": "21694",
+            }
+
+    service = OffeneSendungenService(_Repo(), _Secrets(), _Wix())  # type: ignore[arg-type]
+    case = SendungCase(
+        id="stroeher", received_at="", sender="office@xeisworks.at",
+        subject="Kontakt hat eine neue Einreichung", snippet="", body="", thread_id="",
+        order_number="93012",
+    )
+    context = service._resolve_business_context(  # noqa: SLF001
+        case, "Hallo Herr Stroeher, zu Wix-Order-Nr.: 21694 bitte versenden."
+    )
+    assert context.order_number == "21694"
+    assert context.address_lines[0] == "Thorsten Ströher"
+
+
+def test_stroeher_email_finds_order_when_only_postal_code_is_in_mail() -> None:
+    class _Wix:
+        def resolve_latest_shipping_address(self, **kwargs: object) -> dict[str, object]:
+            assert kwargs == {"reference": "", "email": "stroeher@example.test"}
+            return {
+                "address_lines": ["Thorsten Ströher", "Hugo-Herrmann-Straße 15", "72766 Reutlingen", "DE"],
+                "order_number": "21694",
+            }
+
+    service = OffeneSendungenService(_Repo(), _Secrets(), _Wix())  # type: ignore[arg-type]
+    case = SendungCase(
+        id="stroeher", received_at="", sender="office@xeisworks.at",
+        subject="Kontakt hat eine neue Einreichung", snippet="", body="", thread_id="",
+        order_number="93012",
+    )
+    context = service._resolve_business_context(  # noqa: SLF001
+        case, "Hallo Herr Stroeher, bitte an stroeher@example.test. PLZ: 93012."
+    )
+    assert context.order_number == "21694"
+    assert context.address_lines[0] == "Thorsten Ströher"
 
 
 def test_unsubstantiated_ai_address_is_replaced_by_resolved_order_address() -> None:
@@ -808,6 +855,7 @@ def test_reference_extraction_distinguishes_invoice_order_and_postal_code() -> N
         OffeneSendungenService._extract_order_number("Wix-Order-Nr.: 21343")  # noqa: SLF001
         == "21343"
     )
+    assert OffeneSendungenService._extract_order_number("93012") == ""  # noqa: SLF001
 
 
 def test_sevdesk_invoice_context_resolves_customer_order_address_and_exact_products() -> None:

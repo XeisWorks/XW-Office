@@ -39,7 +39,7 @@ _EXTRACTIONS_KEY = "daily_business.offene_sendungen.extractions"
 _MANUAL_KEY = "daily_business.offene_sendungen.manual"
 _SOURCE_MAILBOX_KEY = "daily_business.offene_sendungen.source_mailbox"
 _DEFAULT_MODEL = "gpt-4.1-mini"
-_EXTRACTION_SCHEMA_VERSION = 3
+_EXTRACTION_SCHEMA_VERSION = 4
 _MEMORY_CACHE_SECONDS = 120.0
 _DEFAULT_SHIPPING_MAILBOX = "shipping@xeisworks.at"
 #: Sentinel ``SendungCase.sender`` for cases injected via create_manual_case
@@ -138,6 +138,7 @@ class OffeneSendungenService:
         self._open_cases_cache: list[SendungCase] | None = None
         self._open_cases_cache_at = 0.0
         self._recipient_names_cache: dict[str, str] | None = None
+        self._extraction_locks: dict[str, RLock] = {}
 
     def open_count(self) -> int:
         cases = self.load_open_cases()
@@ -576,6 +577,20 @@ class OffeneSendungenService:
         on_thread_loaded: Callable[[str], None] | None = None,
     ) -> SendungExtraction:
         cid = str(case_id or "").strip()
+        with self._cache_lock:
+            case_lock = self._extraction_locks.setdefault(cid, RLock())
+        with case_lock:
+            return self._extract_case_details_locked(
+                cid, force=force, on_thread_loaded=on_thread_loaded
+            )
+
+    def _extract_case_details_locked(
+        self,
+        cid: str,
+        *,
+        force: bool,
+        on_thread_loaded: Callable[[str], None] | None,
+    ) -> SendungExtraction:
         case = self._find_case(cid)
         if case is None:
             raise RuntimeError("Sendungsfall nicht gefunden")
@@ -712,10 +727,11 @@ class OffeneSendungenService:
     def _fallback_summary(self, case: SendungCase) -> str:
         text = (case.thread_text or case.body or case.snippet or "").strip()
         short = text[:700]
+        order_number = self._extract_order_number(f"{case.subject}\n{text}")
         return (
             f"Betreff: {case.subject}\n"
             f"Absender: {case.sender}\n"
-            f"Wix-Order-Nr: {case.order_number or 'nicht erkannt'}\n\n"
+            f"Wix-Order-Nr: {order_number or 'nicht erkannt'}\n\n"
             f"Inhalt (Kurzfassung):\n{short}"
         )
 
@@ -1134,7 +1150,9 @@ class OffeneSendungenService:
         """Resolve typed references against sevDesk first and Wix second."""
         reference_text = f"{case.subject}\n{case.snippet}\n{thread_text}"
         invoice_number = self._extract_invoice_number(reference_text) or case.invoice_number
-        order_number = self._extract_order_number(reference_text) or case.order_number
+        order_number = self._extract_order_number(reference_text)
+        if not order_number and case.source_type != _SOURCE_GRAPH:
+            order_number = case.order_number
         customer_name = ""
         address_lines: list[str] = []
         products: list[SendungProductLine] = []
@@ -1177,11 +1195,31 @@ class OffeneSendungenService:
                 )
                 notes.append("sevDesk-Rechnungsdetails konnten nicht vollstaendig geladen werden.")
 
+        customer_emails = {
+            match.casefold()
+            for match in re.findall(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", thread_text, re.I)
+            if not match.casefold().endswith("@xeisworks.at")
+        }
+        if (
+            case.sender
+            and "@" in case.sender
+            and not case.sender.casefold().endswith("@xeisworks.at")
+        ):
+            customer_emails.add(case.sender.casefold())
+        customer_email = next(iter(customer_emails)) if len(customer_emails) == 1 else ""
+
         wix = self._wix_orders
-        if wix is not None and order_number:
+        if wix is not None and (order_number or customer_email):
             try:
                 resolver = getattr(wix, "resolve_latest_shipping_address", None)
-                result = resolver(reference=order_number) if callable(resolver) else {}
+                if callable(resolver):
+                    result = (
+                        resolver(reference=order_number, email=customer_email)
+                        if customer_email
+                        else resolver(reference=order_number)
+                    )
+                else:
+                    result = {}
                 wix_lines = (
                     self._normalize_address_lines(result.get("address_lines"))
                     if isinstance(result, dict)
@@ -1189,8 +1227,11 @@ class OffeneSendungenService:
                 )
                 if wix_lines and self._is_usable_address(wix_lines):
                     resolved_order = str(result.get("order_number") or "").strip()
-                    if resolved_order == order_number:
+                    if resolved_order == order_number or (
+                        not order_number and customer_email and resolved_order
+                    ):
                         wix_address = wix_lines
+                        order_number = resolved_order
                         sources.append(str(result.get("source") or "wix-order").strip())
                     else:
                         notes.append("Wix-Lieferadresse gehört zu einer anderen Bestellung.")
@@ -1268,6 +1309,8 @@ class OffeneSendungenService:
         for part in str(value or "").split("/"):
             plain = unicodedata.normalize("NFKD", part.casefold().replace("ß", "ss"))
             plain = "".join(char for char in plain if not unicodedata.combining(char))
+            # Wix may spell an umlaut as ae/oe/ue while the mail uses ä/ö/ü.
+            plain = plain.replace("ae", "a").replace("oe", "o").replace("ue", "u")
             tokens = tuple(
                 token
                 for token in re.findall(r"[a-z0-9]+", plain)
@@ -1297,6 +1340,7 @@ class OffeneSendungenService:
             "NFKD", f"{case.subject}\n{case.snippet}\n{thread_text}".casefold().replace("ß", "ss")
         )
         plain = "".join(char for char in plain if not unicodedata.combining(char))
+        plain = plain.replace("ae", "a").replace("oe", "o").replace("ue", "u")
         plain = " ".join(re.findall(r"[a-z0-9]+", plain))
         for tokens in cls._name_parts(name):
             if len(tokens) >= 2 and (
@@ -1475,9 +1519,8 @@ class OffeneSendungenService:
         )
         order_number = (
             context.order_number
-            or extraction.order_number
-            or case.order_number
             or self._extract_order_number(extraction.thread_text)
+            or (case.order_number if case.source_type != _SOURCE_GRAPH else "")
         )
         customer_name = (
             context.customer_name
@@ -2049,10 +2092,33 @@ class OffeneSendungenService:
         value = self._load_json_map(_EXTRACTIONS_KEY).get(str(case_id or "").strip())
         return str(value.get("summary") or "").strip() if isinstance(value, dict) else ""
 
+    def load_cached_summaries(self, cases: list[SendungCase]) -> dict[str, str]:
+        """Fetch popup previews with a single settings read."""
+        if not hasattr(self, "_repo"):
+            return {}
+        saved = self._load_json_map(_EXTRACTIONS_KEY)
+        return {
+            case.id: str(value.get("summary") or "").strip()
+            for case in cases
+            if isinstance((value := saved.get(case.id)), dict) and value.get("summary")
+        }
+
+    def prefetch_open_case_details(self, *, limit: int = 2) -> None:
+        """Warm only the first open cases after invoice loading, without UI work."""
+        if not self._secrets.get_secret("OPENAI_API_KEY"):
+            return
+        for case in self.load_open_cases()[: max(0, min(limit, 2))]:
+            if self._load_saved_extraction(case.id) is None:
+                try:
+                    self.extract_case_details(case.id)
+                except Exception as exc:  # noqa: BLE001 - optional warmup
+                    logger.debug("Sendung prefetch failed for %s: %s", case.id, exc)
+
     def _save_extraction(self, case_id: str, extraction: SendungExtraction) -> None:
-        data = self._load_json_map(_EXTRACTIONS_KEY)
-        data[str(case_id or "").strip()] = self._extraction_to_dict(extraction)
-        self._save_json_map(_EXTRACTIONS_KEY, data)
+        with self._cache_lock:
+            data = self._load_json_map(_EXTRACTIONS_KEY)
+            data[str(case_id or "").strip()] = self._extraction_to_dict(extraction)
+            self._save_json_map(_EXTRACTIONS_KEY, data)
 
     def _load_cached_cases(self) -> list[SendungCase]:
         raw = self._repo.get_value_json(_OPEN_CASES_KEY) if self._repo is not None else None
@@ -2251,31 +2317,7 @@ class OffeneSendungenService:
             match = re.search(pattern, value)
             if match:
                 return match.group(1)
-
-        candidates: list[str] = []
-        lines = value.splitlines()
-        for line_index, raw_line in enumerate(lines):
-            line = raw_line.strip()
-            for match in re.finditer(r"(?<!\d)(\d{5})(?!\d)", line):
-                candidate = match.group(1)
-                # Five-digit postal codes are common in German addresses.  A
-                # number followed by a town/name is therefore not an order ref.
-                tail = line[match.end() :].strip(" ,;:-")
-                if tail and re.match(r"[A-Za-zÀ-ÖØ-öø-ÿ]", tail):
-                    continue
-                if re.search(r"(?i)\b(?:plz|postleitzahl)\s*[:#-]?\s*$", line[: match.start()]):
-                    continue
-                if line == candidate:
-                    previous_line = lines[line_index - 1].strip() if line_index else ""
-                    next_line = lines[line_index + 1].strip() if line_index + 1 < len(lines) else ""
-                    if (
-                        re.search(r"\d", previous_line)
-                        and re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", previous_line)
-                    ) or re.match(r"[A-Za-zÀ-ÖØ-öø-ÿ]", next_line):
-                        continue
-                if candidate not in candidates:
-                    candidates.append(candidate)
-        return candidates[0] if len(candidates) == 1 else ""
+        return ""
 
     @staticmethod
     def _extract_invoice_number(text: str) -> str:

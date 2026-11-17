@@ -2869,12 +2869,26 @@ class RechnungenView(QWidget):
             if self._worker is not None and self._worker.isRunning():
                 return
             self._warm_wix_context_for_summaries(snapshot)
+            self._background_jobs.submit_callable(
+                queue="network-background",
+                priority=_PRIORITY_WIX_WARMUP + 5,
+                key="sendungen-summary-prefetch",
+                fn=self._prefetch_sendungen_summaries,
+                owner=self,
+                replace="coalesce_pending",
+                can_start=lambda: not self._shutting_down and self.isVisible(),
+            )
             if status_filter != _OPEN_STATUS:
                 self._restart_hint_prefetch()
 
         # Delay side-jobs slightly so navigation/interaction stays snappy
         # right after a fresh table update.
         QTimer.singleShot(2500, run_prefetch)
+
+    def _prefetch_sendungen_summaries(self, token: CancelToken) -> None:
+        token.raise_if_cancelled()
+        service: OffeneSendungenService = self._container.resolve(OffeneSendungenService)
+        service.prefetch_open_case_details(limit=2)
 
     def _submit_side_job(
         self,

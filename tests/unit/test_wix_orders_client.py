@@ -662,28 +662,15 @@ def test_physical_fulfillment_line_items_from_order_skips_digital_items() -> Non
     ]
 
 
-def test_resolve_order_falls_back_to_order_number_search() -> None:
-    responses = {
-        "number": {"orders": []},
-        "orderNumber": {
-            "orders": [
-                {
-                    "id": "ord-1",
-                    "number": "20348",
-                    "orderNumber": "20348",
-                    "buyerInfo": {"email": "info@example.test", "firstName": "Karl", "lastName": "Bogner"},
-                }
-            ]
-        },
-    }
+def test_resolve_order_queries_supported_number_field_once() -> None:
+    searches: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         payload = request.read().decode("utf-8")
-        if '"number"' in payload and '"orderNumber"' not in payload:
-            return httpx.Response(200, json=responses["number"])
-        if '"orderNumber"' in payload:
-            return httpx.Response(200, json=responses["orderNumber"])
-        raise AssertionError(payload)
+        searches.append(payload)
+        assert '"number"' in payload
+        assert '"orderNumber"' not in payload
+        return httpx.Response(200, json={"orders": []})
 
     class _SecretService:
         def get_secret(self, name: str) -> str:
@@ -708,8 +695,8 @@ def test_resolve_order_falls_back_to_order_number_search() -> None:
     finally:
         httpx.Client = original_client  # type: ignore[assignment]
 
-    assert summary["wix_order_number"] == "20348"
-    assert summary["wix_customer_email"] == "info@example.test"
+    assert summary == {}
+    assert len(searches) == 1
 
 
 def test_resolve_order_summary_uses_persistent_cache(tmp_path, monkeypatch) -> None:

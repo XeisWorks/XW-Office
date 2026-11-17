@@ -249,6 +249,25 @@ def test_initial_detail_load_survives_silent_refresh(qtbot: object) -> None:
     assert dialog._detail_status.text().startswith("Quelle: openai")  # noqa: SLF001
 
 
+def test_cached_summary_is_visible_while_details_are_still_loading(qtbot: object) -> None:
+    release = Event()
+
+    class CachedService(_FakeSendungenService):
+        def load_cached_summaries(self, _cases: list[SendungCase]) -> dict[str, str]:
+            return {"m1": "Gespeicherte Versandaktion"}
+
+        def extract_case_details(self, case_id: str, *, force: bool = False) -> SendungExtraction:
+            release.wait(2)
+            return super().extract_case_details(case_id, force=force)
+
+    dialog = OffeneSendungenDialog(_FakeContainer(CachedService()))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    try:
+        qtbot.waitUntil(lambda: dialog._summary.text() == "Gespeicherte Versandaktion", timeout=2000)  # noqa: SLF001
+    finally:
+        release.set()
+
+
 def test_new_case_appears_on_first_open_after_silent_refresh(qtbot: object) -> None:
     service = _NewCaseService()
     dialog = OffeneSendungenDialog(_FakeContainer(service))  # type: ignore[arg-type]

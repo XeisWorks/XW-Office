@@ -1932,14 +1932,10 @@ class WixOrdersClient:
                 self._cache_order(ref, order_by_id)
                 return order_by_id
         order = self._search_order_by_field("number", ref)
-        if not order:
-            order = self._search_order_by_field("orderNumber", ref)
         if not order and not ref.startswith("00"):
             digits = "".join(c for c in ref if c.isdigit())
             if digits and digits != ref:
                 order = self._search_order_by_field("number", digits)
-                if not order:
-                    order = self._search_order_by_field("orderNumber", digits)
         if order:
             # A second consumer can now use the raw order while enrichment
             # performs optional product/category lookups.
@@ -2327,6 +2323,9 @@ class WixOrdersClient:
                     "order_number": str(order.get("number") or ref),
                     "source": "wix-order",
                 }
+
+        if not customer_name.strip() and not email.strip():
+            return {}
 
         cache = getattr(self, "_order_cache", None)
         site_id, account_id = self._cache_scope()
