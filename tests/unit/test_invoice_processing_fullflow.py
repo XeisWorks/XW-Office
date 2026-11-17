@@ -6,6 +6,7 @@ import json
 from xw_office.core.config import AppConfig
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
 from xw_office.services.invoice_processing.service import FulfillmentFlags
+from xw_office.services.sevdesk.invoice_client import InvoiceSummary
 
 
 class _RepoStub:
@@ -63,3 +64,39 @@ def test_write_and_read_fulfillment_flags() -> None:
     assert loaded.last_run_iso == "2026-04-04T09:00:00"
     stored = json.loads(repo.values["rechnungen.fulfillment_status"])
     assert "123" in stored
+
+
+def test_recovery_rows_do_not_enter_new_start_history(monkeypatch) -> None:
+    service = InvoiceProcessingService(AppConfig(), _InvoiceClientStub(), _RepoStub(), None)
+    old = InvoiceSummary(id="old", contact_name="Alter Lauf")
+    current = InvoiceSummary(id="new", contact_name="Neuer Lauf")
+    monkeypatch.setattr(service, "_load_start_target_summaries", lambda **_kw: [current])
+    monkeypatch.setattr(service, "filter_start_ready", lambda rows: rows)
+    monkeypatch.setattr(service, "_resume_incomplete_fulfillment", lambda **_kw: {
+        "processed": 1, "failures": 0, "successful": 1, "aborted": False,
+        "run_summaries": [old],
+    })
+    monkeypatch.setattr(service, "_prefetch_wix_order_context", lambda _rows: None)
+    monkeypatch.setattr(service, "_start_delivery_kind", lambda _row: "physical")
+    monkeypatch.setattr(service, "_start_processing_priority", lambda _row, **_kw: (0,))
+    monkeypatch.setattr(service, "_run_start_fullflow_print_first", lambda **_kw: {
+        "processed": 1, "failures": 0, "successful": 1, "aborted": False,
+        "run_summaries": [current], "successful_invoice_ids": ["new"],
+    })
+
+    result = service.run_start_fullflow(full_mode=True)
+    assert [row.id for row in result["run_summaries"]] == ["new"]
+    assert [row.id for row in result["resumed_summaries"]] == ["old"]
+
+
+def test_start_refresh_preserves_embedded_contact_name(monkeypatch) -> None:
+    service = InvoiceProcessingService(AppConfig(), _InvoiceClientStub(), _RepoStub(), None)
+    service._invoices.fetch_invoice_by_id = lambda _invoice_id: {"id": "42", "status": 200}
+    monkeypatch.setattr(service, "_apply_sensitive_country_flags", lambda _rows: None)
+    monkeypatch.setattr(service, "_apply_unreleased_sku_flags", lambda _rows: None)
+    original = InvoiceSummary(id="42", contact_name="Anna Versand", invoiceDate="2026-11-17")
+
+    refreshed = service._resolve_current_start_summary(original)
+    finalized = service._refresh_finalized_start_summary(refreshed)
+    assert finalized.contact_name == "Anna Versand"
+    assert finalized.invoice_date == "2026-11-17"

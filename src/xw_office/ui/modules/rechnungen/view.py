@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 import html
 import logging
 import os
@@ -51,6 +52,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QGridLayout,
     QHeaderView,
+    QInputDialog,
     QStyledItemDelegate,
     QFormLayout,
     QGroupBox,
@@ -92,6 +94,7 @@ from xw_office.services.draft_invoice.service import (
     UnreleasedTitleIssue,
 )
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.services.invoice_processing.shipping_plan import valid_iso_date
 from xw_office.ui.modules.rechnungen.start_hold_dialog import StartHoldDialog
 from xw_office.services.invoice_processing.context import InvoiceWorkContext
 from xw_office.services.digital_licenses import DigitalLicenseService
@@ -134,6 +137,7 @@ from xw_office.ui.modules.rechnungen.redelivery_dialog import RedeliveryDialog, 
 from xw_office.ui.modules.rechnungen.offene_drucke_dialog import OffeneDruckeDialog
 from xw_office.ui.modules.rechnungen.special_order_dialog import SpecialOrderDialog
 from xw_office.ui.modules.rechnungen.open_invoice_overview import (
+    _cached_order_customer_name,
     BuyerNote,
     OpenInvoiceOverview,
     PrintProductAggregate,
@@ -1462,6 +1466,9 @@ class RechnungenView(QWidget):
         self._last_run_unreleased: list[UnreleasedAssignment] = []
         self._print_products_last_run = False
         self._print_run_history: list[_PrintRunSnapshot] = []
+        self._shipping_dates_cache: dict[str, dict[str, str]] = {}
+        self._run_shipping_worker: BackgroundWorker | None = None
+        self._history_shipping_refresh_worker: BackgroundWorker | None = None
         self._active_print_history_index: int | None = None
         self._print_products_tabs: QTabWidget | None = None
         self._print_product_tab_pages: list[QWidget] = []
@@ -1756,6 +1763,8 @@ class RechnungenView(QWidget):
         run_customers_layout.setContentsMargins(7, 5, 7, 5)
         self._run_customers_text = QTextBrowser()
         self._run_customers_text.setReadOnly(True)
+        self._run_customers_text.setOpenLinks(False)
+        self._run_customers_text.anchorClicked.connect(self._on_run_customer_link)
         self._run_customers_text.setFixedHeight(128)
         run_customers_layout.addWidget(self._run_customers_text)
 
@@ -1852,6 +1861,7 @@ class RechnungenView(QWidget):
         info_layout.setColumnStretch(1, 1)
         self._dl_number = QLabel("—")
         self._dl_date = QLabel("—")
+        self._dl_shipping_date = QLabel("—")
         self._dl_status = QLabel("—")
         self._dl_brutto = QLabel("—")
         self._dl_contact = QLabel("—")
@@ -1865,6 +1875,7 @@ class RechnungenView(QWidget):
         info_labels = (
             self._dl_number,
             self._dl_date,
+            self._dl_shipping_date,
             self._dl_status,
             self._dl_brutto,
             self._dl_contact,
@@ -1880,11 +1891,12 @@ class RechnungenView(QWidget):
         info_fields = (
             ("Rechnung:", self._dl_number, 0, 0),
             ("Datum:", self._dl_date, 1, 0),
-            ("Status:", self._dl_status, 2, 0),
-            ("Brutto:", self._dl_brutto, 3, 0),
-            ("Kunde:", self._dl_contact, 4, 0),
-            ("Land:", self._dl_country, 5, 0),
-            ("Order-Ref:", self._dl_order_ref, 6, 0),
+            ("Versand:", self._dl_shipping_date, 2, 0),
+            ("Status:", self._dl_status, 3, 0),
+            ("Brutto:", self._dl_brutto, 4, 0),
+            ("Kunde:", self._dl_contact, 5, 0),
+            ("Land:", self._dl_country, 6, 0),
+            ("Order-Ref:", self._dl_order_ref, 7, 0),
         )
         for text, value_widget, row, col in info_fields:
             label = QLabel(text)
@@ -2285,6 +2297,8 @@ class RechnungenView(QWidget):
                 self._product_print_worker,
                 self._unreleased_catalog_worker,
                 self._print_history_worker,
+                self._run_shipping_worker,
+                self._history_shipping_refresh_worker,
                 self._redelivery_prepare_worker,
                 self._redelivery_apply_worker,
                 *self._sevdesk_context_workers,
@@ -3691,6 +3705,8 @@ class RechnungenView(QWidget):
         label_print_ids: list[str] | None = None,
         run_overview: object = None,
         run_summaries: object = None,
+        customer_names: dict[str, str] | None = None,
+        shipping_dates: dict[str, str] | None = None,
     ) -> None:
         """Freeze, rotate and persist the PRINT/UNRELEASED dashboard after START."""
         exact_run = isinstance(run_summaries, list)
@@ -3701,12 +3717,17 @@ class RechnungenView(QWidget):
         )
         customers = [
             {
+                "invoice_id": str(row.id),
                 "date": row.formatted_date_short,
-                "name": row.contact_name or "—",
+                "name": (customer_names or {}).get(str(row.id)) or row.contact_name or "—",
                 "gross": row.formatted_brutto,
+                "planned_date": (shipping_dates or {}).get(str(row.id), ""),
+                "shipped_date": "",
             }
             for row in dict((str(row.id), row) for row in summaries).values()
         ]
+        for invoice_id, planned in (shipping_dates or {}).items():
+            self._shipping_dates_cache.setdefault(invoice_id, {})["planned_date"] = planned
         products = list(overview.print_products) if overview else []
         notes = list(overview.buyer_notes) if overview else []
         assignments = list(overview.unreleased_assignments) if overview else []
@@ -3845,9 +3866,12 @@ class RechnungenView(QWidget):
         if self._active_print_history_index is None:
             customers = [
                 {
+                    "invoice_id": str(row.id),
                     "date": row.formatted_date_short,
                     "name": row.contact_name or "—",
                     "gross": row.formatted_brutto,
+                    "planned_date": "",
+                    "shipped_date": "",
                 }
                 for row in self._summaries if row.status_code == 100
             ]
@@ -3858,20 +3882,142 @@ class RechnungenView(QWidget):
         if not customers:
             self._run_customers_text.setPlainText(empty)
             return
+        def shipping_cell(row: dict[str, str]) -> str:
+            invoice_id = html.escape(row.get("invoice_id", ""), quote=True)
+            actual = str(row.get("shipped_date") or "")
+            planned = str(row.get("planned_date") or "")
+            if actual:
+                label = html.escape(self._short_shipping_date(actual))
+                return f"<a href='editship:{invoice_id}' title='Versanddatum ändern'>{label}</a>"
+            if planned and self._active_print_history_index is not None and invoice_id:
+                label = html.escape(self._short_shipping_date(planned))
+                return f"{label} (geplant) <a href='ship:{invoice_id}' title='Heute versendet'>✓</a>"
+            return "—"
+
         rows = "".join(
             "<tr>"
-            f"<td>{html.escape(row['date'])}</td>"
-            f"<td>{html.escape(row['name'])}</td>"
-            f"<td align='right'>{html.escape(row['gross'])}</td>"
+            f"<td>{html.escape(row.get('date', ''))}</td>"
+            f"<td>{html.escape(row.get('name', ''))}</td>"
+            f"<td>{shipping_cell(row)}</td>"
+            f"<td align='right'>{html.escape(row.get('gross', ''))}</td>"
             "</tr>"
             for row in customers
         )
         self._run_customers_text.setHtml(
             "<table width='100%' cellspacing='2' cellpadding='1'>"
-            "<tr><th align='left'>Datum</th><th align='left'>Name</th>"
+            "<tr><th align='left'>Rechnung</th><th align='left'>Name</th>"
+            "<th align='left'>Versand</th>"
             "<th align='right'>Brutto</th></tr>"
             f"{rows}</table>"
         )
+
+    @staticmethod
+    def _short_shipping_date(value: str) -> str:
+        try:
+            return date.fromisoformat(value).strftime("%d.%m.%y")
+        except ValueError:
+            return value
+
+    def _render_detail_shipping_date(self) -> None:
+        if not hasattr(self, "_dl_shipping_date"):
+            return
+        selected = self._selected_summary()
+        record = self._shipping_dates_cache.get(str(selected.id)) if selected is not None else None
+        if not isinstance(record, dict):
+            self._dl_shipping_date.setText("—")
+            return
+        shipped = str(record.get("shipped_date") or "")
+        planned = str(record.get("planned_date") or "")
+        if shipped:
+            self._dl_shipping_date.setText(f"{self._short_shipping_date(shipped)} (tatsächlich)")
+        elif planned:
+            self._dl_shipping_date.setText(f"{self._short_shipping_date(planned)} (geplant)")
+        else:
+            self._dl_shipping_date.setText("—")
+
+    def _on_run_customer_link(self, url: QUrl) -> None:
+        if self._run_shipping_worker is not None and self._run_shipping_worker.isRunning():
+            return
+        invoice_id = url.path().lstrip("/")
+        if url.scheme() not in {"ship", "editship"} or not invoice_id:
+            return
+        if url.scheme() == "ship":
+            shipped = datetime.now(ZoneInfo("Europe/Vienna")).date().isoformat()
+        else:
+            previous = next((
+                row.get("shipped_date", "")
+                for snapshot in self._print_run_history for row in snapshot.customers
+                if row.get("invoice_id") == invoice_id
+            ), "")
+            shipped, ok = QInputDialog.getText(
+                self, "Tatsächliches Versanddatum", "Datum (JJJJ-MM-TT):", text=previous
+            )
+            if not ok:
+                return
+            shipped = shipped.strip()
+            if not valid_iso_date(shipped):
+                QMessageBox.warning(self, "Versanddatum", "Bitte ein gültiges Datum im Format JJJJ-MM-TT eingeben.")
+                return
+
+        def job() -> None:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            service.update_shipping_dates({invoice_id: {"shipped_date": shipped}})
+
+        worker = BackgroundWorker(job)
+        self._run_shipping_worker = worker
+        worker.signals.result.connect(lambda _result: self._apply_run_shipped_date(invoice_id, shipped))
+        worker.signals.error.connect(lambda exc: QMessageBox.warning(
+            self, "Versanddatum", f"Tatsächliches Versanddatum konnte nicht gespeichert werden:\n{exc}"
+        ))
+        worker.signals.finished.connect(lambda: setattr(self, "_run_shipping_worker", None))
+        worker.start()
+
+    def _apply_run_shipped_date(self, invoice_id: str, shipped: str) -> None:
+        self._shipping_dates_cache.setdefault(invoice_id, {})["shipped_date"] = shipped
+        for snapshot in self._print_run_history:
+            for row in snapshot.customers:
+                if row.get("invoice_id") == invoice_id:
+                    row["shipped_date"] = shipped
+        self._render_run_customers()
+        self._render_detail_shipping_date()
+        self._persist_print_run_history()
+
+    def _refresh_history_shipping_dates(self) -> None:
+        if self._history_shipping_refresh_worker is not None and self._history_shipping_refresh_worker.isRunning():
+            return
+
+        def job() -> dict[str, dict[str, str]]:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            return service.read_shipping_dates()
+
+        worker = BackgroundWorker(job)
+        self._history_shipping_refresh_worker = worker
+        worker.signals.result.connect(self._apply_history_shipping_dates)
+        worker.signals.error.connect(lambda exc: logger.warning("Shipping history refresh failed: %s", exc))
+        worker.signals.finished.connect(lambda: setattr(self, "_history_shipping_refresh_worker", None))
+        worker.start()
+
+    def _apply_history_shipping_dates(self, ledger: object) -> None:
+        if not isinstance(ledger, dict):
+            return
+        self._shipping_dates_cache = {
+            str(key): row for key, row in ledger.items() if isinstance(row, dict)
+        }
+        changed = False
+        for snapshot in self._print_run_history:
+            for row in snapshot.customers:
+                record = ledger.get(row.get("invoice_id"))
+                if not isinstance(record, dict):
+                    continue
+                for field in ("planned_date", "shipped_date"):
+                    value = str(record.get(field) or "")
+                    if value and row.get(field) != value:
+                        row[field] = value
+                        changed = True
+        if changed:
+            self._render_run_customers()
+            self._persist_print_run_history()
+        self._render_detail_shipping_date()
 
     def _merge_session_print_products(self, products: list[PrintProductAggregate]) -> None:
         """Append new products and retain the largest quantity seen this session."""
@@ -4005,8 +4151,8 @@ class RechnungenView(QWidget):
         service: InvoiceProcessingService,
         wix_client: WixOrdersClient,
     ) -> dict[str, object]:
-        """Recover exact products from the invoice IDs saved by older START runs."""
-        if _int_or_default(payload.get("schema_version"), 0) >= 3:
+        """Recover run products and customer names from exact invoice IDs."""
+        if _int_or_default(payload.get("schema_version"), 0) >= 4:
             return payload
         raw_runs = payload.get("runs")
         if not isinstance(raw_runs, list):
@@ -4074,14 +4220,23 @@ class RechnungenView(QWidget):
                 }
                 for item in overview.unreleased_assignments
             ]
-            run["customers"] = [
+            rebuilt_customers = [
                 {
+                    "invoice_id": str(summary.id),
                     "date": summary.formatted_date_short,
-                    "name": summary.contact_name or "—",
+                    "name": (
+                        _cached_order_customer_name(wix_client, summary.order_reference)
+                        or summary.contact_name or "—"
+                    ),
                     "gross": summary.formatted_brutto,
                 }
                 for summary in summaries
             ]
+            old_customers = _list_payload(run.get("customers"))
+            # Older snapshots can include digital invoices, while print IDs
+            # only name physical invoices. Preserve those extra buyer rows.
+            if not old_customers or len(old_customers) == len(ids) == len(summaries):
+                run["customers"] = rebuilt_customers
             run["products_complete"] = len(summaries) == len(ids)
             if not run["products_complete"]:
                 retry_needed = True
@@ -4091,11 +4246,11 @@ class RechnungenView(QWidget):
             return payload
         if retry_needed:
             return {**payload, "runs": repaired}
-        return {**payload, "runs": repaired, "schema_version": 3, "_legacy_repaired": True}
+        return {**payload, "runs": repaired, "schema_version": 4, "_legacy_repaired": True}
 
     def _persist_print_run_history(self) -> None:
         payload = {
-            "schema_version": 3,
+            "schema_version": 4,
             "saved_at": self._print_run_history[0].saved_at if self._print_run_history else "",
             "runs": [self._snapshot_payload(snapshot) for snapshot in self._print_run_history],
         }
@@ -4146,10 +4301,11 @@ class RechnungenView(QWidget):
                 result = reader() if callable(reader) else {}
                 if not isinstance(result, dict):
                     return {}
-                if _int_or_default(result.get("schema_version"), 0) >= 3:
-                    return result
                 wix_client: WixOrdersClient = container.resolve(WixOrdersClient)
-                return self._repair_legacy_run_history(result, service, wix_client)
+                repaired = self._repair_legacy_run_history(result, service, wix_client)
+                shipping_reader = getattr(service, "read_shipping_dates", None)
+                ledger = shipping_reader() if callable(shipping_reader) else {}
+                return {**repaired, "_shipping_dates": ledger}
 
             worker = BackgroundWorker(read)
             self._print_history_worker = worker
@@ -4164,10 +4320,18 @@ class RechnungenView(QWidget):
             return
         if not isinstance(payload, dict):
             return
+        ledger_payload = payload.get("_shipping_dates")
+        if isinstance(ledger_payload, dict):
+            self._shipping_dates_cache = {
+                str(key): row for key, row in ledger_payload.items() if isinstance(row, dict)
+            }
+            self._render_detail_shipping_date()
         raw_runs = payload.get("runs")
         if not isinstance(raw_runs, list):
             raw_runs = [payload] if str(payload.get("saved_at") or "").strip() else []
         restored: list[_PrintRunSnapshot] = []
+        ledger = payload.get("_shipping_dates")
+        shipping_dates = ledger if isinstance(ledger, dict) else {}
         for raw in raw_runs[:5]:
             if not isinstance(raw, dict):
                 continue
@@ -4228,9 +4392,18 @@ class RechnungenView(QWidget):
                 unreleased_assignments=assignments,
                 customers=[
                     {
+                        "invoice_id": str(row.get("invoice_id") or "").strip(),
                         "date": str(row.get("date") or "").strip(),
                         "name": str(row.get("name") or "").strip(),
                         "gross": str(row.get("gross") or "").strip(),
+                        "planned_date": str(
+                            (shipping_dates.get(str(row.get("invoice_id") or "")) or {}).get("planned_date")
+                            or row.get("planned_date") or ""
+                        ).strip(),
+                        "shipped_date": str(
+                            (shipping_dates.get(str(row.get("invoice_id") or "")) or {}).get("shipped_date")
+                            or row.get("shipped_date") or ""
+                        ).strip(),
                     }
                     for row in _list_payload(raw.get("customers")) if isinstance(row, dict)
                 ],
@@ -5778,6 +5951,7 @@ class RechnungenView(QWidget):
 
     def _on_manual_plc_label_clicked(self) -> None:
         PlcLabelPrintDialog(self._container, None, self).exec()
+        self._refresh_history_shipping_dates()
 
     def _on_plc_statistics_clicked(self) -> None:
         PlcStatisticsDialog(self._container, self).exec()
@@ -5881,6 +6055,7 @@ class RechnungenView(QWidget):
             address_override_lines=address_lines,
         )
         dlg.exec()
+        self._refresh_history_shipping_dates()
         self._plc_archive_generation += 1
         if self._plc_archive_lookup_handle is not None:
             self._plc_archive_lookup_handle.cancel()
@@ -7205,6 +7380,7 @@ class RechnungenView(QWidget):
         self._gb_shipping.show()
         self._dl_number.setText(summary.invoice_number or "")
         self._dl_date.setText(summary.formatted_date)
+        self._render_detail_shipping_date()
         self._dl_status.setText(summary.status_label())
         self._dl_brutto.setText(summary.formatted_brutto)
         self._dl_contact.setText(summary.contact_name or "")

@@ -29,6 +29,9 @@ from xw_office.services.invoice_processing.buyer_notes import (
     normalized_lines,
 )
 from xw_office.services.invoice_processing.start_holds import START_HOLDS_KEY, StartHold
+from xw_office.services.invoice_processing.shipping_plan import (
+    ShippingCandidate, candidate_from_summary, valid_iso_date,
+)
 from xw_office.services.invoice_processing.context import (
     InvoiceOrigin,
     InvoiceWorkContext,
@@ -110,6 +113,8 @@ _FULFILLMENT_MAIL_TEMPLATE_KEY = "rechnungen.fulfillment_mail_template_html"
 _FULFILLMENT_MAIL_SUBJECT_KEY = "rechnungen.fulfillment_mail_subject"
 _LAST_START_OVERVIEW_KEY = "rechnungen.last_start_overview_v1"
 _LAST_START_OVERVIEW_PATH = state_dir() / "rechnungen_last_start_overview.json"
+_SHIPPING_DATES_KEY = "rechnungen.shipping_dates_v1"
+_SHIPPING_DATES_PATH = state_dir() / "rechnungen_shipping_dates.json"
 _BATCH_CACHE_TTL_SECONDS = 30.0
 
 _DEFAULT_SKU_FLAGS = {
@@ -695,6 +700,107 @@ class InvoiceProcessingService:
         temporary.write_text(encoded, encoding="utf-8")
         temporary.replace(_LAST_START_OVERVIEW_PATH)
 
+    def read_shipping_dates(self) -> dict[str, dict[str, str]]:
+        """Read per-invoice planned and actual dispatch dates, independent of run retention."""
+        if self._settings_repo is not None:
+            raw = self._settings_repo.get_value_json(_SHIPPING_DATES_KEY)
+        else:
+            try:
+                raw = _SHIPPING_DATES_PATH.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                return {}
+        try:
+            decoded = json.loads(raw or "{}")
+        except (TypeError, json.JSONDecodeError):
+            logger.warning("Ignoring invalid shipping-date payload")
+            return {}
+        if not isinstance(decoded, dict):
+            return {}
+        return {
+            str(key): {str(k): str(v) for k, v in row.items() if isinstance(v, (str, int))}
+            for key, row in decoded.items() if isinstance(row, dict)
+        }
+
+    def update_shipping_dates(self, updates: dict[str, dict[str, str]]) -> None:
+        """Merge records atomically so another PC cannot erase unrelated invoices."""
+        if not updates:
+            return
+        for row in updates.values():
+            for field in ("planned_date", "shipped_date"):
+                value = row.get(field, "")
+                if value and not valid_iso_date(value):
+                    raise ValueError(f"Invalid {field}: {value}")
+
+        def merge(raw: str | None) -> str:
+            try:
+                decoded = json.loads(raw or "{}")
+            except (TypeError, json.JSONDecodeError):
+                decoded = {}
+            records = decoded if isinstance(decoded, dict) else {}
+            for invoice_id, fields in updates.items():
+                previous = records.get(str(invoice_id))
+                records[str(invoice_id)] = {
+                    **(previous if isinstance(previous, dict) else {}), **fields,
+                }
+            return json.dumps(records, ensure_ascii=False)
+
+        if self._settings_repo is not None:
+            mutate = getattr(self._settings_repo, "mutate_value_json", None)
+            if callable(mutate):
+                mutate(_SHIPPING_DATES_KEY, merge)
+            else:
+                self._settings_repo.set_value_json(
+                    _SHIPPING_DATES_KEY,
+                    merge(self._settings_repo.get_value_json(_SHIPPING_DATES_KEY)),
+                )
+            return
+        _SHIPPING_DATES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary = _SHIPPING_DATES_PATH.with_suffix(".tmp")
+        previous = self.read_shipping_dates()
+        temporary.write_text(merge(json.dumps(previous, ensure_ascii=False)), encoding="utf-8")
+        temporary.replace(_SHIPPING_DATES_PATH)
+
+    def mark_plc_shipping_lane(self, invoice_id: str) -> None:
+        """A created PLC label follows the Austria dispatch batch."""
+        invoice_id = str(invoice_id or "").strip()
+        if not invoice_id:
+            return
+        existing = self.read_shipping_dates().get(invoice_id)
+        if not existing or existing.get("lane") == "digital":
+            return
+        updates = {"lane": "at", "plc": "1"}
+        at_date = existing.get("at_planned_date", "")
+        if at_date:
+            updates["planned_date"] = at_date
+        self.update_shipping_dates({invoice_id: updates})
+
+    def classify_shipping_candidate(self, summary: InvoiceSummary) -> ShippingCandidate:
+        """Use the same digital decision as START and the actual Wix delivery country."""
+        wix: dict[str, str] = {}
+        ref = str(summary.order_reference or "").strip()
+        if ref and self._wix_orders is not None:
+            try:
+                wix = self._wix_orders.resolve_order_summary(ref)
+            except Exception as exc:  # noqa: BLE001 - sevDesk country remains a fallback.
+                logger.warning("Shipping context failed for %s: %s", ref, exc)
+        plc = summary.has_plc_label_candidate()
+        if ref:
+            try:
+                hints = self.resolve_invoice_list_hints(ref)
+                note = str(hints.buyer_note or "").casefold()
+                plc = plc or any(token in note for token in (
+                    "plc", "post label center", "postlabelcenter", "shipping label", "versandlabel",
+                ))
+            except Exception:  # noqa: BLE001
+                pass
+        return candidate_from_summary(
+            summary,
+            wix_name=str(wix.get("wix_customer_name") or ""),
+            wix_country=str(wix.get("wix_shipping_country") or ""),
+            digital_only=self._start_delivery_kind(summary) != "physical",
+            plc=plc,
+        )
+
     def _merge_fulfillment_flags(self, updates: dict[str, FulfillmentFlags]) -> None:
         if self._settings_repo is None:
             return
@@ -805,10 +911,11 @@ class InvoiceProcessingService:
             result["aborted"] = bool(result["aborted"]) or bool(resume_result["aborted"])
             result["resumed"] = int(cast(int, resume_result["processed"]))
             result["resume_failures"] = int(cast(int, resume_result["failures"]))
-            result["run_summaries"] = [
-                *cast(list[InvoiceSummary], resume_result.get("run_summaries", [])),
-                *cast(list[InvoiceSummary], result.get("run_summaries", [])),
-            ]
+            # Recovery work belongs to its original run. Its products and
+            # customers must never appear in the new START snapshot.
+            result["resumed_summaries"] = cast(
+                list[InvoiceSummary], resume_result.get("run_summaries", [])
+            )
             return result
         updates: dict[str, FulfillmentFlags] = {}
         processed = 0
@@ -822,6 +929,7 @@ class InvoiceProcessingService:
         invoice_print_ids: list[str] = []
         label_print_ids: list[str] = []
         stock_consumed_invoice_ids: list[str] = []
+        successful_invoice_ids: list[str] = []
         for summary in summaries:
             if should_abort is not None and should_abort():
                 aborted = True
@@ -877,6 +985,7 @@ class InvoiceProcessingService:
                     pending_manual_license_ids.append(str(summary.id))
                     flags = run_phase("payment", lambda: self._run_payment_step(summary, flags))
                     successful += 1
+                    successful_invoice_ids.append(str(summary.id))
                     updates[summary.id] = flags
                     continue
                 if not digital_only:
@@ -931,6 +1040,7 @@ class InvoiceProcessingService:
                     ),
                 )
                 successful += 1
+                successful_invoice_ids.append(str(summary.id))
             except Exception as exc:
                 failures += 1
                 flags = self._with_error(flags, exc)
@@ -959,6 +1069,7 @@ class InvoiceProcessingService:
             "invoice_print_ids": invoice_print_ids,
             "label_print_ids": label_print_ids,
             "stock_consumed_invoice_ids": stock_consumed_invoice_ids,
+            "successful_invoice_ids": successful_invoice_ids,
         }
 
     def _run_start_fullflow_print_first(
@@ -1320,6 +1431,7 @@ class InvoiceProcessingService:
             "invoice_print_ids": invoice_print_ids,
             "label_print_ids": label_print_ids,
             "stock_consumed_invoice_ids": stock_consumed_invoice_ids,
+            "successful_invoice_ids": sorted(successful_ids),
         }
 
     def _run_product_step_compat(
@@ -2636,6 +2748,10 @@ class InvoiceProcessingService:
                         updates["order_reference"] = summary.order_reference
                     if summary.sevdesk_reference and not refreshed.sevdesk_reference:
                         updates["sevdesk_reference"] = summary.sevdesk_reference
+                    if summary.contact_name and not refreshed.contact_name:
+                        updates["contact_name"] = summary.contact_name
+                    if summary.invoice_date and not refreshed.invoice_date:
+                        updates["invoice_date"] = summary.invoice_date
                     if updates:
                         refreshed = refreshed.model_copy(update=updates)
                     self._apply_sensitive_country_flags([refreshed])
@@ -2671,6 +2787,10 @@ class InvoiceProcessingService:
             updates["order_reference"] = summary.order_reference
         if summary.sevdesk_reference and not refreshed.sevdesk_reference:
             updates["sevdesk_reference"] = summary.sevdesk_reference
+        if summary.contact_name and not refreshed.contact_name:
+            updates["contact_name"] = summary.contact_name
+        if summary.invoice_date and not refreshed.invoice_date:
+            updates["invoice_date"] = summary.invoice_date
         if updates:
             refreshed = refreshed.model_copy(update=updates)
         return refreshed

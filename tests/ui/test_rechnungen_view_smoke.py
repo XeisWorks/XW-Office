@@ -2554,7 +2554,10 @@ def test_start_history_keeps_five_exact_runs_with_customers(qtbot: object) -> No
         assert f"Kunde {number}" in view._run_customers_text.toPlainText()  # noqa: SLF001
         assert f"{number * 10},00" in view._run_customers_text.toPlainText()  # noqa: SLF001
 
-    qtbot.waitUntil(lambda: len(invoice_service.last_start_overview.get("runs", [])) == 5)
+    qtbot.waitUntil(
+        lambda: len(invoice_service.last_start_overview.get("runs", [])) == 5
+        and invoice_service.last_start_overview["runs"][0]["customers"][0]["name"] == "Kunde 6"
+    )
     assert invoice_service.last_start_overview["runs"][0]["customers"][0]["name"] == "Kunde 6"
     restarted = RechnungenView(container)
     qtbot.addWidget(restarted)
@@ -2570,6 +2573,30 @@ def test_start_history_keeps_five_exact_runs_with_customers(qtbot: object) -> No
         lambda: view._print_history_worker is None  # noqa: SLF001
         and restarted._print_history_worker is None  # noqa: SLF001
     )
+
+
+def test_run_customer_shows_planned_and_actual_shipping_date(qtbot: object, monkeypatch: MonkeyPatch) -> None:
+    container, _invoice_service = _build_rechnungen_test_container()
+    view = RechnungenView(container)
+    qtbot.addWidget(view)
+    summary = InvoiceSummary(id="42", invoiceDate="2026-11-17", contact_name="")
+    view.mark_print_products_last_run(
+        run_summaries=[summary],
+        run_overview=OpenInvoiceOverview(
+            key="42", total=1, with_ref=0, physical=1, digital=0,
+            unknown=0, with_note=0, plc=0, complete=True,
+        ),
+        customer_names={"42": "Anna Versand"},
+        shipping_dates={"42": "2026-11-19"},
+    )
+    assert "Anna Versand" in view._run_customers_text.toPlainText()  # noqa: SLF001
+    assert "19.11.26 (geplant)" in view._run_customers_text.toPlainText()  # noqa: SLF001
+    monkeypatch.setattr(view, "_selected_summary", lambda: summary)
+    view._render_detail_shipping_date()  # noqa: SLF001
+    assert view._dl_shipping_date.text() == "19.11.26 (geplant)"  # noqa: SLF001
+    view._apply_run_shipped_date("42", "2026-11-20")  # noqa: SLF001
+    assert "20.11.26" in view._run_customers_text.toPlainText()  # noqa: SLF001
+    assert view._dl_shipping_date.text() == "20.11.26 (tatsächlich)"  # noqa: SLF001
 
 
 def test_start_history_settings_write_runs_off_ui_thread_and_keeps_latest_run(

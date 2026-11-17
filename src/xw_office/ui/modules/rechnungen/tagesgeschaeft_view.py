@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 import time
 from datetime import date
@@ -49,6 +51,8 @@ from xw_office.services.inventory.service import (
     StartPreflight,
 )
 from xw_office.services.invoice_processing.service import InvoiceProcessingService
+from xw_office.services.invoice_processing.shipping_plan import ShippingCandidate
+from xw_office.repositories.plc_shipment import PlcShipmentRepository
 from xw_office.services.invoice_processing.buyer_notes import BuyerNoteCase, BuyerNoteReviewSelection
 from xw_office.services.b2b_credit import B2bCreditService
 from xw_office.models.customer_aftercare import CustomerAftercareCase, CustomerAftercareItem
@@ -70,6 +74,7 @@ from xw_office.ui.modules.rechnungen.open_invoice_overview import (
 from xw_office.ui.modules.rechnungen.product_preflight_dialog import ProductPreflightDialog
 from xw_office.ui.modules.rechnungen.reprint_dialog import ReprintPreviewDialog
 from xw_office.ui.modules.rechnungen.buyer_note_review_dialog import BuyerNoteReviewDialog
+from xw_office.ui.modules.rechnungen.shipping_date_dialog import ShippingDateDialog
 from xw_office.ui.modules.rechnungen.view import RechnungenView
 from xw_office.ui.widgets.data_table import DataTable
 from xw_office.ui.widgets.search_bar import SearchBar
@@ -376,6 +381,11 @@ class TagesgeschaeftView(QWidget):
         self._sendungen_live_refresh_ts = 0.0
         self._drucke_live_refresh_ts = 0.0
         self._pending_start_preflight: StartPreflight | None = None
+        self._start_shipping_dialog: ShippingDateDialog | None = None
+        self._start_shipping_candidates: list[ShippingCandidate] = []
+        self._start_shipping_pending: list[dict[str, str]] = []
+        self._start_shipping_dates: tuple[str, str] | None = None
+        self._shipping_save_worker: BackgroundWorker | None = None
         self._start_product_preflight_started_at = 0.0
         self._start_abort_requested = False
         self._close_ready = False
@@ -418,6 +428,7 @@ class TagesgeschaeftView(QWidget):
                 self._start_worker,
                 self._start_product_worker,
                 self._start_exec_worker,
+                self._shipping_save_worker,
                 self._digital_license_offer_worker,
                 self._digital_license_defer_worker,
                 self._reprint_worker,
@@ -457,6 +468,7 @@ class TagesgeschaeftView(QWidget):
                 self._start_worker,
                 self._start_product_worker,
                 self._start_exec_worker,
+                self._shipping_save_worker,
                 self._digital_license_offer_worker,
                 self._digital_license_defer_worker,
                 self._reprint_worker,
@@ -1158,6 +1170,7 @@ class TagesgeschaeftView(QWidget):
         self._start_selected_invoice_ids = []
         self._start_selected_summaries = []
         self._start_buyer_note_actions = {}
+        self._start_shipping_dates = None
         if selected_only:
             if self._rechnungen_view is None:
                 return
@@ -1177,6 +1190,11 @@ class TagesgeschaeftView(QWidget):
         signals: AppSignals = self._container.resolve(AppSignals)
         self._start_abort_requested = False
         self._set_start_running(True, allow_stop=True)
+        shipping_dialog = ShippingDateDialog(self)
+        self._start_shipping_dialog = shipping_dialog
+        shipping_dialog.dates_chosen.connect(self._on_shipping_dates_chosen)
+        shipping_dialog.rejected.connect(self._on_shipping_dialog_rejected)
+        shipping_dialog.open()
         scope = (
             f"{len(self._start_selected_invoice_ids)} markierte Rechnung(en)"
             if self._start_selected_only
@@ -1191,13 +1209,46 @@ class TagesgeschaeftView(QWidget):
             )
         signals.status_message.emit("Pre-Flight wird erstellt…", 2500)
 
-        def job() -> StartPreflight:
+        def job() -> tuple[StartPreflight, list[ShippingCandidate], list[dict[str, str]]]:
             invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
             if self._start_selected_only:
                 summaries = list(self._start_selected_summaries)
             else:
                 summaries = invoice_service.load_invoice_summaries(status=100, limit=1000, offset=0)
             summaries = invoice_service.filter_start_ready(summaries)
+            plc_repository: PlcShipmentRepository | None = None
+            if (self._container.config.database_url or "").strip():
+                try:
+                    plc_repository = self._container.resolve(PlcShipmentRepository)
+                except KeyError:
+                    pass
+
+            def classify(summary: InvoiceSummary) -> ShippingCandidate:
+                candidate = invoice_service.classify_shipping_candidate(summary)
+                if candidate.lane == "abroad" and plc_repository is not None:
+                    try:
+                        evidence = plc_repository.list_parcel_evidence(
+                            invoice_id=candidate.invoice_id,
+                            invoice_number=summary.invoice_number,
+                        )
+                        if evidence:
+                            candidate = replace(candidate, lane="at", plc=True)
+                    except Exception as exc:  # noqa: BLE001 - retain country-based fallback.
+                        logger.warning("PLC evidence check failed invoice=%s: %s", summary.id, exc)
+                return candidate
+
+            with ThreadPoolExecutor(max_workers=min(4, max(1, len(summaries)))) as executor:
+                shipping_candidates = list(executor.map(classify, summaries))
+            existing = invoice_service.read_shipping_dates()
+            current_ids = {str(summary.id) for summary in summaries}
+            pending = [
+                {**row, "invoice_id": invoice_id}
+                for invoice_id, row in existing.items()
+                if invoice_id not in current_ids
+                and row.get("lane") == "abroad"
+                and row.get("planned_date")
+                and not row.get("shipped_date")
+            ]
             open_count = len(summaries)
             credit_service: B2bCreditService = self._container.resolve(B2bCreditService)
             b2b_holds = [hold.as_dict() for hold in credit_service.evaluate(summaries)]
@@ -1209,7 +1260,7 @@ class TagesgeschaeftView(QWidget):
                     missing_position_data=True,
                     b2b_holds=b2b_holds,
                     buyer_note_cases=buyer_note_cases,
-                )
+                ), shipping_candidates, pending
             inventory_service: InventoryService = self._container.resolve(InventoryService)
             invoice_requirements = invoice_service.build_invoice_inventory_requirements(
                 invoice_ids=(
@@ -1233,15 +1284,26 @@ class TagesgeschaeftView(QWidget):
                 b2b_holds=b2b_holds,
                 buyer_note_cases=buyer_note_cases,
                 invoice_requirements=invoice_requirements,
-            )
+            ), shipping_candidates, pending
 
         self._start_worker = BackgroundWorker(job)
-        self._start_worker.signals.result.connect(self._on_start_preflight_ready)
+        self._start_worker.signals.result.connect(self._on_start_preflight_payload)
         self._start_worker.signals.error.connect(self._on_start_preflight_error)
         self._start_worker.start()
 
+    def _on_start_preflight_payload(self, result: object) -> None:
+        if isinstance(result, tuple) and len(result) == 3:
+            preflight, candidates, pending = result
+            self._start_shipping_candidates = candidates
+            self._start_shipping_pending = pending
+            result = preflight
+        self._on_start_preflight_ready(result)
+
     def _on_start_preflight_ready(self, result: object) -> None:
         if self._start_abort_requested:
+            if self._start_shipping_dialog is not None:
+                self._start_shipping_dialog.accept()
+                self._start_shipping_dialog = None
             self._pending_start_preflight = None
             self._set_start_running(False)
             stop_signals: AppSignals = self._container.resolve(AppSignals)
@@ -1251,6 +1313,9 @@ class TagesgeschaeftView(QWidget):
             self._set_start_running(False)
             return
         if result.b2b_holds:
+            if self._start_shipping_dialog is not None:
+                self._start_shipping_dialog.accept()
+                self._start_shipping_dialog = None
             self._set_start_running(False)
             self._show_b2b_credit_holds(result.b2b_holds)
             return
@@ -1259,6 +1324,9 @@ class TagesgeschaeftView(QWidget):
                 decision.sku for decision in result.decisions if decision.will_print
             )
             if missing_skus:
+                if self._start_shipping_dialog is not None:
+                    self._start_shipping_dialog.accept()
+                    self._start_shipping_dialog = None
                 self._set_start_running(False)
                 shown = ", ".join(missing_skus[:10])
                 if len(missing_skus) > 10:
@@ -1273,6 +1341,12 @@ class TagesgeschaeftView(QWidget):
                     self._rechnungen_view.show_start_summary([message])
                 QMessageBox.warning(self, "START: Bestand fehlt", message)
                 return
+        if self._start_shipping_dialog is not None and self._start_shipping_dates is None:
+            self._pending_start_preflight = result
+            self._start_shipping_dialog.set_shipments(
+                self._start_shipping_candidates, self._start_shipping_pending
+            )
+            return
         signals: AppSignals = self._container.resolve(AppSignals)
         self._start_selected_mode = StartMode.INVOICES_AND_PRINT
         self._pending_start_preflight = result
@@ -1329,6 +1403,19 @@ class TagesgeschaeftView(QWidget):
         signals.status_message.emit("Produktprüfung wird vorbereitet…", 2500)
 
         self._start_missing_product_check()
+
+    def _on_shipping_dates_chosen(self, at_date: str, abroad_date: str) -> None:
+        self._start_shipping_dates = (at_date, abroad_date)
+        self._start_shipping_dialog = None
+        preflight = self._pending_start_preflight
+        if preflight is not None:
+            QTimer.singleShot(0, lambda: self._on_start_preflight_ready(preflight))
+
+    def _on_shipping_dialog_rejected(self) -> None:
+        self._start_shipping_dialog = None
+        self._start_abort_requested = True
+        self._pending_start_preflight = None
+        self._set_start_running(False)
 
     def _start_missing_product_check(self) -> None:
         if (
@@ -1686,12 +1773,25 @@ class TagesgeschaeftView(QWidget):
                                     *inventory_report.warnings,
                                 ],
                             )
-            skipped_ids = set(_string_items(batch_result.get("skipped_invoice_ids", [])))
+            successful_ids = set(_string_items(batch_result.get("successful_invoice_ids", [])))
             raw_run_summaries = batch_result.get("run_summaries", [])
             run_summaries = [
                 summary for summary in (raw_run_summaries if isinstance(raw_run_summaries, list) else [])
-                if isinstance(summary, InvoiceSummary) and str(summary.id) not in skipped_ids
+                if isinstance(summary, InvoiceSummary) and str(summary.id) in successful_ids
             ]
+            finalized_summaries: list[InvoiceSummary] = []
+            for summary in run_summaries:
+                try:
+                    refreshed = invoice_service.load_invoice_summary_by_id(str(summary.id))
+                except Exception as exc:  # noqa: BLE001 - retain the successful run row.
+                    logger.warning("START history invoice refresh failed id=%s: %s", summary.id, exc)
+                    refreshed = summary
+                if summary.contact_name and not refreshed.contact_name:
+                    refreshed = refreshed.model_copy(update={"contact_name": summary.contact_name})
+                if summary.order_reference and not refreshed.order_reference:
+                    refreshed = refreshed.model_copy(update={"order_reference": summary.order_reference})
+                finalized_summaries.append(refreshed)
+            run_summaries = finalized_summaries
             run_overview: OpenInvoiceOverview | None = None
             if run_summaries:
                 try:
@@ -1803,22 +1903,89 @@ class TagesgeschaeftView(QWidget):
             )
 
         if self._rechnungen_view is not None:
-            if processed > 0:
+            run_summaries = result.get("run_summaries")
+            if isinstance(run_summaries, list) and run_summaries:
                 mode_label = "START SELECTED" if self._start_selected_only else "START"
+                run_ids = {str(row.id) for row in run_summaries}
                 self._rechnungen_view.mark_print_products_last_run(
-                    processed=processed,
+                    processed=len(run_summaries),
                     failures=failures,
                     selected_only=self._start_selected_only,
                     mode_label=mode_label,
-                    invoice_print_ids=_string_items(batch.get("invoice_print_ids", [])),
-                    label_print_ids=_string_items(batch.get("label_print_ids", [])),
+                    invoice_print_ids=[
+                        invoice_id for invoice_id in _string_items(batch.get("invoice_print_ids", []))
+                        if invoice_id in run_ids
+                    ],
+                    label_print_ids=[
+                        invoice_id for invoice_id in _string_items(batch.get("label_print_ids", []))
+                        if invoice_id in run_ids
+                    ],
                     run_overview=result.get("run_overview"),
                     run_summaries=result.get("run_summaries"),
+                    customer_names={
+                        item.invoice_id: item.customer_name
+                        for item in self._start_shipping_candidates
+                    },
+                    shipping_dates={
+                        item.invoice_id: (
+                            self._start_shipping_dates[0]
+                            if item.lane == "at" else self._start_shipping_dates[1]
+                        )
+                        for item in self._start_shipping_candidates
+                        if item.lane != "digital" and self._start_shipping_dates is not None
+                    },
                 )
             self._rechnungen_view._reload_first_page(preserve_print_tab=True)
         self._refresh_badges()
+        if isinstance(result.get("run_summaries"), list) and result["run_summaries"]:
+            self._persist_start_shipping_dates(result["run_summaries"])
         if pending_license_ids and not aborted:
             self._offer_digital_license_delivery(pending_license_ids)
+
+    def _persist_start_shipping_dates(self, run_summaries: list[InvoiceSummary]) -> None:
+        if self._start_shipping_dates is None:
+            return
+        at_date, abroad_date = self._start_shipping_dates
+        current = {str(row.id): row for row in run_summaries}
+        updates: dict[str, dict[str, str]] = {}
+        for row in self._start_shipping_candidates:
+            if row.invoice_id not in current or row.lane == "digital":
+                continue
+            updates[row.invoice_id] = {
+                "invoice_date": str(current[row.invoice_id].invoice_date or row.invoice_date),
+                "customer_name": row.customer_name,
+                "order_reference": row.order_reference,
+                "lane": row.lane,
+                "eu_ch": "1" if row.eu_ch else "0",
+                "plc": "1" if row.plc else "0",
+                "planned_date": at_date if row.lane == "at" else abroad_date,
+                "at_planned_date": at_date,
+            }
+        # An unsent foreign shipment remains visible and is rescheduled when
+        # the next run also cannot make up a batch of three.
+        for pending in self._start_shipping_pending:
+            invoice_id = str(pending.get("invoice_id") or "").strip()
+            if invoice_id and invoice_id not in current:
+                updates[invoice_id] = {"planned_date": abroad_date}
+        if not updates:
+            return
+
+        def job() -> dict[str, dict[str, str]]:
+            service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+            service.update_shipping_dates(updates)
+            return service.read_shipping_dates()
+
+        worker = BackgroundWorker(job)
+        self._shipping_save_worker = worker
+        worker.signals.result.connect(
+            lambda ledger: self._rechnungen_view._apply_history_shipping_dates(ledger)
+            if self._rechnungen_view is not None else None
+        )
+        worker.signals.error.connect(lambda exc: QMessageBox.warning(
+            self, "Versanddatum", f"Versandplanung konnte nicht gespeichert werden:\n{exc}"
+        ))
+        worker.signals.finished.connect(lambda: setattr(self, "_shipping_save_worker", None))
+        worker.start()
 
     def _offer_digital_license_delivery(self, invoice_ids: list[str]) -> None:
         """Offer the manual-license wizard after START without blocking Qt."""
@@ -1893,6 +2060,9 @@ class TagesgeschaeftView(QWidget):
             self._refresh_badges()
 
     def _on_start_preflight_error(self, exc: Exception) -> None:
+        if self._start_shipping_dialog is not None:
+            self._start_shipping_dialog.accept()
+            self._start_shipping_dialog = None
         self._set_start_running(False)
         logger.error("Preflight failed: %s", exc)
         self._pending_start_preflight = None

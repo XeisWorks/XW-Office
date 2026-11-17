@@ -2115,6 +2115,12 @@ class PlcLabelPrintDialog(QDialog):
                 import_dir = DEFAULT_PLC_IMPORT_DIR if shipment.mode == "LIVE" else DEFAULT_TEST_PLC_IMPORT_DIR
             config = PlcConfig(mode=shipment.mode, import_dir=import_dir)
             path = write_import_file(build_polling_lines(config, shipment), import_dir, f"plc_{shipment.reference}")
+            if shipment.mode == "LIVE":
+                try:
+                    invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+                    invoice_service.mark_plc_shipping_lane(shipment.invoice_id)
+                except Exception as exc:  # noqa: BLE001 - preserve a successfully written import file.
+                    logger.warning("PLC dispatch plan could not be synchronized: %s", exc)
             return _PlcSendResult(transport="polling", reference=shipment.reference, polling_path=str(path))
 
         self._send_worker = BackgroundWorker(job)
@@ -2196,6 +2202,12 @@ class PlcLabelPrintDialog(QDialog):
                     label_job_id = self._queue_webservice_label(archive_path, shipment.reference)
                     service = self._container.resolve(PlcShipmentService)
                     service.mark_print_queued(shipment, label_job_id)
+                    if shipment.mode == "LIVE":
+                        try:
+                            invoice_service: InvoiceProcessingService = self._container.resolve(InvoiceProcessingService)
+                            invoice_service.mark_plc_shipping_lane(shipment.invoice_id)
+                        except Exception as exc:  # noqa: BLE001 - a created carrier label must stay successful.
+                            logger.warning("PLC dispatch plan could not be synchronized: %s", exc)
                     if fulfillment_order and fulfillment_quantities:
                         try:
                             partial_fulfillments = self._partial_fulfillments
