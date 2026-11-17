@@ -259,7 +259,9 @@ class OffeneSendungenDialog(QDialog):
         self._summary.setWordWrap(True)
         self._summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._summary.setStyleSheet(
-            "font-size: 16px; font-weight: 600; padding: 2px 0 5px 0;"
+            "background-color: rgba(22, 163, 74, 0.16);"
+            "border-left: 3px solid #22a75a; border-radius: 4px;"
+            "font-size: 12px; font-weight: normal; padding: 10px;"
         )
         mail_lay.addWidget(self._summary)
 
@@ -571,14 +573,18 @@ class OffeneSendungenDialog(QDialog):
         def job() -> tuple[str, SendungExtraction, dict[str, object]]:
             service = self._require_service()
             if isinstance(service, OffeneSendungenService):
+                previous_summary = service.load_cached_summary(case_id)
                 extraction = service.extract_case_details(
                     case_id,
                     force=force,
                     on_thread_loaded=lambda text: worker.signals.progress.emit(0, text),
                 )
             else:
+                previous_summary = ""
                 extraction = service.extract_case_details(case_id, force=force)
             manual = service.load_manual_fields(case_id)
+            if previous_summary:
+                manual = {**manual, "_previous_summary": previous_summary}
             return case_id, extraction, manual
 
         worker = BackgroundWorker(job)
@@ -660,7 +666,15 @@ class OffeneSendungenDialog(QDialog):
                 self._recipient_names[case.id] = recipient_name
                 item.setText(self._case_list_text(case, recipient_name=recipient_name))
         self._set_products(products)
-        self._manual_text.setPlainText(manual_text or extraction.summary)
+        previous_summary = str(manual.get("_previous_summary") or "") if isinstance(manual, dict) else ""
+        legacy_summary = manual_text == extraction.summary or manual_text == previous_summary or (
+            "Produkte:" in manual_text and "Lieferanschrift:" in manual_text
+        ) or (
+            manual_text.startswith("Betreff:") and "Inhalt (Kurzfassung):" in manual_text
+        )
+        self._manual_text.setPlainText(
+            extraction.short_note if not manual_text or legacy_summary else manual_text
+        )
         notes = ", ".join(extraction.confidence_notes or [])
         suffix = f" | {notes}" if notes else ""
         self._detail_status.setText(f"Quelle: {extraction.source}{suffix}")
@@ -774,6 +788,10 @@ class OffeneSendungenDialog(QDialog):
 
     def _validated_products(self) -> list[SendungProductLine] | None:
         products = self._products_from_table()
+        if not products:
+            QMessageBox.information(self, "Produkt fehlt", "Bitte mindestens ein Produkt eintragen.")
+            self._products.setCurrentIndex(self._products_model.index(0, 1))
+            return None
         for row, product in enumerate(products, start=1):
             if product.free_delivery:
                 continue
@@ -838,7 +856,7 @@ class OffeneSendungenDialog(QDialog):
         request = self._delivery_note_request()
         if request is None:
             return
-        case_id, address, products, short_note, _summary = request
+        case_id, address, products, short_note = request
 
         def job() -> Path:
             return self._require_service().generate_delivery_note_pdf(
@@ -863,7 +881,7 @@ class OffeneSendungenDialog(QDialog):
         request = self._delivery_note_request()
         if request is None:
             return
-        case_id, address, products, short_note, _summary = request
+        case_id, address, products, short_note = request
 
         def job() -> Path:
             service = self._require_service()
@@ -894,19 +912,23 @@ class OffeneSendungenDialog(QDialog):
 
     def _delivery_note_request(
         self,
-    ) -> tuple[str, list[str], list[SendungProductLine], str, str] | None:
+    ) -> tuple[str, list[str], list[SendungProductLine], str] | None:
         case = self._current_case()
         if case is None:
             return None
         products = self._validated_products()
         if products is None:
             return None
+        address = self._address_lines()
+        if not address:
+            QMessageBox.information(self, "Lieferanschrift fehlt", "Bitte Lieferanschrift eintragen.")
+            self._address.setFocus()
+            return None
         return (
             case.id,
-            self._address_lines(),
+            address,
             products,
             self._manual_text.toPlainText(),
-            self._summary.text(),
         )
 
     def _mark_done(self) -> None:

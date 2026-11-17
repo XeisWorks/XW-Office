@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -38,7 +39,7 @@ _EXTRACTIONS_KEY = "daily_business.offene_sendungen.extractions"
 _MANUAL_KEY = "daily_business.offene_sendungen.manual"
 _SOURCE_MAILBOX_KEY = "daily_business.offene_sendungen.source_mailbox"
 _DEFAULT_MODEL = "gpt-4.1-mini"
-_EXTRACTION_SCHEMA_VERSION = 2
+_EXTRACTION_SCHEMA_VERSION = 3
 _MEMORY_CACHE_SECONDS = 120.0
 _DEFAULT_SHIPPING_MAILBOX = "shipping@xeisworks.at"
 #: Sentinel ``SendungCase.sender`` for cases injected via create_manual_case
@@ -91,6 +92,7 @@ class SendungExtraction:
     summary: str
     address_lines: list[str]
     products: list[SendungProductLine]
+    short_note: str = ""
     order_number: str = ""
     invoice_number: str = ""
     customer_name: str = ""
@@ -664,25 +666,32 @@ class OffeneSendungenService:
         address_lines: list[str],
         products: list[SendungProductLine],
         manual_text: str = "",
-        summary: str = "",
+        summary: str = "",  # Kept for callers; internal AI summary is never printed.
         short_note: str = "",
     ) -> Path:
         case = self._find_case(case_id)
         if case is None:
             raise RuntimeError("Sendungsfall nicht gefunden")
-        note = str(short_note or "").strip()
+        address = [str(line).strip() for line in address_lines if str(line).strip()]
+        if not address:
+            raise ValueError("Lieferanschrift fehlt")
+        shipping_products = [product for product in products if str(product.name or "").strip()]
+        if not shipping_products:
+            raise ValueError("Mindestens ein Produkt fehlt")
+        note = str(short_note or manual_text or "").strip()
+        if note and note == str(summary or "").strip():
+            note = ""
         self.save_manual_fields(
             case.id,
-            address_lines=address_lines,
-            products=products,
-            manual_text=note or manual_text,
+            address_lines=address,
+            products=shipping_products,
+            manual_text=note,
         )
         return self._render_delivery_note_pdf(
             case,
-            address_lines=[line for line in address_lines if str(line).strip()],
-            products=products,
-            manual_text=manual_text,
-            summary=note or summary,
+            address_lines=address,
+            products=shipping_products,
+            short_note=note,
         )
 
     def print_delivery_note(
@@ -908,8 +917,10 @@ class OffeneSendungenService:
             "4. Bei Reklamationen waehle nur konkret nachzusendende Positionen, niemals pauschal alle "
             "Positionen der urspruenglichen Rechnung. Versandkosten und digitale Downloads sind keine "
             "Versandprodukte.\n"
-            "5. Die Kurznotiz nennt Kunde, Bezug (Rechnung/Wix), konkrete Versandaktion und Produkt; "
-            "sie behauptet nichts, was nicht aus Mail oder Systemdaten folgt.\n\n"
+            "5. summary ist eine interne Handlungszusammenfassung nur fuer das Popup.\n"
+            "6. short_note ist ein kurzer kundenfaehiger Text fuer den Lieferschein, maximal "
+            "zwei Saetze. Nur konkrete Versandhinweise, keine interne Analyse oder Wiederholung "
+            "von Adresse und Produktliste. Wenn kein Hinweis noetig ist, leer lassen.\n\n"
             f"AUTORITATIVE SYSTEMDATEN:\n{self._business_context_prompt(context)}\n\n"
             f"Betreff: {case.subject}\n"
             f"Absender: {case.sender}\n"
@@ -944,6 +955,7 @@ class OffeneSendungenService:
                 str(data.get("case_type") or ""),
                 thread_text,
             ),
+            short_note=str(data.get("short_note") or "").strip(),
             address_lines=address_lines,
             products=self._normalize_products(
                 data.get("products"), authoritative_products=context.products
@@ -971,6 +983,7 @@ class OffeneSendungenService:
             fallback = self._fallback_extract(case, thread_text=thread_text)
             extraction = SendungExtraction(
                 summary=extraction.summary,
+                short_note=extraction.short_note,
                 address_lines=extraction.address_lines or fallback.address_lines,
                 products=fallback.products,
                 order_number=extraction.order_number or fallback.order_number,
@@ -1012,6 +1025,7 @@ class OffeneSendungenService:
                     ],
                 },
                 "summary": {"type": "string"},
+                "short_note": {"type": "string"},
                 "customer_name": {"type": "string"},
                 "invoice_number": {"type": "string"},
                 "order_number": {"type": "string"},
@@ -1022,6 +1036,7 @@ class OffeneSendungenService:
             "required": [
                 "case_type",
                 "summary",
+                "short_note",
                 "customer_name",
                 "invoice_number",
                 "order_number",
@@ -1127,6 +1142,9 @@ class OffeneSendungenService:
         notes: list[str] = []
 
         invoice_summary: InvoiceSummary | None = None
+        invoice_address: list[str] = []
+        wix_address: list[str] = []
+        wix_customer_name = ""
         if self._invoice_client is not None and (invoice_number or order_number):
             try:
                 invoice_summary = self._find_invoice_summary(
@@ -1144,7 +1162,10 @@ class OffeneSendungenService:
             try:
                 invoice = self._invoice_client.fetch_invoice_by_id(invoice_summary.id)
                 positions = self._invoice_client.fetch_invoice_positions(invoice_summary.id)
-                address_lines = self._invoice_address_lines(invoice, invoice_summary)
+                invoice_address = self._invoice_address_lines(invoice, invoice_summary)
+                if not self._is_usable_address(invoice_address):
+                    invoice_address = []
+                    notes.append("sevDesk-Lieferanschrift ist unvollständig.")
                 products = self._invoice_product_lines(positions)
                 sources.append("sevdesk-invoice")
             except Exception as exc:  # noqa: BLE001
@@ -1166,15 +1187,20 @@ class OffeneSendungenService:
                     if isinstance(result, dict)
                     else []
                 )
-                if wix_lines:
-                    address_lines = wix_lines
-                    order_number = str(result.get("order_number") or order_number).strip()
-                    sources.append(str(result.get("source") or "wix-order").strip())
+                if wix_lines and self._is_usable_address(wix_lines):
+                    resolved_order = str(result.get("order_number") or "").strip()
+                    if resolved_order == order_number:
+                        wix_address = wix_lines
+                        sources.append(str(result.get("source") or "wix-order").strip())
+                    else:
+                        notes.append("Wix-Lieferadresse gehört zu einer anderen Bestellung.")
+                elif wix_lines:
+                    notes.append("Wix-Lieferanschrift ist unvollständig.")
 
                 summary_resolver = getattr(wix, "resolve_order_summary", None)
                 wix_summary = summary_resolver(order_number) if callable(summary_resolver) else {}
-                if isinstance(wix_summary, dict) and not customer_name:
-                    customer_name = str(wix_summary.get("wix_customer_name") or "").strip()
+                if isinstance(wix_summary, dict):
+                    wix_customer_name = str(wix_summary.get("wix_customer_name") or "").strip()
 
                 if not products:
                     item_loader = getattr(wix, "fetch_order_line_items", None)
@@ -1199,6 +1225,33 @@ class OffeneSendungenService:
                 logger.warning("Wix order lookup failed for sendung %s: %s", case.id, exc)
                 notes.append("Wix-Bestelldaten konnten nicht vollstaendig geladen werden.")
 
+        invoice_names = [line for line in invoice_address[:2] if not re.search(r"\d", line)]
+        wix_names = [line for line in wix_address[:2] if not re.search(r"\d", line)]
+        invoice_matches = bool(invoice_address) and (
+            any(self._name_matches_case(name, case, thread_text) for name in invoice_names)
+            or any(
+                self._names_match(invoice_name, wix_name)
+                for invoice_name in invoice_names
+                for wix_name in wix_names
+            )
+        )
+        wix_matches = bool(wix_address) and (
+            any(self._name_matches_case(name, case, thread_text) for name in wix_names)
+            or any(
+                self._names_match(wix_name, invoice_name)
+                for wix_name in wix_names
+                for invoice_name in invoice_names
+            )
+        )
+        if wix_matches:
+            address_lines = wix_address
+            if not customer_name:
+                customer_name = wix_customer_name or wix_names[0]
+        elif invoice_matches:
+            address_lines = invoice_address
+        elif wix_address or invoice_address:
+            notes.append("Bestell-/Rechnungsadresse nicht übernommen: Name nicht bestätigt.")
+
         return _SendungBusinessContext(
             invoice_number=invoice_number,
             order_number=order_number,
@@ -1208,6 +1261,57 @@ class OffeneSendungenService:
             source="+".join(dict.fromkeys(source for source in sources if source)),
             confidence_notes=tuple(notes),
         )
+
+    @staticmethod
+    def _name_parts(value: str) -> list[tuple[str, ...]]:
+        variants: list[tuple[str, ...]] = []
+        for part in str(value or "").split("/"):
+            plain = unicodedata.normalize("NFKD", part.casefold().replace("ß", "ss"))
+            plain = "".join(char for char in plain if not unicodedata.combining(char))
+            tokens = tuple(
+                token
+                for token in re.findall(r"[a-z0-9]+", plain)
+                if token not in {"herr", "herrn", "frau", "firma", "mag", "dr", "gmbh"}
+            )
+            if tokens:
+                variants.append(tokens)
+        return variants
+
+    @classmethod
+    def _names_match(cls, left: str, right: str) -> bool:
+        for first in cls._name_parts(left):
+            for second in cls._name_parts(right):
+                if len(first) == len(second) == 1:
+                    if first == second and len(first[0]) >= 5:
+                        return True
+                elif len(first) >= 2 and len(second) >= 2:
+                    if set(first).issubset(second) or set(second).issubset(first):
+                        return True
+        return False
+
+    @classmethod
+    def _name_matches_case(cls, name: str, case: SendungCase, thread_text: str) -> bool:
+        if cls._names_match(name, case.sender_name):
+            return True
+        plain = unicodedata.normalize(
+            "NFKD", f"{case.subject}\n{case.snippet}\n{thread_text}".casefold().replace("ß", "ss")
+        )
+        plain = "".join(char for char in plain if not unicodedata.combining(char))
+        plain = " ".join(re.findall(r"[a-z0-9]+", plain))
+        for tokens in cls._name_parts(name):
+            if len(tokens) >= 2 and (
+                " ".join(tokens) in plain or " ".join(reversed(tokens)) in plain
+            ):
+                return True
+            if len(tokens) >= 2 and len(tokens[-1]) >= 5 and re.search(
+                rf"\b(?:herr|herrn|frau)\s+{re.escape(tokens[-1])}\b", plain
+            ):
+                return True
+            if len(tokens) == 1 and len(tokens[0]) >= 6 and re.search(
+                rf"\b{re.escape(tokens[0])}\b", plain
+            ):
+                return True
+        return False
 
     def _find_invoice_summary(
         self,
@@ -1355,9 +1459,9 @@ class OffeneSendungenService:
         mail_address_is_supported = self._is_usable_address(
             address_lines
         ) and self._address_supported_by_text(address_lines, extraction.thread_text)
-        if not mail_address_is_supported and context.address_lines:
-            address_lines = list(context.address_lines)
-            address_from_system = True
+        if not mail_address_is_supported:
+            address_lines = list(context.address_lines) if context.address_lines else []
+            address_from_system = bool(address_lines)
 
         products = list(extraction.products)
         if not products and extraction.case_type == "shipment" and context.products:
@@ -1392,6 +1496,8 @@ class OffeneSendungenService:
             confidence_notes.append(
                 "Rechnung zugeordnet, aber keine versandfaehige Position gefunden."
             )
+        if not products:
+            confidence_notes.append("Versandprodukt fehlt; bitte vor dem Lieferschein ergänzen.")
 
         return SendungExtraction(
             summary=self._clear_case_summary(
@@ -1402,6 +1508,7 @@ class OffeneSendungenService:
                 products=products,
                 address_lines=address_lines,
             ),
+            short_note=extraction.short_note,
             address_lines=address_lines,
             products=products,
             order_number=order_number,
@@ -1734,8 +1841,7 @@ class OffeneSendungenService:
         *,
         address_lines: list[str],
         products: list[SendungProductLine],
-        manual_text: str,
-        summary: str,
+        short_note: str,
     ) -> Path:
         try:
             import fitz  # type: ignore[import-untyped]
@@ -1763,123 +1869,165 @@ class OffeneSendungenService:
         logo_path = self._repo_root() / "icons" / "logo NEU.png"
         if logo_path.exists():
             page.insert_image(
-                fitz.Rect(margin, 46, margin + 150, 104),
+                fitz.Rect(margin, 24, margin + 190, 115),
                 filename=str(logo_path),
                 keep_proportion=True,
             )
         page.insert_text(
-            (margin, 132), "LIEFERSCHEIN", fontsize=28, fontname="helv", color=(0.08, 0.08, 0.08)
+            (margin, 148), "LIEFERSCHEIN", fontsize=28, fontname="helv", color=(0.08, 0.08, 0.08)
         )
-        page.draw_line((margin, 146), (545, 146), color=(0.84, 0.09, 0.09), width=2.2)
+        page.draw_line((margin, 162), (545, 162), color=(0.84, 0.09, 0.09), width=2.2)
         meta = [
             f"Datum: {datetime.now().strftime('%d.%m.%Y')}",
-            f"Wix-Bestellung: {order_number or '-'}",
-            f"sevDesk-Rechnung: {invoice_number or '-'}",
-            f"Betreff: {case.subject or '-'}",
         ]
+        if order_number:
+            meta.append(f"Wix-Bestellung: {order_number}")
+        if invoice_number:
+            meta.append(f"sevDesk-Rechnung: {invoice_number}")
         page.insert_textbox(
-            fitz.Rect(330, 76, 545, 142),
+            fitz.Rect(330, 72, 545, 130),
             "\n".join(meta),
             fontsize=9.0,
             align=2,
             color=(0.25, 0.25, 0.25),
         )
 
-        y = 176
+        y = 190
         page.insert_text(
             (margin, y), "Lieferadresse", fontsize=13, fontname="helv", color=(0.84, 0.09, 0.09)
         )
-        page.insert_textbox(
+        address_fit = page.insert_textbox(
             fitz.Rect(margin, y + 12, 280, y + 104),
-            "\n".join(address_lines) or "Adresse bitte ergaenzen",
+            "\n".join(address_lines),
             fontsize=11,
             color=(0.05, 0.05, 0.05),
         )
-        if summary:
+        if address_fit < 0:
+            raise ValueError("Lieferanschrift ist für den Lieferschein zu lang")
+        if short_note:
             page.insert_text(
                 (320, y), "Kurznotiz", fontsize=13, fontname="helv", color=(0.84, 0.09, 0.09)
             )
-            page.insert_textbox(
-                fitz.Rect(320, y + 12, 545, y + 104),
-                summary[:420],
+            note_fit = page.insert_textbox(
+                fitz.Rect(320, y + 12, 545, y + 120),
+                short_note,
                 fontsize=9.5,
                 color=(0.18, 0.18, 0.18),
             )
+            if note_fit < 0:
+                raise ValueError("Kurznotiz ist für den Lieferschein zu lang")
 
-        y = 318
-        table_x = margin
-        table_w = 495
-        row_h = 36
-        page.draw_rect(
-            fitz.Rect(table_x, y, table_x + table_w, y + row_h),
-            color=(0.84, 0.09, 0.09),
-            fill=(0.84, 0.09, 0.09),
-        )
-        page.insert_text((table_x + 10, y + 18), "Menge", fontsize=10, color=(1, 1, 1))
-        page.insert_text((table_x + 72, y + 18), "Produkt", fontsize=10, color=(1, 1, 1))
-        page.insert_text(
-            (table_x + 360, y + 18), "Versand / Rücksendung", fontsize=9.5, color=(1, 1, 1)
-        )
-        y += row_h
-        rows = products or [SendungProductLine(quantity="", name="Produkte bitte ergaenzen")]
-        for idx, product in enumerate(rows[:8]):
-            fill = (0.97, 0.97, 0.97) if idx % 2 else (1, 1, 1)
+        def wrap_lines(value: str, width: float, size: float) -> list[str]:
+            lines: list[str] = []
+            for paragraph in str(value or "").splitlines() or [""]:
+                words = paragraph.split()
+                if not words:
+                    lines.append("")
+                    continue
+                current = ""
+                for word in words:
+                    candidate = f"{current} {word}".strip()
+                    if current and fitz.get_text_length(
+                        candidate, fontname="helv", fontsize=size
+                    ) > width:
+                        lines.append(current)
+                        current = word
+                    else:
+                        current = candidate
+                lines.append(current)
+            return lines
+
+        def draw_footer(current_page: Any) -> None:
+            current_page.draw_line(
+                (margin, 745), (545, 745), color=(0.76, 0.76, 0.76), width=0.6
+            )
+            footer = (
+                f"{_FOOTER_LINES[0]}  |  {_FOOTER_LINES[1]}\n"
+                f"{_FOOTER_LINES[2]}  |  {_FOOTER_LINES[3]}\n"
+                f"{_FOOTER_LINES[4]}  |  {_FOOTER_LINES[5]}"
+            )
+            current_page.insert_textbox(
+                fitz.Rect(margin, 755, 545, 810),
+                footer,
+                fontsize=7.5,
+                lineheight=1.15,
+                align=1,
+                color=(0.38, 0.38, 0.38),
+            )
+
+        def draw_table_header(current_page: Any, top: float) -> float:
+            current_page.draw_rect(
+                fitz.Rect(margin, top, 545, top + 36),
+                color=(0.84, 0.09, 0.09),
+                fill=(0.84, 0.09, 0.09),
+            )
+            current_page.insert_text((margin + 10, top + 22), "Menge", fontsize=10, color=(1, 1, 1))
+            current_page.insert_text((margin + 72, top + 22), "Produkt", fontsize=10, color=(1, 1, 1))
+            current_page.insert_text(
+                (margin + 360, top + 22),
+                "Versand / R\u00fccksendung",
+                fontsize=9.5,
+                color=(1, 1, 1),
+            )
+            return top + 36
+
+        y = draw_table_header(page, 330)
+        for index, product in enumerate(products):
+            detail = " | ".join(part for part in (product.sku, product.note) if part)
+            product_text = product.name + (f"\n{detail}" if detail else "")
+            product_lines = wrap_lines(product_text, 270, 9.5)
+            delivery_text = (
+                "Kostenlose Lieferung"
+                if product.free_delivery
+                else f"Lieferkosten: {str(product.delivery_price or '5,90').strip()} EUR"
+            )
+            return_text = (
+                "Keine R\u00fccksendung erforderlich"
+                if product.no_return_required
+                else "R\u00fccksendung erforderlich"
+            )
+            delivery_lines = wrap_lines(f"{delivery_text}\n{return_text}", 125, 8.4)
+            row_height = max(48, 18 + max(len(product_lines) * 12, len(delivery_lines) * 11))
+            if y + row_height > 730:
+                page = doc.new_page(width=595, height=842)
+                page.insert_text(
+                    (margin, 61),
+                    "LIEFERSCHEIN  |  FORTSETZUNG",
+                    fontsize=16,
+                    color=(0.08, 0.08, 0.08),
+                )
+                page.draw_line((margin, 75), (545, 75), color=(0.84, 0.09, 0.09), width=1.5)
+                y = draw_table_header(page, 96)
+            fill = (0.97, 0.97, 0.97) if index % 2 else (1, 1, 1)
             page.draw_rect(
-                fitz.Rect(table_x, y, table_x + table_w, y + row_h),
+                fitz.Rect(margin, y, 545, y + row_height),
                 color=(0.88, 0.88, 0.88),
                 fill=fill,
             )
             page.insert_textbox(
-                fitz.Rect(table_x + 10, y + 7, table_x + 60, y + row_h),
-                product.quantity,
+                fitz.Rect(margin + 10, y + 7, margin + 60, y + row_height - 3),
+                str(product.quantity or "1"),
                 fontsize=10,
             )
-            product_text = product.name
-            sku_note = " | ".join(part for part in (product.sku, product.note) if part)
-            if sku_note:
-                product_text = f"{product_text}\n{sku_note}"
-            page.insert_textbox(
-                fitz.Rect(table_x + 72, y + 6, table_x + 350, y + row_h), product_text, fontsize=9.5
+            product_fit = page.insert_textbox(
+                fitz.Rect(margin + 72, y + 3, margin + 350, y + row_height - 2),
+                "\n".join(product_lines),
+                fontsize=9.5,
             )
-            delivery_text = (
-                "Kostenlose Lieferung"
-                if product.free_delivery
-                else f"Lieferkosten: € {str(product.delivery_price or '5,90').strip()}"
-            )
-            return_text = (
-                "Keine Rücksendung erforderlich"
-                if product.no_return_required
-                else "Rücksendung eingetroffen"
-            )
-            page.insert_textbox(
-                fitz.Rect(table_x + 360, y + 5, table_x + table_w - 6, y + row_h),
-                f"{delivery_text}\n{return_text}",
+            if product_fit < 0:
+                raise ValueError(f"Produktzeile {index + 1} ist für den Lieferschein zu lang")
+            delivery_fit = page.insert_textbox(
+                fitz.Rect(margin + 360, y + 3, 539, y + row_height - 2),
+                "\n".join(delivery_lines),
                 fontsize=8.4,
             )
-            y += row_h
+            if delivery_fit < 0:
+                raise ValueError(f"Versandangabe in Produktzeile {index + 1} ist zu lang")
+            y += row_height
 
-        if manual_text.strip():
-            y += 24
-            page.insert_text(
-                (margin, y), "Hinweis", fontsize=13, fontname="helv", color=(0.84, 0.09, 0.09)
-            )
-            page.insert_textbox(
-                fitz.Rect(margin, y + 14, 545, min(y + 110, 720)),
-                manual_text.strip(),
-                fontsize=10.5,
-            )
+        for current_page in doc:
+            draw_footer(current_page)
 
-        footer_y = 742
-        page.draw_line(
-            (margin, footer_y - 16), (545, footer_y - 16), color=(0.72, 0.72, 0.72), width=0.8
-        )
-        page.insert_textbox(
-            fitz.Rect(margin, footer_y, 545, 820),
-            "\n".join(_FOOTER_LINES),
-            fontsize=9,
-            align=1,
-            color=(0.22, 0.22, 0.22),
-        )
         doc.save(str(out_path))
         doc.close()
         return out_path
@@ -1895,6 +2043,11 @@ class OffeneSendungenService:
         if schema_version < _EXTRACTION_SCHEMA_VERSION:
             return None
         return self._extraction_from_dict(value)
+
+    def load_cached_summary(self, case_id: str) -> str:
+        """Read an older summary before reanalysis to avoid reusing it as a delivery note."""
+        value = self._load_json_map(_EXTRACTIONS_KEY).get(str(case_id or "").strip())
+        return str(value.get("summary") or "").strip() if isinstance(value, dict) else ""
 
     def _save_extraction(self, case_id: str, extraction: SendungExtraction) -> None:
         data = self._load_json_map(_EXTRACTIONS_KEY)
@@ -2037,6 +2190,7 @@ class OffeneSendungenService:
     def _extraction_from_dict(self, data: dict[str, Any]) -> SendungExtraction:
         return SendungExtraction(
             summary=str(data.get("summary") or "").strip(),
+            short_note=str(data.get("short_note") or "").strip(),
             address_lines=self._normalize_address_lines(data.get("address_lines")),
             products=self._normalize_products(data.get("products")),
             order_number=str(data.get("order_number") or "").strip(),
@@ -2059,6 +2213,7 @@ class OffeneSendungenService:
         return {
             "schema_version": _EXTRACTION_SCHEMA_VERSION,
             "summary": extraction.summary,
+            "short_note": extraction.short_note,
             "address_lines": extraction.address_lines,
             "products": [self._product_to_dict(product) for product in extraction.products],
             "order_number": extraction.order_number,

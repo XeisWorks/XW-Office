@@ -53,6 +53,7 @@ class _FakeSendungenService:
         del case_id, force
         return SendungExtraction(
             summary="Ein Musikbuch an Max Muster senden.",
+            short_note="Viel Freude mit dem Musikbuch!",
             address_lines=["Max Muster", "Hauptstrasse 1", "1010 Wien"],
             products=[SendungProductLine(quantity="1", name="Musikbuch Alpen", sku="XW-42")],
             order_number="20868",
@@ -185,12 +186,57 @@ def test_dialog_loads_cases_and_prefills_shipping_fields(qtbot: object) -> None:
     assert dialog._status.text() == "1 offene Sendungen"  # noqa: SLF001
     assert "Ein Musikbuch" in dialog._summary.text()  # noqa: SLF001
     assert dialog._list.item(0).text() == "10.07. Max Muster"  # noqa: SLF001
-    assert dialog._manual_text.toPlainText() == "Ein Musikbuch an Max Muster senden."  # noqa: SLF001
+    assert dialog._manual_text.toPlainText() == "Viel Freude mit dem Musikbuch!"  # noqa: SLF001
     assert dialog._cell_text(0, 1) == "Musikbuch Alpen"  # noqa: SLF001
     free_index = dialog._products_model.index(0, 4)  # noqa: SLF001
     return_index = dialog._products_model.index(0, 6)  # noqa: SLF001
     assert free_index.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
     assert return_index.data(Qt.ItemDataRole.CheckStateRole) == Qt.CheckState.Checked
+
+
+def test_legacy_ai_summary_is_not_reused_as_delivery_note(qtbot: object) -> None:
+    class LegacySummaryService(_FakeSendungenService):
+        def load_manual_fields(self, _case_id: str) -> dict[str, object]:
+            return {
+                "manual_text": (
+                    "Kunde: Max Muster\nProdukte: 1 x Musikbuch Alpen\n"
+                    "Lieferanschrift: Max Muster, Hauptstrasse 1, 1010 Wien"
+                )
+            }
+
+    dialog = OffeneSendungenDialog(_FakeContainer(LegacySummaryService()))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    _wait_dialog_loaded(qtbot, dialog)
+    assert dialog._manual_text.toPlainText() == "Viel Freude mit dem Musikbuch!"  # noqa: SLF001
+
+
+def test_old_cached_summary_is_replaced_after_reanalysis(qtbot: object) -> None:
+    class MigratingService(OffeneSendungenService):
+        def __init__(self) -> None:
+            self._cases = _FakeSendungenService()._cases
+
+        def load_open_cases(self) -> list[SendungCase]:
+            return list(self._cases)
+
+        def load_cached_recipient_names(self, _cases: list[SendungCase]) -> dict[str, str]:
+            return {}
+
+        def refresh_from_graph(self, **_kwargs: object) -> list[SendungCase]:
+            return list(self._cases)
+
+        def load_cached_summary(self, _case_id: str) -> str:
+            return "Alte KI-Zusammenfassung"
+
+        def extract_case_details(self, case_id: str, *, force: bool = False, on_thread_loaded=None) -> SendungExtraction:
+            return _FakeSendungenService.extract_case_details(self, case_id, force=force)
+
+        def load_manual_fields(self, _case_id: str) -> dict[str, object]:
+            return {"manual_text": "Alte KI-Zusammenfassung"}
+
+    dialog = OffeneSendungenDialog(_FakeContainer(MigratingService()))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    _wait_dialog_loaded(qtbot, dialog)
+    assert dialog._manual_text.toPlainText() == "Viel Freude mit dem Musikbuch!"  # noqa: SLF001
 
 
 def test_initial_detail_load_survives_silent_refresh(qtbot: object) -> None:
@@ -265,6 +311,9 @@ def test_full_mail_arrives_before_extraction_finishes_and_ignores_stale_case(qtb
 
         def load_cached_recipient_names(self, _cases: list[SendungCase]) -> dict[str, str]:
             return {}
+
+        def load_cached_summary(self, _case_id: str) -> str:
+            return ""
 
         def refresh_from_graph(self, **_kwargs: object) -> list[SendungCase]:
             self.refresh_called += 1

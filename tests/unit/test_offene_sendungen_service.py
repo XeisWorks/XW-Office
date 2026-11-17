@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -519,6 +521,10 @@ def test_generate_delivery_note_pdf_contains_lieferschein_text(tmp_path, monkeyp
     service._secrets.values["MS_GRAPH_TENANT_ID"] = ""  # noqa: SLF001
     monkeypatch.setattr(service, "_repo_root", lambda: tmp_path)
     (tmp_path / "icons").mkdir()
+    shutil.copyfile(
+        Path(__file__).resolve().parents[2] / "icons" / "logo NEU.png",
+        tmp_path / "icons" / "logo NEU.png",
+    )
 
     path = service.generate_delivery_note_pdf(
         "m1",
@@ -528,10 +534,15 @@ def test_generate_delivery_note_pdf_contains_lieferschein_text(tmp_path, monkeyp
                 quantity="1",
                 name="Musikbuch Alpen",
                 sku="XW-42",
+                note="Bitte stabil verpacken",
                 free_delivery=False,
                 delivery_price="5,90",
                 no_return_required=False,
-            )
+            ),
+            *[
+                SendungProductLine(quantity="1", name=f"Zusatzprodukt {index}")
+                for index in range(1, 11)
+            ],
         ],
         manual_text="Danke fuer die Bestellung.",
         summary="Kurzfassung",
@@ -541,14 +552,38 @@ def test_generate_delivery_note_pdf_contains_lieferschein_text(tmp_path, monkeyp
 
     with fitz.open(path) as doc:
         text = "\n".join(page.get_text() for page in doc)
+        assert doc.page_count == 2
+        images = doc[0].get_images(full=True)
+        assert images and doc[0].get_image_rects(images[0][0])[0].width > 175
     assert "LIEFERSCHEIN" in text
     assert "Musikbuch Alpen" in text
+    assert "Zusatzprodukt 10" in text
+    assert "Bitte stabil verpacken" in text
+    assert "Danke fuer die Bestellung." in text
+    assert "Kurzfassung" not in text
+    assert "Betreff:" not in text
     assert "Wix-Bestellung: 20868" in text
     assert "sevDesk-Rechnung: RE-262222" in text
     assert "XeisWorks" in text
     assert "Lieferkosten:" in text
     assert "5,90" in text
-    assert "Rücksendung eingetroffen" in text
+    assert "Rücksendung erforderlich" in text
+
+
+def test_delivery_note_requires_address_and_named_product() -> None:
+    repo = _Repo()
+    repo.values["daily_business.offene_sendungen.cases"] = json.dumps(
+        [{"id": "m1", "subject": "Versand", "sender": "kunde@example.test"}]
+    )
+    service = OffeneSendungenService(repo, _Secrets())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="Lieferanschrift"):
+        service.generate_delivery_note_pdf(
+            "m1", address_lines=[], products=[SendungProductLine(name="Musikbuch")]
+        )
+    with pytest.raises(ValueError, match="Produkt"):
+        service.generate_delivery_note_pdf(
+            "m1", address_lines=["Max Muster", "Hauptstrasse 1", "1010 Wien"], products=[]
+        )
 
 
 def test_explicit_mail_shipping_address_is_preferred_over_wix_and_cached() -> None:
@@ -605,7 +640,7 @@ def test_wix_shipping_address_fills_missing_mail_address() -> None:
                 "sender": "kunde@example.test",
                 "subject": "Bestellung 20868",
                 "snippet": "Bitte versenden, Adresse steht in der Bestellung.",
-                "body": "Bitte versenden, Adresse steht in der Bestellung.",
+                "body": "Bitte für Max Muster versenden, Adresse steht in der Bestellung.",
                 "thread_id": "thread-m1",
                 "order_number": "20868",
             }
@@ -630,6 +665,101 @@ def test_wix_shipping_address_fills_missing_mail_address() -> None:
     assert details.address_lines == ["Max Muster", "Neuweg 2", "1010 Wien", "Österreich"]
     assert details.order_number == "20868"
     assert "address-fallback" in details.source
+
+
+def test_order_address_needs_matching_name_and_exact_order_number() -> None:
+    repo = _Repo()
+    repo.values["daily_business.offene_sendungen.cases"] = json.dumps(
+        [{
+            "id": "m1",
+            "received_at": "2026-06-30T10:00:00Z",
+            "sender": "office@example.test",
+            "subject": "Wix-Bestellung 20868",
+            "snippet": "Bitte für Anna Beispiel versenden.",
+            "body": "Bitte für Anna Beispiel versenden.",
+            "thread_id": "",
+            "order_number": "20868",
+        }]
+    )
+
+    class _Wix:
+        def __init__(self, order_number: str) -> None:
+            self.order_number = order_number
+
+        def resolve_latest_shipping_address(self, **_kwargs: object) -> dict[str, object]:
+            return {
+                "address_lines": ["Max Muster", "Neuweg 2", "1010 Wien"],
+                "order_number": self.order_number,
+            }
+
+        def resolve_order_summary(self, _order_number: str) -> dict[str, str]:
+            return {"wix_customer_name": "Anna Beispiel", "wix_shipping_name": "Anna Beispiel"}
+
+    for resolved_order in ("20868", "99999"):
+        service = OffeneSendungenService(repo, _Secrets(), _Wix(resolved_order))  # type: ignore[arg-type]
+        service._secrets.values["OPENAI_API_KEY"] = ""  # noqa: SLF001
+        service._secrets.values["MS_GRAPH_TENANT_ID"] = ""  # noqa: SLF001
+        details = service.extract_case_details("m1", force=True)
+        assert details.address_lines == []
+        assert "address-fallback" not in details.source
+        assert details.confidence_notes
+
+
+def test_sender_name_confirms_order_shipping_address() -> None:
+    case = SendungCase(
+        id="m1",
+        received_at="",
+        sender="kunde@example.test",
+        sender_name="Max Muster",
+        subject="Bestellung 20868",
+        snippet="Bitte versenden",
+        body="",
+        thread_id="",
+        order_number="20868",
+    )
+    assert OffeneSendungenService._name_matches_case(  # noqa: SLF001
+        "Max Muster", case, "Bitte versenden"
+    )
+    assert not OffeneSendungenService._name_matches_case(  # noqa: SLF001
+        "Anna Beispiel", case, "Bitte versenden"
+    )
+    assert OffeneSendungenService._name_matches_case(  # noqa: SLF001
+        "Hans Stroeber", case, "Hallo Herr Stroeber, bitte versenden."
+    )
+
+
+def test_matching_sevdesk_and_wix_names_confirm_order_address() -> None:
+    class _Invoices:
+        def search_invoice_summaries(self, _query: str) -> tuple[list[InvoiceSummary], int]:
+            return ([InvoiceSummary(
+                id="99", invoiceNumber="RE-262363", contact_name="Max Muster",
+                order_reference="20868",
+            )], 20)
+
+        def fetch_invoice_by_id(self, _invoice_id: str) -> dict[str, object]:
+            return {"address": "Max Muster\nAltweg 1\n1010 Wien"}
+
+        def fetch_invoice_positions(self, _invoice_id: str) -> list[dict[str, object]]:
+            return []
+
+    class _Wix:
+        def resolve_latest_shipping_address(self, **_kwargs: object) -> dict[str, object]:
+            return {
+                "address_lines": ["Max Muster", "Neuweg 2", "1010 Wien"],
+                "order_number": "20868",
+            }
+
+    service = OffeneSendungenService(
+        _Repo(), _Secrets(), _Wix(), invoice_client=_Invoices()  # type: ignore[arg-type]
+    )
+    case = SendungCase(
+        id="m1", received_at="", sender="office@example.test", subject="RE-262363",
+        snippet="", body="", thread_id="", order_number="",
+    )
+    context = service._resolve_business_context(  # noqa: SLF001
+        case, "Bitte an die Adresse aus der Bestellung senden."
+    )
+    assert context.address_lines == ("Max Muster", "Neuweg 2", "1010 Wien")
 
 
 def test_unsubstantiated_ai_address_is_replaced_by_resolved_order_address() -> None:
@@ -735,7 +865,7 @@ def test_sevdesk_invoice_context_resolves_customer_order_address_and_exact_produ
 
     context = service._resolve_business_context(  # noqa: SLF001
         case,
-        "Bei der letzten Bestellung (RE-262363) fehlten zwei Print-Versionen.",
+        "Bei der letzten Bestellung (RE-262363) von Franz Kronsteiner fehlten zwei Print-Versionen.",
     )
 
     assert context.customer_name == "Franz Kronsteiner"
@@ -780,6 +910,7 @@ def test_openai_extract_uses_strict_schema_and_authoritative_product_index(monke
                     {
                         "case_type": "complaint",
                         "summary": "Reklamation: Zwei fehlende Stimmen nachsenden.",
+                        "short_note": "Die fehlende Stimme liegt dieser Sendung bei.",
                         "customer_name": "Franz Kronsteiner",
                         "invoice_number": "RE-262363",
                         "order_number": "21343",
@@ -844,6 +975,8 @@ def test_openai_extract_uses_strict_schema_and_authoritative_product_index(monke
     request = captured["json"]
     assert isinstance(request, dict)
     assert request["text"]["format"]["strict"] is True  # type: ignore[index]
+    assert "short_note" in request["text"]["format"]["schema"]["required"]  # type: ignore[index]
     assert request["store"] is False
+    assert extraction.short_note == "Die fehlende Stimme liegt dieser Sendung bei."
     assert extraction.products[0].name == "ZST T&G#1_2B-hoch"
     assert extraction.products[0].sku == "XW-521.13-P"
