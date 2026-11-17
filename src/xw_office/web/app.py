@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import os
 import secrets
+import tempfile
 import uuid
 from collections.abc import Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, status
@@ -29,7 +30,14 @@ from xw_office.repositories.product_hub_drafts import ProductDraftRepository
 from xw_office.repositories.product_hub_inventory import InventoryRepository
 from xw_office.repositories.product_hub_sharing import SharingRepository
 from xw_office.repositories.product_hub_sync import SyncRepository
+from xw_office.repositories.api_secret import ApiSecretRepository
+from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.http_client import build_sevdesk_connection
+from xw_office.services.clearing.gateways import (
+    MollieClearingGateway, SevdeskClearingGateway, StripeClearingGateway, WixClearingGateway,
+)
+from xw_office.services.clearing.service import PaymentClearingService
+from xw_office.services.secrets.service import SecretService
 from xw_office.services.product_hub.conflicts import ConflictAdviceService, ConflictWizardService
 from xw_office.services.product_hub.content_generation import ContentGenerationService
 from xw_office.services.product_hub.editing import EditingService
@@ -60,6 +68,7 @@ from xw_office.web.routers.products import build_products_router
 from xw_office.web.routers.share_public import build_share_public_router
 from xw_office.web.routers.sharing_admin import build_sharing_admin_router
 from xw_office.web.routers.sync import build_sync_router
+from xw_office.web.routers.payment_clearing import ClearingRunCoordinator, build_clearing_router
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _bearer = HTTPBearer(auto_error=False)
@@ -128,6 +137,10 @@ class ContentWebSettings:
     #: Served same-origin at /app/ when present; absent in plain-API deployments
     #: and in most local dev setups, where the mount below is simply skipped.
     product_hub_web_dist: Path = _REPOSITORY_ROOT / "web" / "product-hub" / "dist"
+    flow_clearing_secret: str = ""
+    flow_clearing_database_url: str = ""
+    flow_clearing_read_enabled: bool = False
+    flow_clearing_write_enabled: bool = False
 
     @classmethod
     def from_environment(cls) -> "ContentWebSettings":
@@ -158,6 +171,10 @@ class ContentWebSettings:
                 os.getenv("XW_PRODUCT_HUB_WEB_DIST", "").strip()
                 or (_REPOSITORY_ROOT / "web" / "product-hub" / "dist")
             ),
+            flow_clearing_secret=os.getenv("XW_FLOW_CLEARING_SECRET", "").strip(),
+            flow_clearing_database_url=os.getenv("XW_FLOW_CLEARING_DATABASE_URL", "").strip(),
+            flow_clearing_read_enabled=_env_flag("XW_FLOW_CLEARING_READ_ENABLED", default=False),
+            flow_clearing_write_enabled=_env_flag("XW_FLOW_CLEARING_WRITE_ENABLED", default=False),
         )
 
 
@@ -598,6 +615,46 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
     )
     def list_brands() -> tuple[BrandProfile, ...]:
         return catalog.load()
+
+    clearing_engine = (
+        create_engine(resolved.flow_clearing_database_url, pool_pre_ping=True, future=True)
+        if resolved.flow_clearing_database_url else None
+    )
+    clearing_session_factory: sessionmaker[Session] | None = (
+        sessionmaker(bind=clearing_engine, autoflush=False, expire_on_commit=False, future=True)
+        if clearing_engine is not None else None
+    )
+
+    def create_clearing_service() -> PaymentClearingService:
+        if clearing_session_factory is None:
+            raise RuntimeError("Clearing database is not configured")
+        config = replace(load_config(), database_url=resolved.flow_clearing_database_url)
+        secret_service = SecretService(config, ApiSecretRepository(clearing_session_factory))
+        repo = SettingKvRepository(clearing_session_factory)
+        stripe_key = secret_service.get_secret("STRIPE_SECRET_KEY") or secret_service.get_secret("STRIPE_API_KEY")
+        return PaymentClearingService(
+            repo,
+            stripe=StripeClearingGateway(stripe_key),
+            mollie=MollieClearingGateway(secret_service.get_secret("MOLLIE_OAUTH_TOKEN"), settings_repo=repo),
+            wix=WixClearingGateway(secret_service.get_secret("WIX_API_KEY"), secret_service.get_secret("WIX_SITE_ID")),
+            sevdesk=SevdeskClearingGateway(build_sevdesk_connection(
+                config, api_token=secret_service.get_secret("SEVDESK_API_TOKEN"),
+            )),
+            history_dir=Path(tempfile.gettempdir()) / "xw-office-clearing-runs",
+            sepa_lookback_days=config.clearing.sepa_lookback_days,
+            b2b_year_prefixes=config.clearing.b2b_year_prefixes,
+        )
+
+    clearing_coordinator = (
+        ClearingRunCoordinator(SettingKvRepository(clearing_session_factory), create_clearing_service)
+        if clearing_session_factory is not None else None
+    )
+    app.include_router(build_clearing_router(
+        clearing_coordinator,
+        secret=resolved.flow_clearing_secret,
+        read_enabled=resolved.flow_clearing_read_enabled,
+        write_enabled=resolved.flow_clearing_write_enabled,
+    ))
 
     return app
 
