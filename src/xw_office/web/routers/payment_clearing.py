@@ -16,6 +16,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from xw_office.repositories.settings_kv import SettingKvRepository
+from xw_office.services.clearing.models import MatchStatus
 from xw_office.services.clearing.service import PaymentClearingService
 
 logger = logging.getLogger(__name__)
@@ -118,8 +119,11 @@ class ClearingRunCoordinator:
                 )
                 return
             selected = [row for row in analysis.candidates if row.selected and row.is_bookable]
-            manual = sum(not row.is_bookable and row.status.value != "already_booked" for row in analysis.candidates)
-            already = sum(row.status.value == "already_booked" for row in analysis.candidates)
+            manual = sum(
+                not row.selected and row.status != MatchStatus.ALREADY_BOOKED
+                for row in analysis.candidates
+            )
+            already = sum(row.status == MatchStatus.ALREADY_BOOKED for row in analysis.candidates)
             self._update(
                 run_id, phase="booking", percent=65, manual=manual, already_booked=already,
                 message=f"{len(selected)} automatisch ausgewaehlte Vorgaenge buchen",
@@ -135,7 +139,11 @@ class ClearingRunCoordinator:
             )
             state = "complete" if result.failure_count == 0 and not result.cancelled and not result.warnings else "error"
             self._update(
-                run_id, state=state, percent=100, booked=result.success_count,
+                run_id, state=state, percent=100,
+                booked=sum(item.status == MatchStatus.BOOKED for item in result.items),
+                already_booked=already + sum(
+                    item.status == MatchStatus.ALREADY_BOOKED for item in result.items
+                ),
                 failed=result.failure_count, warnings=len(result.warnings),
                 message=("Clearing abgeschlossen." if state == "complete" else
                          "Clearing teilweise ausgefuehrt; Details in Office pruefen."),

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -42,7 +43,18 @@ class FakeService:
             started_at=datetime.now(VIENNA),
             start_date=datetime.combine(start, datetime.min.time(), tzinfo=VIENNA),
             end_date=datetime.combine(end + timedelta(days=1), datetime.min.time(), tzinfo=VIENNA),
-            candidates=(row,), warnings=self.warnings,
+            candidates=(
+                row,
+                replace(
+                    row, candidate_id="refund", provider_ref="re_sample",
+                    kind=TransactionKind.REFUND, status=MatchStatus.REFUND_IMPORT, selected=False,
+                ),
+                replace(
+                    row, candidate_id="old", provider_ref="ch_old",
+                    status=MatchStatus.ALREADY_BOOKED, selected=False,
+                ),
+            ),
+            warnings=self.warnings,
         )
 
     def book_selected(self, rows, *, progress):
@@ -90,6 +102,8 @@ def test_success_is_idempotent_for_same_request_key(setup):
     result = _wait(coordinator, str(started["run_id"]))
     assert result["state"] == "complete"
     assert result["booked"] == 1
+    assert result["manual"] == 1
+    assert result["already_booked"] == 1
     again = coordinator.start("2026-11", "same-key")
     assert again["run_id"] == started["run_id"]
     assert service.book_calls == 1
