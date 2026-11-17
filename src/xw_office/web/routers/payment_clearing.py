@@ -16,7 +16,7 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from xw_office.repositories.settings_kv import SettingKvRepository
-from xw_office.services.clearing.models import MatchStatus
+from xw_office.services.clearing.models import ClearingCandidate, ClearingSkipReason, MatchStatus
 from xw_office.services.clearing.service import PaymentClearingService
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,24 @@ _ACTIVE_KEY = "clearing.flow.active"
 
 class ClearingRunRequest(BaseModel):
     month: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+def _review_case(row: ClearingCandidate) -> dict[str, str]:
+    if row.skip_reason == ClearingSkipReason.INVOICE_IS_DRAFT:
+        next_step = "Rechnung in sevDesk pruefen und finalisieren; danach Clearing erneut starten."
+    elif row.status == MatchStatus.REFUND_IMPORT:
+        next_step = "Gutschrift oder Storno in sevDesk pruefen; Refund danach in XW-Office importieren."
+    else:
+        next_step = "Zuordnung in XW-Office pruefen."
+    return {
+        "provider": row.provider,
+        "kind": row.kind.value,
+        "order_number": row.order_number,
+        "invoice_number": row.invoice_number,
+        "amount": f"{row.amount:.2f}",
+        "reason": row.reason,
+        "next_step": next_step,
+    }
 
 
 class ClearingRunCoordinator:
@@ -70,7 +88,7 @@ class ClearingRunCoordinator:
             initial: dict[str, object] = {
                 "run_id": run_id, "month": month, "state": "running", "phase": "analysis",
                 "percent": 0, "message": "Analyse startet", "booked": 0, "failed": 0,
-                "manual": 0, "already_booked": 0, "warnings": 0,
+                "manual": 0, "already_booked": 0, "warnings": 0, "review_cases": [],
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
 
@@ -124,13 +142,16 @@ class ClearingRunCoordinator:
                 )
                 return
             selected = [row for row in analysis.candidates if row.selected and row.is_bookable]
-            manual = sum(
-                not row.selected and row.status != MatchStatus.ALREADY_BOOKED
+            review_cases = [
+                _review_case(row)
                 for row in analysis.candidates
-            )
+                if not row.selected and row.status != MatchStatus.ALREADY_BOOKED
+            ]
+            manual = len(review_cases)
             already = sum(row.status == MatchStatus.ALREADY_BOOKED for row in analysis.candidates)
             self._update(
                 run_id, phase="booking", percent=65, manual=manual, already_booked=already,
+                review_cases=review_cases,
                 message=f"{len(selected)} automatisch ausgewaehlte Vorgaenge buchen",
             )
             if not selected:

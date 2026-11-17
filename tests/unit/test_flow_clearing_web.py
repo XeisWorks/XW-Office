@@ -18,9 +18,11 @@ from xw_office.models.settings_kv import SettingKV
 from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.services.clearing.models import (
     BookingBatchResult, BookingItemResult, ClearingAnalysis, ClearingCandidate,
-    MatchStatus, TransactionKind,
+    ClearingSkipReason, MatchStatus, TransactionKind,
 )
-from xw_office.web.routers.payment_clearing import ClearingRunCoordinator, build_clearing_router
+from xw_office.web.routers.payment_clearing import (
+    ClearingRunCoordinator, _review_case, build_clearing_router,
+)
 
 VIENNA = ZoneInfo("Europe/Vienna")
 
@@ -104,10 +106,31 @@ def test_success_is_idempotent_for_same_request_key(setup):
     assert result["state"] == "complete"
     assert result["booked"] == 1
     assert result["manual"] == 1
+    assert len(result["review_cases"]) == 1
     assert result["already_booked"] == 1
     again = coordinator.start("2026-11", "same-key")
     assert again["run_id"] == started["run_id"]
     assert service.book_calls == 1
+
+
+def test_review_cases_explain_draft_invoice_and_refund():
+    row = ClearingCandidate(
+        candidate_id="draft", provider="stripe", kind=TransactionKind.PAYMENT,
+        provider_ref="synthetic-charge", order_number="12345", invoice_id=1,
+        invoice_number="", customer="", amount=Decimal("6.90"),
+        payment_date=datetime(2026, 11, 17, tzinfo=VIENNA),
+        status=MatchStatus.MANUAL, reason="Rechnung ist noch ein Entwurf",
+        selected=False, skip_reason=ClearingSkipReason.INVOICE_IS_DRAFT,
+    )
+    draft = _review_case(row)
+    refund = _review_case(replace(
+        row, kind=TransactionKind.REFUND, status=MatchStatus.REFUND_IMPORT,
+        skip_reason=None, invoice_number="RE-TEST", amount=Decimal("-30.80"),
+    ))
+    assert draft["order_number"] == "12345"
+    assert "finalisieren" in draft["next_step"]
+    assert refund["amount"] == "-30.80"
+    assert "Gutschrift oder Storno" in refund["next_step"]
 
 
 def test_web_route_requires_machine_secret(setup):
