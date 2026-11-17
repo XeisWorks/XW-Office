@@ -16,7 +16,7 @@ from PySide6.QtCore import (
     QTimer,
     QUrl,
 )
-from PySide6.QtGui import QCloseEvent, QDesktopServices, QResizeEvent
+from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QAbstractItemView,
@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
-    QSizePolicy,
     QSplitter,
     QScrollArea,
     QTableView,
@@ -161,32 +160,6 @@ class _SendungProductsModel(QAbstractTableModel):
         return [row for row in self._rows if str(row.name or "").strip()]
 
 
-class _ContentSizedPlainTextEdit(QPlainTextEdit):
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setMinimumHeight(42)
-        self.setMaximumHeight(420)
-        self._resize_timer = QTimer(self)
-        self._resize_timer.setSingleShot(True)
-        self._resize_timer.timeout.connect(self._resize_to_contents)
-        self.textChanged.connect(self._schedule_resize)
-        self.document().documentLayout().documentSizeChanged.connect(self._schedule_resize)
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._schedule_resize()
-
-    def _schedule_resize(self, *_args: object) -> None:
-        if not self._resize_timer.isActive():
-            self._resize_timer.start(0)
-
-    def _resize_to_contents(self) -> None:
-        document_height = self.document().documentLayout().documentSize().height()
-        height = round(document_height) + 2 * self.frameWidth() + 12
-        self.setFixedHeight(max(42, min(height, 420)))
-
-
 class OffeneSendungenDialog(QDialog):
     """Sendungen workflow based on legacy Daily-Business behavior, without UI blocking."""
 
@@ -252,39 +225,35 @@ class OffeneSendungenDialog(QDialog):
         top = QHBoxLayout()
         self._status = QLabel("-")
         top.addWidget(self._status, stretch=1)
-        self._btn_refresh = QPushButton("Aktualisieren")
+        self._btn_refresh = QPushButton("↻ Aktualisieren")
         self._btn_refresh.clicked.connect(
             lambda: self._load_cases(refresh=True, preserve=True)
         )
         top.addWidget(self._btn_refresh)
-        self._btn_extract = QPushButton("OpenAI neu extrahieren")
+        self._btn_extract = QPushButton("✦ KI erneut auswerten")
         self._btn_extract.clicked.connect(lambda: self._extract_selected(force=True))
         top.addWidget(self._btn_extract)
         root.addLayout(top)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setObjectName("shipments_columns")
+        splitter.setChildrenCollapsible(False)
         left = QWidget()
-        left.setMinimumWidth(310)
+        left.setMinimumWidth(190)
+        left.setMaximumWidth(310)
         left_lay = QVBoxLayout(left)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.addWidget(QLabel("SENDUNGEN"))
         self._list = QListWidget()
         self._list.currentRowChanged.connect(self._on_case_selected)
         left_lay.addWidget(self._list)
         splitter.addWidget(left)
 
-        right_panel = QWidget()
-        right_outer_lay = QVBoxLayout(right_panel)
-        right_outer_lay.setContentsMargins(0, 0, 0, 0)
-        right_outer_lay.setSpacing(8)
-        right = QScrollArea()
-        right.setWidgetResizable(True)
-        right.setFrameShape(QFrame.Shape.NoFrame)
-        right.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        right_content = QWidget()
-        right_lay = QVBoxLayout(right_content)
-        right_lay.setContentsMargins(10, 0, 10, 0)
-        right_lay.setSpacing(7)
-        right.setWidget(right_content)
-        right_outer_lay.addWidget(right, stretch=1)
+        mail_panel = QWidget()
+        mail_lay = QVBoxLayout(mail_panel)
+        mail_lay.setContentsMargins(8, 0, 8, 0)
+        mail_lay.setSpacing(7)
+        mail_lay.addWidget(QLabel("KI-ZUSAMMENFASSUNG"))
 
         self._summary = QLabel("Keine Sendung ausgewählt")
         self._summary.setWordWrap(True)
@@ -292,110 +261,114 @@ class OffeneSendungenDialog(QDialog):
         self._summary.setStyleSheet(
             "font-size: 16px; font-weight: 600; padding: 2px 0 5px 0;"
         )
-        right_lay.addWidget(self._summary)
+        mail_lay.addWidget(self._summary)
 
         self._meta = QLabel("")
         self._meta.setWordWrap(True)
         self._meta.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._meta.setStyleSheet("font-size: 10px; color: #94a3b8;")
-        right_lay.addWidget(self._meta)
+        mail_lay.addWidget(self._meta)
 
-        self._thread = _ContentSizedPlainTextEdit()
+        mail_lay.addWidget(QLabel("MAILVERLAUF"))
+        self._thread = QPlainTextEdit()
         self._thread.setReadOnly(True)
-        self._thread.setPlaceholderText("Mailverlauf / Inhalt")
-        right_lay.addWidget(self._thread)
+        self._thread.setPlaceholderText("Mailtext wird geladen…")
+        mail_lay.addWidget(self._thread, stretch=1)
 
         self._detail_status = QLabel("Quelle: -")
         self._detail_status.setWordWrap(True)
         self._detail_status.setStyleSheet("font-size: 10px; color: #94a3b8;")
-        right_lay.addWidget(self._detail_status)
+        mail_lay.addWidget(self._detail_status)
+        splitter.addWidget(mail_panel)
 
-        detail_columns = QSplitter(Qt.Orientation.Horizontal)
-        products_panel = QWidget()
-        products_lay = QVBoxLayout(products_panel)
-        products_lay.setContentsMargins(0, 0, 8, 0)
-        products_lay.setSpacing(6)
-        products_lay.addWidget(QLabel("PRODUKTE"))
+        work_panel = QWidget()
+        work_lay = QVBoxLayout(work_panel)
+        work_lay.setContentsMargins(8, 0, 0, 0)
+        work_lay.setSpacing(7)
+        work_scroll = QScrollArea()
+        work_scroll.setWidgetResizable(True)
+        work_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        work_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        work_content = QWidget()
+        work_content_lay = QVBoxLayout(work_content)
+        work_content_lay.setContentsMargins(0, 0, 6, 0)
+        work_content_lay.setSpacing(8)
+        work_content_lay.addWidget(QLabel("PRODUKTE"))
 
         self._products = QTableView()
         self._products.setModel(self._products_model)
-        self._products.setMinimumHeight(190)
+        self._products.setMinimumHeight(210)
+        self._products.setMaximumHeight(300)
         self._products.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         for column, width in enumerate((45, 190, 75, 120, 55, 70, 95)):
             self._products.setColumnWidth(column, width)
-        products_lay.addWidget(self._products)
+        work_content_lay.addWidget(self._products)
 
         product_row = QHBoxLayout()
-        self._btn_add_product = QPushButton("+ Produkt")
+        self._btn_add_product = QPushButton("＋ Produkt")
         self._btn_add_product.clicked.connect(
             lambda: self._add_product_row(SendungProductLine())
         )
         product_row.addWidget(self._btn_add_product)
-        self._btn_remove_product = QPushButton("− Produkt")
+        self._btn_remove_product = QPushButton("− Entfernen")
         self._btn_remove_product.clicked.connect(self._remove_selected_product_row)
         product_row.addWidget(self._btn_remove_product)
         product_row.addStretch(1)
-        products_lay.addLayout(product_row)
+        work_content_lay.addLayout(product_row)
 
-        products_lay.addWidget(QLabel("Kurznotiz (bearbeitbar):"))
+        work_content_lay.addWidget(QLabel("LIEFERANSCHRIFT"))
+        self._address = QPlainTextEdit()
+        self._address.setPlaceholderText("Eine Adresszeile pro Zeile")
+        self._address.setMinimumHeight(105)
+        self._address.setMaximumHeight(150)
+        work_content_lay.addWidget(self._address)
+        self._btn_label = QPushButton("▣ Label drucken")
+        self._btn_label.clicked.connect(self._print_label)
+        work_content_lay.addWidget(self._btn_label, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        work_content_lay.addWidget(QLabel("KURZNOTIZ"))
         self._manual_text = QPlainTextEdit()
-        self._manual_text.setPlaceholderText("OpenAI-Kurznotiz für den Lieferschein")
-        self._manual_text.setMinimumHeight(58)
-        self._manual_text.setMaximumHeight(85)
-        products_lay.addWidget(self._manual_text)
+        self._manual_text.setPlaceholderText("Notiz für den Lieferschein")
+        self._manual_text.setMinimumHeight(65)
+        self._manual_text.setMaximumHeight(100)
+        work_content_lay.addWidget(self._manual_text)
+
+        work_content_lay.addWidget(QLabel("LIEFERSCHEIN"))
 
         delivery_row = QHBoxLayout()
-        self._btn_delivery_show = QPushButton("Lieferschein zeigen")
+        self._btn_delivery_show = QPushButton("▤ Vorschau")
         self._btn_delivery_show.clicked.connect(self._show_delivery_note)
         delivery_row.addWidget(self._btn_delivery_show)
-        self._btn_delivery_print = QPushButton("Lieferschein drucken")
+        self._btn_delivery_print = QPushButton("⎙ Drucken")
         self._btn_delivery_print.clicked.connect(self._print_delivery_note)
         delivery_row.addWidget(self._btn_delivery_print)
         delivery_row.addStretch(1)
-        products_lay.addLayout(delivery_row)
-        detail_columns.addWidget(products_panel)
-
-        address_panel = QWidget()
-        address_lay = QVBoxLayout(address_panel)
-        address_lay.setContentsMargins(8, 0, 0, 0)
-        address_lay.setSpacing(6)
-        address_lay.addWidget(QLabel("LIEFERANSCHRIFT"))
-        self._address = QPlainTextEdit()
-        self._address.setPlaceholderText("Eine Adresszeile pro Zeile")
-        self._address.setMinimumHeight(190)
-        address_lay.addWidget(self._address)
-        address_actions = QHBoxLayout()
-        self._btn_label = QPushButton("Label drucken")
-        self._btn_label.clicked.connect(self._print_label)
-        address_actions.addWidget(self._btn_label)
-        address_actions.addStretch(1)
-        address_lay.addLayout(address_actions)
-        detail_columns.addWidget(address_panel)
-        detail_columns.setStretchFactor(0, 3)
-        detail_columns.setStretchFactor(1, 2)
-        detail_columns.setSizes([650, 420])
-        right_lay.addWidget(detail_columns)
+        work_content_lay.addLayout(delivery_row)
+        work_content_lay.addStretch(1)
+        work_scroll.setWidget(work_content)
+        work_lay.addWidget(work_scroll, stretch=1)
 
         done_row = QHBoxLayout()
         done_row.addStretch(1)
-        self._btn_done = QPushButton("✓")
+        self._btn_done = QPushButton("✓ Erledigt")
         self._btn_done.setToolTip("Sendung erledigt")
         self._btn_done.setAccessibleName("Sendung erledigt")
-        self._btn_done.setFixedSize(58, 48)
+        self._btn_done.setMinimumHeight(42)
         self._btn_done.setStyleSheet(
             "QPushButton { background-color: #16803c; color: white; border-radius: 8px;"
-            " font-size: 28px; font-weight: bold; }"
+            " font-weight: bold; padding: 8px 16px; }"
             "QPushButton:hover { background-color: #16a34a; }"
             "QPushButton:disabled { background-color: #64748b; }"
         )
         self._btn_done.clicked.connect(self._mark_done)
         done_row.addWidget(self._btn_done)
-        right_outer_lay.addLayout(done_row)
+        work_lay.addLayout(done_row)
 
-        splitter.addWidget(right_panel)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 3)
-        splitter.setSizes([340, 1160])
+        splitter.addWidget(work_panel)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 1)
+        splitter.setSizes([235, 570, 695])
         root.addWidget(splitter)
         tabs.addTab(sendungen_tab, "OFFENE SENDUNGEN")
         try:
@@ -423,10 +396,8 @@ class OffeneSendungenDialog(QDialog):
             return
         self._load_seq += 1
         # A preserving refresh is intentionally allowed to run alongside the
-        # selected case's detail extraction.  The initial cache-only load is
-        # followed by a silent Graph refresh after 600 ms; invalidating the
-        # detail sequence here made every extraction taking longer than that
-        # appear to be stuck at "Laden..." forever.
+        # selected case's detail extraction. A Graph refresh must not discard
+        # the result of an extraction that is still in progress.
         if not preserve:
             self._invalidate_detail_load()
         seq = self._load_seq
@@ -462,7 +433,11 @@ class OffeneSendungenDialog(QDialog):
                 token, result, preserve=keep, selected_id=cid
             )
         )
-        self._load_worker.signals.error.connect(self._on_cases_load_error)
+        self._load_worker.signals.error.connect(
+            lambda exc, token=seq, keep=preserve: self._on_cases_load_error(
+                exc, seq=token, preserve=keep
+            )
+        )
         self._load_worker.signals.finished.connect(lambda: setattr(self, "_load_worker", None))
         self._load_worker.start()
 
@@ -485,7 +460,12 @@ class OffeneSendungenDialog(QDialog):
             cases, names = result, {}
         self._cases = list(cases) if isinstance(cases, list) else []
         self._open_case_count = len(self._cases)
-        self._recipient_names = dict(names) if isinstance(names, dict) else {}
+        loaded_names = dict(names) if isinstance(names, dict) else {}
+        previous_names = self._recipient_names if preserve else {}
+        self._recipient_names = {
+            case.id: loaded_names.get(case.id) or previous_names.get(case.id, "")
+            for case in self._cases
+        }
         self._list.blockSignals(True)
         self._list.clear()
         selected_row = 0
@@ -510,12 +490,11 @@ class OffeneSendungenDialog(QDialog):
         )
         if not preserve and not self._silent_refresh_scheduled:
             self._silent_refresh_pending = True
+            self._schedule_silent_refresh()
         if self._cases and not selection_preserved:
             self._on_case_selected(selected_row)
-        elif not preserve:
-            self._schedule_silent_refresh_after_detail()
 
-    def _schedule_silent_refresh_after_detail(self) -> None:
+    def _schedule_silent_refresh(self) -> None:
         if not self._silent_refresh_pending or self._silent_refresh_scheduled:
             return
         self._silent_refresh_pending = False
@@ -540,12 +519,18 @@ class OffeneSendungenDialog(QDialog):
         badge = "[NACHLIEFERUNG] " if case.id.startswith("nachlieferung-") else ""
         return f"{badge}{short_date} {display_name}"
 
-    def _on_cases_load_error(self, exc: Exception) -> None:
-        if self._closing or not isValid(self):
+    def _on_cases_load_error(
+        self, exc: Exception, *, seq: int | None = None, preserve: bool = False
+    ) -> None:
+        if self._closing or not isValid(self) or (seq is not None and seq != self._load_seq):
             return
         self._list.setEnabled(True)
-        self._status.setText("Laden fehlgeschlagen")
-        self._clear_detail("Offene Sendungen konnten nicht geladen werden.")
+        self._status.setText(
+            f"{len(self._cases)} offene Sendungen · Aktualisierung fehlgeschlagen"
+            if preserve else "Laden fehlgeschlagen"
+        )
+        if not preserve:
+            self._clear_detail("Offene Sendungen konnten nicht geladen werden.")
         QMessageBox.warning(self, "OFFENE SENDUNGEN", f"Laden fehlgeschlagen:\n\n{exc}")
 
     def _current_case(self) -> SendungCase | None:
@@ -570,7 +555,7 @@ class OffeneSendungenDialog(QDialog):
         self._thread.setPlainText(
             original_text if is_flow_share else self._compact_thread_text(original_text)
         )
-        self._set_detail_loading("Lade OpenAI-Auswertung und gespeicherte Korrekturen...")
+        self._set_detail_loading("Lade Auswertung…")
         self._summary.setText(case.subject or "Sendung wird geladen...")
         self._extract_selected(force=False)
 
@@ -585,17 +570,34 @@ class OffeneSendungenDialog(QDialog):
 
         def job() -> tuple[str, SendungExtraction, dict[str, object]]:
             service = self._require_service()
-            extraction = service.extract_case_details(case_id, force=force)
+            if isinstance(service, OffeneSendungenService):
+                extraction = service.extract_case_details(
+                    case_id,
+                    force=force,
+                    on_thread_loaded=lambda text: worker.signals.progress.emit(0, text),
+                )
+            else:
+                extraction = service.extract_case_details(case_id, force=force)
             manual = service.load_manual_fields(case_id)
             return case_id, extraction, manual
 
         worker = BackgroundWorker(job)
         self._detail_worker = worker
         self._detail_workers.append(worker)
+        worker.signals.progress.connect(
+            lambda _step, text, token=seq, cid=case_id: self._on_thread_loaded(token, cid, text)
+        )
         worker.signals.result.connect(lambda result, token=seq: self._on_detail_loaded(token, result))
         worker.signals.error.connect(lambda exc, token=seq: self._on_detail_error(token, exc))
         worker.signals.finished.connect(lambda w=worker: self._on_detail_worker_finished(w))
         worker.start()
+
+    def _on_thread_loaded(self, seq: int, case_id: str, text: str) -> None:
+        if self._closing or not isValid(self) or seq != self._detail_seq:
+            return
+        case = self._current_case()
+        if case is not None and case.id == case_id and text.strip():
+            self._thread.setPlainText(self._compact_thread_text(text))
 
     def _invalidate_detail_load(self) -> None:
         """Ignore obsolete detail results and stop publishing redundant work."""
@@ -663,7 +665,7 @@ class OffeneSendungenDialog(QDialog):
         suffix = f" | {notes}" if notes else ""
         self._detail_status.setText(f"Quelle: {extraction.source}{suffix}")
         self._set_actions_enabled(True)
-        self._schedule_silent_refresh_after_detail()
+        self._schedule_silent_refresh()
 
     def _set_case_metadata(
         self,
@@ -678,15 +680,25 @@ class OffeneSendungenDialog(QDialog):
             invoice_number = (
                 extraction.invoice_number if extraction is not None else case.invoice_number
             )
-            customer_name = extraction.customer_name if extraction is not None else ""
-            metadata[1:1] = [
-                f"Betreff: {case.subject}",
-                f"Kunde: {customer_name or 'noch nicht zugeordnet'}",
-                f"sevDesk-Rechnung: {invoice_number or 'nicht erkannt'}",
-                f"Wix-Order-Nr: {order_number or 'nicht erkannt'}",
-                f"Conversation: {case.thread_id or '-'}",
+            references = [
+                label
+                for label in (
+                    f"Rechnung {invoice_number}" if invoice_number else "",
+                    f"Wix {order_number}" if order_number else "",
+                )
+                if label
             ]
-        self._meta.setText("\n".join(metadata))
+            if case.subject:
+                metadata.append(case.subject)
+            if references:
+                metadata.append(" · ".join(references))
+        if case.source_type == "xw_flow_share":
+            self._meta.setText("\n".join(metadata))
+        else:
+            self._meta.setText(
+                "  ·  ".join(metadata[:2])
+                + ("\n" + "  ·  ".join(metadata[2:]) if len(metadata) > 2 else "")
+            )
 
     def _on_detail_error(self, seq: int, exc: Exception) -> None:
         if self._closing or not isValid(self):
@@ -695,7 +707,7 @@ class OffeneSendungenDialog(QDialog):
             return
         self._detail_status.setText("Quelle: Laden fehlgeschlagen")
         self._set_actions_enabled(True)
-        self._schedule_silent_refresh_after_detail()
+        self._schedule_silent_refresh()
         QMessageBox.warning(self, "OFFENE SENDUNGEN", f"Details konnten nicht geladen werden:\n\n{exc}")
 
     def _set_detail_loading(self, message: str) -> None:

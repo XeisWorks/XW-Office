@@ -6,7 +6,7 @@ from threading import Event
 from time import sleep
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtWidgets import QDialog, QTabWidget
+from PySide6.QtWidgets import QDialog, QSplitter, QTabWidget
 
 from xw_office.core.config import AppConfig, PrintingSection
 from xw_office.core.worker import BackgroundWorker
@@ -111,6 +111,11 @@ class _SlowExtractionService(_FakeSendungenService):
         return super().extract_case_details(case_id, force=force)
 
 
+class _NewCaseService(_FakeSendungenService):
+    def load_open_cases(self) -> list[SendungCase]:
+        return list(self._cases) if self.refresh_called else []
+
+
 def _wait_dialog_loaded(qtbot: object, dialog: OffeneSendungenDialog) -> None:
     qtbot.waitUntil(lambda: "Max Muster" in dialog._address.toPlainText(), timeout=3000)  # noqa: SLF001
 
@@ -160,6 +165,9 @@ def test_dialog_has_separate_open_shipments_and_redelivery_tabs(qtbot: object) -
         "OFFENE SENDUNGEN",
         "NACHLIEFERUNGEN",
     ]
+    columns = dialog.findChild(QSplitter, "shipments_columns")
+    assert columns is not None and columns.count() == 3
+    assert columns.widget(0).maximumWidth() == 310
 
 
 def test_dialog_loads_cases_and_prefills_shipping_fields(qtbot: object) -> None:
@@ -176,6 +184,7 @@ def test_dialog_loads_cases_and_prefills_shipping_fields(qtbot: object) -> None:
     )
     assert dialog._status.text() == "1 offene Sendungen"  # noqa: SLF001
     assert "Ein Musikbuch" in dialog._summary.text()  # noqa: SLF001
+    assert dialog._list.item(0).text() == "10.07. Max Muster"  # noqa: SLF001
     assert dialog._manual_text.toPlainText() == "Ein Musikbuch an Max Muster senden."  # noqa: SLF001
     assert dialog._cell_text(0, 1) == "Musikbuch Alpen"  # noqa: SLF001
     free_index = dialog._products_model.index(0, 4)  # noqa: SLF001
@@ -194,6 +203,18 @@ def test_initial_detail_load_survives_silent_refresh(qtbot: object) -> None:
     assert dialog._detail_status.text().startswith("Quelle: openai")  # noqa: SLF001
 
 
+def test_new_case_appears_on_first_open_after_silent_refresh(qtbot: object) -> None:
+    service = _NewCaseService()
+    dialog = OffeneSendungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+
+    qtbot.waitUntil(lambda: dialog._status.text() == "0 offene Sendungen", timeout=2000)  # noqa: SLF001
+    qtbot.waitUntil(lambda: dialog._list.count() == 1, timeout=3000)  # noqa: SLF001
+    _wait_dialog_loaded(qtbot, dialog)
+    assert service.refresh_called == 1
+    assert "Ein Musikbuch" in dialog._summary.text()  # noqa: SLF001
+
+
 def test_dialog_uses_compact_case_label_and_mail_spacing(qtbot: object) -> None:
     service = _FakeSendungenService()
     service._cases[0] = replace(  # type: ignore[index]
@@ -206,7 +227,7 @@ def test_dialog_uses_compact_case_label_and_mail_spacing(qtbot: object) -> None:
 
     assert dialog._list.item(0).text() == "10.07. Max Muster"  # noqa: SLF001
     assert dialog._thread.toPlainText() == "Erste Zeile\n\nZweite Zeile"  # noqa: SLF001
-    assert dialog._btn_done.text() == "✓"  # noqa: SLF001
+    assert dialog._btn_done.text() == "✓ Erledigt"  # noqa: SLF001
 
 
 def test_flow_share_shows_only_sender_and_received_and_preserves_original_text(qtbot: object) -> None:
@@ -225,13 +246,47 @@ def test_flow_share_shows_only_sender_and_received_and_preserves_original_text(q
 
     assert dialog._meta.text() == "Von: XW-Flow Share\nEmpfangen: 2026-07-10T09:00:00Z"  # noqa: SLF001
     assert dialog._thread.toPlainText() == original_text  # noqa: SLF001
-    qtbot.waitUntil(lambda: dialog._thread.height() < 250, timeout=2000)  # noqa: SLF001
-
-    short_height = dialog._thread.height()  # noqa: SLF001
+    assert dialog._thread.height() > 250  # noqa: SLF001
     longer_text = "\n".join(f"Zeile {line}" for line in range(30))
     dialog._thread.setPlainText(longer_text)  # noqa: SLF001
-    qtbot.waitUntil(lambda: dialog._thread.height() > short_height, timeout=2000)  # noqa: SLF001
     assert dialog._thread.toPlainText() == longer_text  # noqa: SLF001
+
+
+def test_full_mail_arrives_before_extraction_finishes_and_ignores_stale_case(qtbot: object) -> None:
+    release = Event()
+
+    class ProgressService(OffeneSendungenService):
+        def __init__(self) -> None:
+            self._cases = _FakeSendungenService()._cases
+            self.refresh_called = 0
+
+        def load_open_cases(self) -> list[SendungCase]:
+            return list(self._cases)
+
+        def load_cached_recipient_names(self, _cases: list[SendungCase]) -> dict[str, str]:
+            return {}
+
+        def refresh_from_graph(self, **_kwargs: object) -> list[SendungCase]:
+            self.refresh_called += 1
+            return list(self._cases)
+
+        def load_manual_fields(self, _case_id: str) -> dict[str, object]:
+            return {}
+
+        def extract_case_details(self, case_id: str, *, force: bool = False, on_thread_loaded=None) -> SendungExtraction:
+            on_thread_loaded("Vollständiger Mailtext")
+            release.wait(2)
+            return _FakeSendungenService.extract_case_details(self, case_id, force=force)
+
+    dialog = OffeneSendungenDialog(_FakeContainer(ProgressService()))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    qtbot.waitUntil(lambda: dialog._thread.toPlainText() == "Vollständiger Mailtext", timeout=2000)  # noqa: SLF001
+    seq = dialog._detail_seq  # noqa: SLF001
+    dialog._on_thread_loaded(seq - 1, "m1", "Veralteter Text")  # noqa: SLF001
+    assert dialog._thread.toPlainText() == "Vollständiger Mailtext"  # noqa: SLF001
+    assert "Ein Musikbuch" not in dialog._summary.text()  # noqa: SLF001
+    release.set()
+    qtbot.waitUntil(lambda: "Ein Musikbuch" in dialog._summary.text(), timeout=3000)  # noqa: SLF001
 
 
 def test_dialog_product_options_are_individually_editable(qtbot: object) -> None:

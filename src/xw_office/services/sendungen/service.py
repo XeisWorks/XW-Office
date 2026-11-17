@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -565,7 +566,13 @@ class OffeneSendungenService:
         if case is not None and case.source_type == _SOURCE_GRAPH:
             self._sync_shipping_email_snapshot(self.load_open_cases())
 
-    def extract_case_details(self, case_id: str, *, force: bool = False) -> SendungExtraction:
+    def extract_case_details(
+        self,
+        case_id: str,
+        *,
+        force: bool = False,
+        on_thread_loaded: Callable[[str], None] | None = None,
+    ) -> SendungExtraction:
         cid = str(case_id or "").strip()
         case = self._find_case(cid)
         if case is None:
@@ -575,7 +582,7 @@ class OffeneSendungenService:
             if cached is not None:
                 return cached
 
-        thread_text = self._full_case_text(case)
+        thread_text = self._full_case_text(case, on_text_loaded=on_thread_loaded)
         context = self._resolve_business_context(case, thread_text)
 
         api_key = self._secrets.get_secret("OPENAI_API_KEY")
@@ -845,26 +852,36 @@ class OffeneSendungenService:
                 return case
         return None
 
-    def _full_case_text(self, case: SendungCase) -> str:
+    def _full_case_text(
+        self,
+        case: SendungCase,
+        *,
+        on_text_loaded: Callable[[str], None] | None = None,
+    ) -> str:
         base = case.thread_text or case.body or case.snippet
         if case.source_type != _SOURCE_GRAPH:
             return str(base or "").strip()
         client = self._graph_client()
         if client is None:
             return str(base or "").strip()
+        body = ""
+        try:
+            body = client.get_message_body(case.id).strip()
+            if body and on_text_loaded is not None:
+                on_text_loaded(body)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Sendung body fetch failed for %s: %s", case.id, exc)
         if case.thread_id:
             try:
                 thread = client.get_conversation_thread_text(case.thread_id, days=60, top=30)
                 if thread.strip():
+                    if on_text_loaded is not None and thread.strip() != body:
+                        on_text_loaded(thread)
                     return thread
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Sendung conversation fetch failed for %s: %s", case.id, exc)
-        try:
-            body = client.get_message_body(case.id)
-            if body.strip():
-                return body
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Sendung body fetch failed for %s: %s", case.id, exc)
+        if body:
+            return body
         return str(base or "").strip()
 
     def _openai_extract(

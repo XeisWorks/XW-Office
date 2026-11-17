@@ -143,11 +143,18 @@ def test_refresh_loads_queue_metadata_and_fetches_selected_mail_body_on_demand(m
 
     service.refresh_from_graph()
     case = service.load_open_cases()[0]
-    details = service.extract_case_details(case.id)
+    early_text: list[str] = []
+    details = service.extract_case_details(
+        case.id,
+        on_thread_loaded=lambda text: (calls.append("body ready"), early_text.append(text)),
+    )
 
     assert calls[0]["include_body"] is False  # type: ignore[index]
     assert case.body == ""
-    assert calls[-1] == "m1"
+    assert calls[-3:] == ["m1", "body ready", "thread"]
+    assert early_text == [
+        "Versandadresse:\nMax Muster\nHauptstrasse 1\n1010 Wien\nAT\n\n2x Musikbuch Alpen"
+    ]
     assert details.address_lines == ["Max Muster", "Hauptstrasse 1", "1010 Wien", "AT"]
 
 
