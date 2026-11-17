@@ -113,9 +113,14 @@ class ClearingRunCoordinator:
             )
             if analysis.warnings:
                 # A missing provider must never turn a partial Mollie run into a success.
+                affected = [
+                    label for label in ("Stripe", "Mollie", "Wix", "sevDesk")
+                    if any(label.casefold() in warning.casefold() for warning in analysis.warnings)
+                ]
+                source = " (" + ", ".join(affected) + ")" if affected else ""
                 self._update(
                     run_id, state="error", percent=65, warnings=len(analysis.warnings),
-                    message="Analyse unvollstaendig; keine Buchung ausgefuehrt. Quellen in Office pruefen.",
+                    message=f"Analyse unvollstaendig{source}; keine Buchung ausgefuehrt. Quellen in Office pruefen.",
                 )
                 return
             selected = [row for row in analysis.candidates if row.selected and row.is_bookable]

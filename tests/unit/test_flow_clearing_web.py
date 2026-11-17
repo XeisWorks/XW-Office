@@ -92,6 +92,7 @@ def test_provider_warning_stops_before_booking(setup):
     result = _wait(coordinator, str(started["run_id"]))
     assert result["state"] == "error"
     assert result["warnings"] == 1
+    assert "Stripe" in result["message"]
     assert service.book_calls == 0
 
 
