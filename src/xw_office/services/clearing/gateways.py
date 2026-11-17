@@ -518,6 +518,73 @@ class SevdeskClearingGateway:
             return {}
         return first_object(payload)
 
+    def get_credit_note_by_id(self, credit_note_id: int) -> dict[str, Any]:
+        response = self._conn.get(f"/CreditNote/{int(credit_note_id)}")
+        return first_object(response.json() if response.content else {})
+
+    def credit_note_status(
+        self, *, credit_note_id: int, source_invoice_id: int, amount: Decimal,
+    ) -> str:
+        """Verify the exact source invoice and gross amount before linking a refund."""
+        note = self.get_credit_note_by_id(credit_note_id)
+        if str(note.get("id") or "") != str(credit_note_id):
+            raise RuntimeError("Gutschrift wurde in sevDesk nicht gefunden.")
+        source = note.get("refSrcInvoice")
+        source_id = source.get("id") if isinstance(source, dict) else source
+        if str(source_id or "") != str(source_invoice_id):
+            raise RuntimeError("Gutschrift verweist auf eine andere Ausgangsrechnung.")
+        if money(note.get("sumGross")) != abs(money(amount)):
+            raise RuntimeError("Gutschriftbetrag passt nicht zur Rueckerstattung.")
+        return str(note.get("status") or "").strip()
+
+    def book_credit_note(
+        self, *, credit_note_id: int, source_invoice_id: int, amount: Decimal,
+        payment_date: datetime, account_id: int, transaction_id: int,
+    ) -> dict[str, Any]:
+        if money(amount) >= 0:
+            raise RuntimeError("Rueckerstattungsbetrag muss negativ sein.")
+        if self.credit_note_status(
+            credit_note_id=credit_note_id, source_invoice_id=source_invoice_id, amount=amount,
+        ) != "200":
+            raise RuntimeError("Gutschrift ist nicht mehr offen; Zuordnung manuell pruefen.")
+        transaction = self.get_check_account_transaction_by_id(transaction_id)
+        if money(transaction.get("amount")) != money(amount):
+            raise RuntimeError("sevDesk-Transaktionsbetrag passt nicht zur Rueckerstattung.")
+        tx_account = transaction.get("checkAccount")
+        account = tx_account.get("id") if isinstance(tx_account, dict) else None
+        if str(account or "") != str(account_id):
+            raise RuntimeError("sevDesk-Transaktion liegt auf einem anderen Konto.")
+        if str(transaction.get("status") or "").strip() == "400":
+            raise RuntimeError("sevDesk-Transaktion ist bereits zugeordnet.")
+        response = self._conn.put(
+            f"/CreditNote/{int(credit_note_id)}/bookAmount",
+            json={
+                "amount": float(money(amount)),
+                "date": int(payment_date.timestamp()),
+                "type": "FULL_PAYMENT",
+                "checkAccount": {"id": int(account_id), "objectName": "CheckAccount"},
+                "checkAccountTransaction": {
+                    "id": int(transaction_id), "objectName": "CheckAccountTransaction",
+                },
+                "createFeed": False,
+            },
+        )
+        raise_on_error_envelope(response_payload(response), "sevDesk CreditNote bookAmount Fehler")
+        note_status = self.credit_note_status(
+            credit_note_id=credit_note_id, source_invoice_id=source_invoice_id, amount=amount,
+        )
+        tx_status = str(self.get_check_account_transaction_by_id(transaction_id).get("status") or "").strip()
+        if note_status != "1000":
+            raise RuntimeError("Gutschrift wurde nach der Buchung nicht als bezahlt bestaetigt.")
+        if tx_status != "400":
+            self.change_check_account_transaction_status(transaction_id, 400)
+            tx_status = str(
+                self.get_check_account_transaction_by_id(transaction_id).get("status") or ""
+            ).strip()
+        if tx_status != "400":
+            raise RuntimeError("Refund-Transaktion wurde nach der Buchung nicht zugeordnet.")
+        return {"status": "booked", "transaction_id": transaction_id}
+
     def find_transaction_by_duplicate_key(
         self,
         account_id: int,

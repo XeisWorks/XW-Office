@@ -112,11 +112,30 @@ def book_batch(
             message = f"{row.kind.value} in sevDesk importiert"
             invoice: InvoiceRecord | None = None
             if existing is not None and existing.status == 400:
+                if row.kind == TransactionKind.REFUND:
+                    if row.credit_note_id is None or row.invoice_id is None:
+                        raise RuntimeError("Gebuchter Refund hat keine eindeutig zugeordnete Gutschrift.")
+                    if gateway.credit_note_status(
+                        credit_note_id=row.credit_note_id,
+                        source_invoice_id=row.invoice_id,
+                        amount=row.amount,
+                    ) != "1000":
+                        raise RuntimeError("Refund-Transaktion ist gebucht, Gutschrift aber nicht bezahlt.")
                 status, message = MatchStatus.ALREADY_BOOKED, "Transaktion war bereits gebucht."
             elif row.kind in {TransactionKind.PAYMENT, TransactionKind.SEPA}:
                 invoice = current_invoice(row)
                 if invoice.is_paid:
                     status, message = MatchStatus.ALREADY_BOOKED, f"Rechnung {row.invoice_number} war bereits bezahlt."
+            elif row.kind == TransactionKind.REFUND:
+                if row.credit_note_id is None or row.invoice_id is None:
+                    raise RuntimeError("Rueckerstattung hat keine eindeutig zugeordnete Gutschrift.")
+                note_status = gateway.credit_note_status(
+                    credit_note_id=row.credit_note_id,
+                    source_invoice_id=row.invoice_id,
+                    amount=row.amount,
+                )
+                if note_status != "200":
+                    raise RuntimeError("Gutschrift ist nicht mehr offen; vor erneutem Buchen pruefen.")
             if status != MatchStatus.ALREADY_BOOKED:
                 if transaction_id is None:
                     write_started = True
@@ -153,6 +172,20 @@ def book_batch(
                     warning = str(booking_response.get("warning") or "").strip()
                     if warning:
                         message += f"; Warnung: {warning}"
+                elif row.kind == TransactionKind.REFUND:
+                    assert row.credit_note_id is not None and row.invoice_id is not None
+                    write_started = True
+                    booking_response = gateway.book_credit_note(
+                        credit_note_id=row.credit_note_id,
+                        source_invoice_id=row.invoice_id,
+                        amount=row.amount,
+                        payment_date=row.payment_date,
+                        account_id=row.account_id,
+                        transaction_id=transaction_id,
+                    )
+                    if booking_response.get("status") != "booked":
+                        raise RuntimeError("Gutschriftbuchung wurde nicht bestaetigt.")
+                    message = f"Rueckerstattung mit Gutschrift {row.credit_note_id} gebucht"
             if store is not None and reservation is not None:
                 store.checkpoint(
                     row, reservation, state="completed", transaction_id=transaction_id, message=message

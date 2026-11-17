@@ -32,6 +32,10 @@ class ClearingRunRequest(BaseModel):
 def _review_case(row: ClearingCandidate) -> dict[str, str]:
     if row.skip_reason == ClearingSkipReason.INVOICE_IS_DRAFT:
         next_step = "Rechnung in sevDesk pruefen und finalisieren; danach Clearing erneut starten."
+    elif row.skip_reason == ClearingSkipReason.REFUND_DOCUMENT_MISSING:
+        next_step = "Wix-sevDesk-Gutschrift abwarten und danach Clearing erneut starten."
+    elif row.skip_reason == ClearingSkipReason.REFUND_DOCUMENT_REVIEW:
+        next_step = "Gegenbeleg und Zuordnung in XW-Office pruefen."
     elif row.status == MatchStatus.REFUND_IMPORT:
         next_step = "Gutschrift oder Storno in sevDesk pruefen; Refund danach in XW-Office importieren."
     else:

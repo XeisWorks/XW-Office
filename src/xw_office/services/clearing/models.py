@@ -55,6 +55,8 @@ class ClearingSkipReason(str, Enum):
     REFUND_NO_ORDER_REFERENCE = "refund_no_order_reference"
     REFUND_NO_INVOICE = "refund_no_invoice"
     REFUND_DRAFT_INVOICE = "refund_draft_invoice"
+    REFUND_DOCUMENT_MISSING = "refund_document_missing"
+    REFUND_DOCUMENT_REVIEW = "refund_document_review"
     MOLLIE_SETTLEMENTS_PERMISSION_MISSING = "mollie_settlements_permission_missing"
 
 
@@ -152,6 +154,8 @@ class ClearingCandidate:
     transaction_id: int | None = None
     stable_key: str = ""
     skip_reason: ClearingSkipReason | None = None
+    credit_note_id: int | None = None
+    wix_refund_id: str = ""
 
     @property
     def is_bookable(self) -> bool:

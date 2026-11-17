@@ -37,6 +37,7 @@ from xw_office.services.clearing.gateways import (
     MollieClearingGateway, SevdeskClearingGateway, StripeClearingGateway, WixClearingGateway,
 )
 from xw_office.services.clearing.service import PaymentClearingService
+from xw_office.services.flow_api.refunds import FlowRefundsClient
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.product_hub.conflicts import ConflictAdviceService, ConflictWizardService
 from xw_office.services.product_hub.content_generation import ContentGenerationService
@@ -640,6 +641,7 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
             sevdesk=SevdeskClearingGateway(build_sevdesk_connection(
                 config, api_token=secret_service.get_secret("SEVDESK_API_TOKEN"),
             )),
+            refunds=FlowRefundsClient(config, secret_service),
             history_dir=Path(tempfile.gettempdir()) / "xw-office-clearing-runs",
             sepa_lookback_days=config.clearing.sepa_lookback_days,
             b2b_year_prefixes=config.clearing.b2b_year_prefixes,

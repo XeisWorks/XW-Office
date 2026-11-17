@@ -470,6 +470,7 @@ def register_default_services(container: Container) -> None:
                 secrets.get_secret("WIX_SITE_ID"),
             ),
             sevdesk=SevdeskClearingGateway(c.resolve(SevdeskConnection)),
+            refunds=FlowRefundsClient(c.config, secrets),
             sepa_lookback_days=c.config.clearing.sepa_lookback_days,
             b2b_year_prefixes=c.config.clearing.b2b_year_prefixes,
         )

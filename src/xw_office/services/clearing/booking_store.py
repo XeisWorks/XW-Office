@@ -19,6 +19,7 @@ class BookingReservation(BaseModel):
     state: str = "reserved"
     transaction_id: int | None = None
     invoice_id: int | None = None
+    document_key: str | None = None
     updated_at: str
     message: str = ""
 
@@ -37,6 +38,8 @@ def _fingerprint(row: ClearingCandidate) -> str:
         f"{row.account_id}|{row.amount:.2f}|{row.payment_date.date().isoformat()}|"
         f"{row.invoice_id if row.kind in {TransactionKind.PAYMENT, TransactionKind.SEPA} else ''}"
     )
+    if row.kind == TransactionKind.REFUND and row.credit_note_id is not None:
+        text += f"|creditnote:{row.credit_note_id}|wix:{row.wix_refund_id}"
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
@@ -49,6 +52,9 @@ class ClearingBookingStore:
         owner = uuid4().hex
         fingerprint = _fingerprint(row)
         invoice_id = row.invoice_id if row.kind in {TransactionKind.PAYMENT, TransactionKind.SEPA} else None
+        if row.kind == TransactionKind.REFUND and row.credit_note_id is None:
+            raise RuntimeError("Rueckerstattung hat keine eindeutig zugeordnete Gutschrift.")
+        document_key = f"creditnote:{row.credit_note_id}" if row.kind == TransactionKind.REFUND else None
 
         def mutate(raw: str | None) -> str:
             ledger = BookingLedger.model_validate_json(raw) if raw else BookingLedger()
@@ -67,10 +73,15 @@ class ClearingBookingStore:
                 if invoice_key in ledger.invoices:
                     raise RuntimeError("Rechnung ist bereits fuer eine andere Zahlungsbuchung reserviert.")
                 ledger.invoices[invoice_key] = identity
+            if document_key is not None:
+                if document_key in ledger.invoices:
+                    raise RuntimeError("Gutschrift ist bereits fuer eine andere Rueckerstattung reserviert.")
+                ledger.invoices[document_key] = identity
             ledger.entries[identity] = BookingReservation(
                 owner=owner,
                 fingerprint=fingerprint,
                 invoice_id=invoice_id,
+                document_key=document_key,
                 updated_at=datetime.now(timezone.utc).isoformat(),
             )
             return ledger.model_dump_json()
@@ -103,6 +114,8 @@ class ClearingBookingStore:
             if state in {"completed", "released"}:
                 if entry.invoice_id is not None:
                     ledger.invoices.pop(str(entry.invoice_id), None)
+                if entry.document_key is not None:
+                    ledger.invoices.pop(entry.document_key, None)
                 if state == "released":
                     del ledger.entries[identity]
             return ledger.model_dump_json()

@@ -16,6 +16,7 @@ from typing import Callable
 from zoneinfo import ZoneInfo
 
 from xw_office.repositories.settings_kv import SettingKvRepository
+from xw_office.services.flow_api.refunds import FlowRefundsClient
 from xw_office.services.clearing.b2b_reference import extract_b2b_invoice_numbers
 from xw_office.services.clearing.booking import book_batch
 from xw_office.services.clearing.booking_store import ClearingBookingStore
@@ -41,6 +42,7 @@ from xw_office.services.clearing.models import (
     ResetItemResult,
     SevdeskTransaction,
     TransactionKind,
+    money,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,6 +142,8 @@ def _candidate_to_dict(row: ClearingCandidate) -> dict[str, object]:
         "transaction_id": row.transaction_id,
         "stable_key": row.stable_key,
         "skip_reason": row.skip_reason.value if row.skip_reason is not None else None,
+        "credit_note_id": row.credit_note_id,
+        "wix_refund_id": row.wix_refund_id,
     }
 
 
@@ -188,6 +192,7 @@ class PaymentClearingService:
         mollie: MollieClearingGateway | None = None,
         wix: WixClearingGateway | None = None,
         sevdesk: SevdeskClearingGateway | None = None,
+        refunds: FlowRefundsClient | None = None,
         history_dir: Path | None = None,
         sepa_lookback_days: int = 90,
         b2b_year_prefixes: Sequence[str] = ("24", "25", "26", "27"),
@@ -198,6 +203,7 @@ class PaymentClearingService:
         self._mollie = mollie
         self._wix = wix
         self._sevdesk = sevdesk
+        self._refunds = refunds
         self._history_dir = history_dir or default_clearing_history_dir()
         self._sepa_lookback_days = max(1, int(sepa_lookback_days))
         self._b2b_year_prefixes = tuple(b2b_year_prefixes)
@@ -345,6 +351,18 @@ class PaymentClearingService:
                 if key.provider_ref:
                     existing_by_duplicate[key.as_tuple()] = row
 
+        refund_feed: list[dict[str, object]] = []
+        refund_feed_issue = ""
+        if any(tx.kind == TransactionKind.REFUND for tx in provider_rows):
+            if self._refunds is None:
+                refund_feed_issue = "Wix-Refund-Arbeitsliste ist nicht konfiguriert."
+            else:
+                try:
+                    refund_feed = self._refunds.list_all_refunds()
+                except Exception:
+                    logger.exception("Wix refund document feed read failed")
+                    refund_feed_issue = "Wix-Refund-Arbeitsliste ist derzeit nicht erreichbar."
+
         candidates: list[ClearingCandidate] = []
         seen_invoice_ids: set[int] = set()
         resolved_orders: dict[str, str] = {}
@@ -395,6 +413,10 @@ class PaymentClearingService:
                 account_id=accounts.get(tx.provider),
                 invoice_already_used=bool(invoice and invoice.invoice_id in seen_invoice_ids),
             )
+            if tx.kind == TransactionKind.REFUND:
+                candidate = self._match_refund_document(
+                    candidate, refund_feed=refund_feed, feed_issue=refund_feed_issue,
+                )
             if candidate.status == MatchStatus.READY and not wix_lookup_complete:
                 candidate = replace(
                     candidate, status=MatchStatus.MANUAL, selected=False,
@@ -403,6 +425,19 @@ class PaymentClearingService:
             if candidate.status == MatchStatus.READY and candidate.invoice_id is not None:
                 seen_invoice_ids.add(candidate.invoice_id)
             candidates.append(candidate)
+
+        refund_usage: dict[str, int] = {}
+        for row in candidates:
+            if row.kind == TransactionKind.REFUND and row.selected and row.wix_refund_id:
+                refund_usage[row.wix_refund_id] = refund_usage.get(row.wix_refund_id, 0) + 1
+        candidates = [
+            replace(
+                row, status=MatchStatus.REFUND_REVIEW, selected=False,
+                reason="Mehrere Provider-Refunds passen zu demselben Wix-Refund.",
+                skip_reason=ClearingSkipReason.REFUND_DOCUMENT_REVIEW,
+            ) if row.wix_refund_id and refund_usage.get(row.wix_refund_id, 0) > 1 else row
+            for row in candidates
+        ]
 
         if progress:
             progress(80, "SEPA-Zahlungen abgleichen")
@@ -620,6 +655,78 @@ class PaymentClearingService:
             transaction_id=transaction_id,
             stable_key=tx.stable_key,
             skip_reason=skip_reason,
+        )
+
+    def _match_refund_document(
+        self,
+        candidate: ClearingCandidate,
+        *,
+        refund_feed: list[dict[str, object]],
+        feed_issue: str,
+    ) -> ClearingCandidate:
+        if candidate.status != MatchStatus.REFUND_IMPORT:
+            return candidate
+
+        def review(reason: str, *, missing: bool = False) -> ClearingCandidate:
+            return replace(
+                candidate, status=MatchStatus.REFUND_REVIEW, selected=False, reason=reason,
+                skip_reason=(
+                    ClearingSkipReason.REFUND_DOCUMENT_MISSING if missing
+                    else ClearingSkipReason.REFUND_DOCUMENT_REVIEW
+                ),
+            )
+
+        if feed_issue:
+            return review(feed_issue, missing=True)
+        matches = [
+            row for row in refund_feed
+            if str(row.get("wix_order_number") or "").strip() == candidate.order_number
+            and money(row.get("amount")) == abs(candidate.amount)
+            and (
+                not str(row.get("provider_refund_id") or "").strip()
+                or str(row.get("provider_refund_id")).strip() == candidate.provider_ref
+            )
+        ]
+        if len(matches) != 1:
+            return review("Kein eindeutig passender Wix-Refund zum Betrag gefunden.")
+        record = matches[0]
+        if not str(record.get("wix_refund_id") or "").strip():
+            return review("Wix-Refund-ID fehlt; keine sichere Zuordnung moeglich.")
+        if str(record.get("wix_refund_status") or "") != "SUCCEEDED":
+            return review("Wix-Refund ist noch nicht erfolgreich abgeschlossen.")
+        if str(record.get("sevdesk_invoice_id") or "") != str(candidate.invoice_id):
+            return review("Wix-Refund verweist auf eine andere sevDesk-Ausgangsrechnung.")
+        if str(record.get("currency") or "EUR").upper() != "EUR" or bool(record.get("external_refund")):
+            return review("Wix-Refund-Waehrung oder externe Erstattung muss geprueft werden.")
+        process_status = str(record.get("process_status") or "")
+        if process_status == "done_cancellation":
+            return review(
+                "Stornorechnung ist in sevDesk bereits bezahlt; Provider-Auszahlung separat zuordnen."
+            )
+        if process_status not in {"done_creditnote", "done_creditnote_partial"}:
+            return review("Wix-Refund erkannt; offene sevDesk-Gutschrift fehlt noch.", missing=True)
+        try:
+            credit_note_id = int(str(record.get("sevdesk_credit_note_id") or ""))
+        except ValueError:
+            return review("Wix-Refund meldet keine gueltige sevDesk-Gutschrift-ID.", missing=True)
+        if credit_note_id <= 0 or self._sevdesk is None:
+            return review("Wix-Refund meldet keine gueltige sevDesk-Gutschrift-ID.", missing=True)
+        try:
+            note_status = self._sevdesk.credit_note_status(
+                credit_note_id=credit_note_id, source_invoice_id=candidate.invoice_id or 0,
+                amount=candidate.amount,
+            )
+        except Exception:
+            logger.exception("Refund credit note validation failed for %s", candidate.candidate_id)
+            return review("Gutschrift passt nicht eindeutig zur Rueckerstattung.")
+        if note_status != "200":
+            return review("Gutschrift ist nicht offen; Zahlung oder Zuordnung in sevDesk pruefen.")
+        return replace(
+            candidate, status=MatchStatus.REFUND_IMPORT, selected=True,
+            reason=f"Wix-Refund und offene Gutschrift {credit_note_id} eindeutig zugeordnet",
+            credit_note_id=credit_note_id,
+            wix_refund_id=str(record.get("wix_refund_id") or ""),
+            skip_reason=None,
         )
 
     def assign_invoice(

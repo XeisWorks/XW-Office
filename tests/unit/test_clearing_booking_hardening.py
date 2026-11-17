@@ -103,6 +103,18 @@ def test_booking_checkpoint_survives_repository_restart(tmp_path: Path) -> None:
     engine.dispose()
 
 
+def test_credit_note_cannot_be_reserved_for_two_provider_refunds() -> None:
+    store = ClearingBookingStore(_MemoryRepo())  # type: ignore[arg-type]
+    first = replace(
+        _row("re_1", TransactionKind.REFUND), status=MatchStatus.REFUND_IMPORT,
+        invoice_id=7, credit_note_id=44, wix_refund_id="wix-refund-1",
+    )
+    second = replace(first, candidate_id="re_2", provider_ref="re_2")
+    store.claim(first)
+    with pytest.raises(RuntimeError, match="bereits"):
+        store.claim(second)
+
+
 def test_draft_rejected_at_assignment_and_booking(tmp_path: Path) -> None:
     gateway = _gateway()
     gateway.find_invoice.return_value = InvoiceRecord(7, "RE-1", "12345", Decimal("50"), 100, "Test")

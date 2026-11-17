@@ -48,6 +48,14 @@ class _Provider:
         return self.rows
 
 
+class _RefundFeed:
+    def __init__(self, rows: list[dict[str, object]]) -> None:
+        self.rows = rows
+
+    def list_all_refunds(self) -> list[dict[str, object]]:
+        return self.rows
+
+
 class _Wix:
     def __init__(self) -> None:
         self.provider_map_ranges: list[tuple[datetime, datetime]] = []
@@ -70,6 +78,7 @@ class _Sevdesk:
         self.invoice = InvoiceRecord(7, "RE-100", "Wix | 12345", money("29.90"), 200, "Anna")
         self.created: list[dict] = []
         self.booked: list[dict] = []
+        self.credit_booked: list[dict] = []
         self.reset_calls: list[tuple[int, int]] = []
         self.duplicate_lookup_calls = 0
         self.invoice_queries: list[tuple[datetime, datetime]] = []
@@ -137,6 +146,13 @@ class _Sevdesk:
         self.booked.append(kwargs)
         return self.book_result
 
+    def credit_note_status(self, **kwargs: object) -> str:
+        return "200"
+
+    def book_credit_note(self, **kwargs: object) -> dict[str, str]:
+        self.credit_booked.append(kwargs)
+        return {"status": "booked"}
+
 
 def _payment() -> ProviderTransaction:
     return ProviderTransaction(
@@ -150,12 +166,16 @@ def _payment() -> ProviderTransaction:
     )
 
 
-def _service(sevdesk: _Sevdesk, rows: list[ProviderTransaction], tmp_path: Path) -> PaymentClearingService:
+def _service(
+    sevdesk: _Sevdesk, rows: list[ProviderTransaction], tmp_path: Path,
+    refunds: _RefundFeed | None = None,
+) -> PaymentClearingService:
     return PaymentClearingService(
         stripe=_Provider(rows),  # type: ignore[arg-type]
         mollie=_Provider([]),  # type: ignore[arg-type]
         wix=_Wix(),  # type: ignore[arg-type]
         sevdesk=sevdesk,  # type: ignore[arg-type]
+        refunds=refunds,  # type: ignore[arg-type]
         history_dir=tmp_path,
     )
 
@@ -221,6 +241,71 @@ def test_sevdesk_gateway_book_invoice_uses_v2_book_amount_payload() -> None:
     assert result["status"] == "booked"
     assert ("PUT", "/api/v1/Invoice/7/bookAmount") in calls
     assert not any(path.endswith("/linkInvoice") for _method, path in calls)
+
+
+def test_sevdesk_gateway_books_negative_refund_against_matching_credit_note() -> None:
+    note_reads = 0
+    transaction_reads = 0
+    booked_amounts: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal note_reads, transaction_reads
+        path = request.url.path
+        if request.method == "GET" and path.endswith("/CreditNote/44"):
+            note_reads += 1
+            return httpx.Response(200, json={"objects": {
+                "id": 44, "refSrcInvoice": {"id": 7}, "sumGross": "29.90",
+                "status": 200 if note_reads == 1 else 1000,
+            }})
+        if request.method == "GET" and path.endswith("/CheckAccountTransaction/99"):
+            transaction_reads += 1
+            return httpx.Response(200, json={"objects": {
+                "id": 99, "amount": "-29.90", "checkAccount": {"id": 11},
+                "status": 100 if transaction_reads == 1 else 400,
+            }})
+        if request.method == "PUT" and path.endswith("/CreditNote/44/bookAmount"):
+            payload = json.loads(request.content)
+            booked_amounts.append(payload["amount"])
+            assert payload["checkAccountTransaction"]["id"] == 99
+            assert payload["createFeed"] is False
+            return httpx.Response(200, json={"objects": {"id": 1}})
+        return httpx.Response(404)
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://example.test/api/v1",
+    )
+    gateway = SevdeskClearingGateway(SevdeskConnection(client=client, config=AppConfig()))
+    result = gateway.book_credit_note(
+        credit_note_id=44, source_invoice_id=7, amount=money("-29.90"),
+        payment_date=datetime(2026, 7, 3, tzinfo=ZoneInfo("UTC")),
+        account_id=11, transaction_id=99,
+    )
+    assert result["status"] == "booked"
+    assert booked_amounts == [-29.9]
+
+
+def test_sevdesk_gateway_rejects_credit_note_for_other_invoice_before_write() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(f"{request.method} {request.url.path}")
+        if request.method == "GET" and request.url.path.endswith("/CreditNote/44"):
+            return httpx.Response(200, json={"objects": {
+                "id": 44, "refSrcInvoice": {"id": 8}, "sumGross": "29.90", "status": 200,
+            }})
+        return httpx.Response(404)
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="https://example.test/api/v1",
+    )
+    gateway = SevdeskClearingGateway(SevdeskConnection(client=client, config=AppConfig()))
+    with pytest.raises(RuntimeError, match="andere Ausgangsrechnung"):
+        gateway.book_credit_note(
+            credit_note_id=44, source_invoice_id=7, amount=money("-29.90"),
+            payment_date=datetime(2026, 7, 3, tzinfo=ZoneInfo("UTC")),
+            account_id=11, transaction_id=99,
+        )
+    assert not any(call.startswith("PUT ") for call in calls)
 
 
 def test_sevdesk_gateway_confirms_paid_invoice_even_if_status_400_patch_does_not_stick() -> None:
@@ -603,7 +688,7 @@ def test_reset_transactions_in_range_only_resets_clearing_entries(tmp_path: Path
     assert sevdesk.transactions_by_account[12][0].status == 200
 
 
-def test_refund_with_invoice_is_visible_but_not_preselected(tmp_path: Path) -> None:
+def test_refund_without_wix_document_is_visible_but_not_bookable(tmp_path: Path) -> None:
     refund = ProviderTransaction(
         provider="stripe",
         provider_ref="re_1",
@@ -619,10 +704,64 @@ def test_refund_with_invoice_is_visible_but_not_preselected(tmp_path: Path) -> N
 
     row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
 
-    assert row.status == MatchStatus.REFUND_IMPORT
+    assert row.status == MatchStatus.REFUND_REVIEW
     assert row.selected is False
-    assert row.is_bookable is True
-    assert "Gutschrift" in row.reason
+    assert row.is_bookable is False
+    assert row.skip_reason == ClearingSkipReason.REFUND_DOCUMENT_MISSING
+
+
+def test_wix_refund_with_verified_credit_note_is_booked(tmp_path: Path) -> None:
+    refund = ProviderTransaction(
+        provider="stripe", provider_ref="re_1", provider_order_id="pi_1",
+        kind=TransactionKind.REFUND, amount=money("-29.90"),
+        created_at=datetime(2026, 5, 10, 12, 0, tzinfo=VIENNA),
+    )
+    sevdesk = _Sevdesk()
+    sevdesk.invoice = InvoiceRecord(7, "RE-100", "Wix | 12345", money("29.90"), 1000, "Anna")
+    service = _service(sevdesk, [refund], tmp_path, _RefundFeed([{
+        "wix_refund_id": "wix-refund-1", "wix_order_number": "12345",
+        "provider_refund_id": None, "sevdesk_invoice_id": "7", "amount": "29.90",
+        "currency": "EUR", "external_refund": 0, "wix_refund_status": "SUCCEEDED",
+        "process_status": "done_creditnote", "sevdesk_credit_note_id": "44",
+    }]))
+    row = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
+    assert row.status == MatchStatus.REFUND_IMPORT
+    assert row.selected is True
+    assert row.credit_note_id == 44
+    result = service.book_selected([row])
+    assert result.failure_count == 0
+    assert sevdesk.created[0]["amount"] == money("-29.90")
+    assert sevdesk.credit_booked[0]["credit_note_id"] == 44
+
+
+def test_wix_refund_with_wrong_invoice_or_duplicate_provider_refund_is_not_booked(tmp_path: Path) -> None:
+    refund = ProviderTransaction(
+        provider="stripe", provider_ref="re_1", provider_order_id="pi_1",
+        kind=TransactionKind.REFUND, amount=money("-29.90"),
+        created_at=datetime(2026, 5, 10, 12, 0, tzinfo=VIENNA),
+    )
+    sevdesk = _Sevdesk()
+    sevdesk.invoice = InvoiceRecord(7, "RE-100", "Wix | 12345", money("29.90"), 1000)
+    feed_row: dict[str, object] = {
+        "wix_refund_id": "wix-refund-1", "wix_order_number": "12345",
+        "sevdesk_invoice_id": "8", "amount": "29.90", "wix_refund_status": "SUCCEEDED",
+        "process_status": "done_creditnote", "sevdesk_credit_note_id": "44",
+    }
+    service = _service(sevdesk, [refund], tmp_path, _RefundFeed([feed_row]))
+    mismatch = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates[0]
+    assert mismatch.status == MatchStatus.REFUND_REVIEW
+    assert not mismatch.selected
+
+    feed_row["sevdesk_invoice_id"] = "7"
+    second = ProviderTransaction(
+        provider="stripe", provider_ref="re_2", provider_order_id="pi_1",
+        kind=TransactionKind.REFUND, amount=money("-29.90"),
+        created_at=datetime(2026, 5, 11, 12, 0, tzinfo=VIENNA),
+    )
+    service = _service(sevdesk, [refund, second], tmp_path, _RefundFeed([feed_row]))
+    duplicate = service.analyze(date(2026, 5, 1), date(2026, 5, 31)).candidates
+    assert len(duplicate) == 2
+    assert all(row.status == MatchStatus.REFUND_REVIEW and not row.selected for row in duplicate)
 
 
 def test_manual_candidate_carries_typed_skip_reason(tmp_path: Path) -> None:
