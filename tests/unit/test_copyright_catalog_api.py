@@ -52,3 +52,28 @@ def test_catalog_requires_own_token_and_exposes_only_scoped_metadata(tmp_path: P
 def test_catalog_fails_closed_without_scoped_token() -> None:
     client = TestClient(create_app(ContentWebSettings()))
     assert client.get("/api/v1/copyright/catalog").status_code == 503
+
+
+def test_wuedaramusi_skus_are_scoped_without_changing_shop_brand(tmp_path: Path) -> None:
+    database_url = f"sqlite:///{tmp_path / 'wuedaramusi_catalog.db'}"
+    engine = create_engine(database_url, future=True)
+    Base.metadata.create_all(engine)
+    repo = ProductHubRepository(sessionmaker(bind=engine, expire_on_commit=False, future=True))
+    included = ("XW-101", "XW-102.3-D", "XW-103.4_D", "XW-104.8", "XW-1200", "XW-1204")
+    excluded = ("XW-100.1", "XW-1205", "XW-1010")
+    for sku in (*included, *excluded):
+        repo.create_product(sku=sku, name=f"Synthetic {sku}", brand_name="XeisWorks")
+    client = TestClient(create_app(ContentWebSettings(
+        bootstrap_token="broad-token",
+        copyright_catalog_read_token="narrow-token",
+        database_url=database_url,
+    )))
+    response = client.get(
+        "/api/v1/copyright/catalog", headers={"Authorization": "Bearer narrow-token"}
+    )
+    assert response.status_code == 200
+    rows = response.json()["products"]
+    assert {row["sku"] for row in rows} == set(included)
+    assert all(row["brand"] == "WüdaraMusi" for row in rows)
+    assert repo.get_product_by_sku("XW-101").brand_name == "XeisWorks"
+    engine.dispose()

@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Generator
 from datetime import datetime
+import re
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -20,6 +21,11 @@ _BRAND_ALIASES = {
     "wuedaramusi": "WüdaraMusi",
     "musikheroes": "MusikHeroes",
 }
+
+# Product Hub uses XeisWorks as the selling brand for these editions. The
+# copyright feed additionally needs the represented ensemble supplied by the
+# operator, without changing the shop or inventory brand on the source rows.
+_WUEDARAMUSI_SKU = re.compile(r"XW-(?:10[1-4](?:\.[1-8](?:[-_]D)?)?|120[0-4])\Z", re.I)
 
 
 class CatalogVariant(BaseModel):
@@ -51,7 +57,11 @@ class CatalogSnapshot(BaseModel):
     products: list[CatalogProduct]
 
 
-def _brand(raw: str | None, attributes: dict[str, object], category: str | None) -> str | None:
+def _brand(
+    raw: str | None, attributes: dict[str, object], category: str | None, sku: str
+) -> str | None:
+    if _WUEDARAMUSI_SKU.fullmatch(sku.strip()):
+        return "WüdaraMusi"
     candidates: list[object] = [raw]
     music = attributes.get("music_attributes")
     if isinstance(music, dict):
@@ -74,7 +84,7 @@ def build_copyright_catalog_router(get_repo: RepoDependency) -> APIRouter:
     def catalog(repo: ProductHubRepository = Depends(get_repo)) -> CatalogSnapshot:
         products = repo.list_products()
         selected = [
-            (product, _brand(product.brand_name, product.attributes or {}, product.category))
+            (product, _brand(product.brand_name, product.attributes or {}, product.category, product.sku))
             for product in products
         ]
         selected = [(product, brand) for product, brand in selected if brand is not None]
