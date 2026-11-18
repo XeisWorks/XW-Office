@@ -20,6 +20,7 @@ def test_catalog_requires_own_token_and_exposes_only_scoped_metadata(tmp_path: P
         sku="SCORE-1", name="Synthetic score", brand_name="Mnozil Brass"
     )
     repo.create_product(sku="OTHER-1", name="Other score", brand_name="Other Publisher")
+    repo.create_product(sku="UNKNOWN-1", name="Unassigned score", category="Notenausgabe")
     repo.create_edition(product_id=selected.id, label="First edition")
     client = TestClient(
         create_app(
@@ -36,11 +37,12 @@ def test_catalog_requires_own_token_and_exposes_only_scoped_metadata(tmp_path: P
     response = client.get(path, headers={"Authorization": "Bearer narrow-token"})
     assert response.status_code == 200
     rows = response.json()["products"]
-    assert len(rows) == 1
-    assert rows[0]["product_id"] == str(selected.id)
-    assert rows[0]["brand"] == "Mnozil Brass"
-    assert rows[0]["variants"][0]["sku"] == "SCORE-1"
-    assert rows[0]["editions"][0]["label"] == "First edition"
+    assert len(rows) == 2
+    selected_row = next(row for row in rows if row["product_id"] == str(selected.id))
+    assert selected_row["brand"] == "Mnozil Brass"
+    assert selected_row["variants"][0]["sku"] == "SCORE-1"
+    assert selected_row["editions"][0]["label"] == "First edition"
+    assert any(row["brand"] == "" for row in rows)
     assert "price" not in str(response.json()).lower()
     assert "attributes" not in str(response.json()).lower()
     assert client.post(path, headers={"Authorization": "Bearer narrow-token"}).status_code == 405

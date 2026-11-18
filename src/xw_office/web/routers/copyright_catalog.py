@@ -39,6 +39,7 @@ class CatalogProduct(BaseModel):
     title: str
     brand: str
     slug: str
+    public_product_url: str | None = None
     sku: str
     updated_at: datetime
     variants: list[CatalogVariant]
@@ -50,7 +51,7 @@ class CatalogSnapshot(BaseModel):
     products: list[CatalogProduct]
 
 
-def _brand(raw: str | None, attributes: dict[str, object]) -> str | None:
+def _brand(raw: str | None, attributes: dict[str, object], category: str | None) -> str | None:
     candidates: list[object] = [raw]
     music = attributes.get("music_attributes")
     if isinstance(music, dict):
@@ -60,6 +61,9 @@ def _brand(raw: str | None, attributes: dict[str, object]) -> str | None:
             canonical = _BRAND_ALIASES.get(candidate.strip().casefold())
             if canonical:
                 return canonical
+    # A score without a reliable brand still needs a metadata review queue.
+    if category and ("noten" in category.casefold() or "sheet music" in category.casefold()):
+        return ""
     return None
 
 
@@ -70,7 +74,8 @@ def build_copyright_catalog_router(get_repo: RepoDependency) -> APIRouter:
     def catalog(repo: ProductHubRepository = Depends(get_repo)) -> CatalogSnapshot:
         products = repo.list_products()
         selected = [
-            (product, _brand(product.brand_name, product.attributes or {})) for product in products
+            (product, _brand(product.brand_name, product.attributes or {}, product.category))
+            for product in products
         ]
         selected = [(product, brand) for product, brand in selected if brand is not None]
         variants_by_product: dict[str, list[CatalogVariant]] = {}
@@ -96,6 +101,7 @@ def build_copyright_catalog_router(get_repo: RepoDependency) -> APIRouter:
                     title=product.name,
                     brand=brand,
                     slug=product.slug,
+                    public_product_url=None,
                     sku=product.sku,
                     updated_at=product.updated_at,
                     variants=variants_by_product.get(str(product.id), []),
