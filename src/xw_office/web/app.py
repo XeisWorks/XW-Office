@@ -61,6 +61,7 @@ from xw_office.services.sevdesk.part_client import PartClient
 from xw_office.services.wix.client import WixProductsClient
 from xw_office.services.wix.product_details_client import WixProductDetailsClient
 from xw_office.web.routers.conflicts import build_conflicts_router
+from xw_office.web.routers.copyright_catalog import build_copyright_catalog_router
 from xw_office.web.routers.covers import build_covers_router
 from xw_office.web.routers.inventory import build_inventory_router
 from xw_office.web.routers.inventory_count import build_inventory_count_router
@@ -101,6 +102,7 @@ class ContentWebSettings:
     """Small environment boundary for the Phase-1 web service."""
 
     bootstrap_token: str = ""
+    copyright_catalog_read_token: str = ""
     public_url: str = "http://127.0.0.1:8000"
     environment: str = "development"
     brand_config_path: Path = _REPOSITORY_ROOT / "config" / "content_brands.yaml"
@@ -147,6 +149,7 @@ class ContentWebSettings:
     def from_environment(cls) -> "ContentWebSettings":
         return cls(
             bootstrap_token=os.getenv("XW_CONTENT_BOOTSTRAP_TOKEN", "").strip(),
+            copyright_catalog_read_token=os.getenv("XW_COPYRIGHT_CATALOG_READ_TOKEN", "").strip(),
             public_url=os.getenv("XW_CONTENT_PUBLIC_URL", "http://127.0.0.1:8000").strip(),
             environment=os.getenv("XW_CONTENT_ENVIRONMENT", "development").strip(),
             database_url=os.getenv("DATABASE_URL", "").strip(),
@@ -264,6 +267,20 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
+    def require_copyright_catalog_token(
+        credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    ) -> None:
+        expected = resolved.copyright_catalog_read_token
+        if not expected:
+            raise HTTPException(503, "Copyright catalog access is not configured")
+        supplied = credentials.credentials if credentials is not None else ""
+        if (
+            credentials is None
+            or credentials.scheme.lower() != "bearer"
+            or not secrets.compare_digest(supplied, expected)
+        ):
+            raise HTTPException(401, "Invalid or missing bearer token")
+
     # -- Product Hub (PR07): DB session factory, gated by database_url + the kill switch --
 
     _engine = (
@@ -373,6 +390,10 @@ def create_app(settings: ContentWebSettings | None = None) -> FastAPI:
             get_asset_jobs,
         ),
         dependencies=[Depends(require_bootstrap_token), Depends(require_product_hub_enabled)],
+    )
+    app.include_router(
+        build_copyright_catalog_router(get_product_repo),
+        dependencies=[Depends(require_copyright_catalog_token), Depends(require_product_hub_enabled)],
     )
     app.include_router(
         build_covers_router(get_cover_templates),
