@@ -92,7 +92,10 @@ if (-not $SkipRunningCheck) {
             Where-Object {
                 $_.ProcessId -notin $ExcludedProcessIds -and
                 $_.CommandLine -and
-                ($_.CommandLine -match [regex]::Escape($RepoRoot) -or $_.CommandLine -match 'xw_office')
+                (
+                    $_.CommandLine -match '(?i)(?:^|[\\/])xw_office_gui\.pyw(?:["''\s]|$)' -or
+                    $_.CommandLine -match '(?i)(?:^|\s)-m\s+xw_office(?:\s|$)'
+                )
             }
     }
     catch {
