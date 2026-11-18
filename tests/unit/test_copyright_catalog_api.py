@@ -21,6 +21,7 @@ def test_catalog_requires_own_token_and_exposes_only_scoped_metadata(tmp_path: P
     )
     repo.create_product(sku="OTHER-1", name="Other score", brand_name="Other Publisher")
     repo.create_product(sku="UNKNOWN-1", name="Unassigned score", category="Notenausgabe")
+    repo.create_product(sku="RESERVED-1", name="Reserviert - future score", brand_name="Mnozil Brass", category="Reserviert")
     repo.create_edition(product_id=selected.id, label="First edition")
     client = TestClient(
         create_app(
@@ -43,6 +44,7 @@ def test_catalog_requires_own_token_and_exposes_only_scoped_metadata(tmp_path: P
     assert selected_row["variants"][0]["sku"] == "SCORE-1"
     assert selected_row["editions"][0]["label"] == "First edition"
     assert any(row["brand"] == "" for row in rows)
+    assert all(row["sku"] != "RESERVED-1" for row in rows)
     assert "price" not in str(response.json()).lower()
     assert "attributes" not in str(response.json()).lower()
     assert client.post(path, headers={"Authorization": "Bearer narrow-token"}).status_code == 405

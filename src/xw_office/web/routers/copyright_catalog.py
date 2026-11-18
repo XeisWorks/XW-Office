@@ -86,6 +86,8 @@ def build_copyright_catalog_router(get_repo: RepoDependency) -> APIRouter:
         selected = [
             (product, _brand(product.brand_name, product.attributes or {}, product.category, product.sku))
             for product in products
+            if (product.category or "").strip().casefold() != "reserviert"
+            and not product.name.strip().casefold().startswith("reserviert -")
         ]
         selected = [(product, brand) for product, brand in selected if brand is not None]
         variants_by_product: dict[str, list[CatalogVariant]] = {}
