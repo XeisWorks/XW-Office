@@ -1931,7 +1931,7 @@ class InvoiceProcessingService:
         invoice_id: str,
         *,
         override_lines: list[str] | None = None,
-        wait: bool = False,
+        wait: bool = True,
     ) -> FulfillmentFlags:
         """Print one shipping label for *invoice_id* and persist ``label_printed``.
 
@@ -1948,10 +1948,9 @@ class InvoiceProcessingService:
             lines = self._shipping_lines_from_invoice(full, summary)
         if not lines:
             raise RuntimeError("Keine Lieferadresse für Labeldruck")
-        if wait:
-            self._label_printer.print_address(lines, wait=True)
-        else:
-            self._label_printer.print_address(lines)
+        if not wait:
+            raise ValueError("Labeldruck muss vor der Statusspeicherung bestaetigt sein")
+        self._label_printer.print_address(lines, wait=True)
         next_flags = self._next_flags(flags, label_printed=True)
         self.write_fulfillment_flags(summary.id, next_flags)
         return next_flags
