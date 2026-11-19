@@ -12,6 +12,9 @@ implementiert. Code Connect ergänzt dies später um Verweise auf die echten Rea
 Die portable Workspace-Konfiguration ist `.vscode/mcp.json` und nutzt ausschließlich den von
 Figma empfohlenen Remote-Endpunkt `https://mcp.figma.com/mcp`. In VS Code:
 
+Codex nutzt denselben Remote-Endpunkt ueber die zusaetzliche `.mcp.json` im
+Repository-Root. Beide Konfigurationen enthalten keine Zugangsdaten.
+
 1. GitHub Copilot aktivieren und die Arbeitsmappe öffnen.
 2. `MCP: Open Workspace Folder Configuration` öffnen und prüfen, dass der Server `figma` läuft.
 3. Bei der ersten Verbindung **Allow access** wählen und sich mit dem Figma-Konto anmelden.
