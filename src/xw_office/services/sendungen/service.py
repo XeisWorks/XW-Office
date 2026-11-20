@@ -39,7 +39,7 @@ _EXTRACTIONS_KEY = "daily_business.offene_sendungen.extractions"
 _MANUAL_KEY = "daily_business.offene_sendungen.manual"
 _SOURCE_MAILBOX_KEY = "daily_business.offene_sendungen.source_mailbox"
 _DEFAULT_MODEL = "gpt-4.1-mini"
-_EXTRACTION_SCHEMA_VERSION = 4
+_EXTRACTION_SCHEMA_VERSION = 5
 _MEMORY_CACHE_SECONDS = 120.0
 _DEFAULT_SHIPPING_MAILBOX = "shipping@xeisworks.at"
 #: Sentinel ``SendungCase.sender`` for cases injected via create_manual_case
@@ -178,19 +178,27 @@ class OffeneSendungenService:
         manual = self._load_json_map(_MANUAL_KEY)
         names: dict[str, str] = {}
         for case in cases if cases is not None else self.load_open_cases():
+            extraction = extractions.get(case.id)
+            expected_name = self._confirmed_customer_name(case, extraction)
             address_lines: object = None
             manual_case = manual.get(case.id)
             if isinstance(manual_case, dict):
                 address_lines = manual_case.get("address_lines")
+            if self._address_conflicts_with_customer(address_lines, expected_name):
+                address_lines = None
             if not isinstance(address_lines, list) or not address_lines:
-                extraction = extractions.get(case.id)
                 if isinstance(extraction, dict):
                     address_lines = extraction.get("address_lines")
+            if self._address_conflicts_with_customer(address_lines, expected_name):
+                address_lines = None
             if isinstance(address_lines, list) and address_lines:
                 name = str(address_lines[0] or "").strip()
                 if name:
                     names[case.id] = name
                     continue
+            if expected_name:
+                names[case.id] = expected_name
+                continue
             if case.sender_name:
                 names[case.id] = case.sender_name
         with self._cache_lock:
@@ -544,7 +552,30 @@ class OffeneSendungenService:
     def load_manual_fields(self, case_id: str) -> dict[str, Any]:
         data = self._load_json_map(_MANUAL_KEY)
         value = data.get(str(case_id or "").strip())
-        return value if isinstance(value, dict) else {}
+        if not isinstance(value, dict):
+            return {}
+        case = self._find_case(case_id)
+        extraction = self._load_json_map(_EXTRACTIONS_KEY).get(str(case_id or "").strip())
+        expected_name = self._confirmed_customer_name(case, extraction) if case else ""
+        if self._address_conflicts_with_customer(value.get("address_lines"), expected_name):
+            logger.warning("Mismatched saved shipping recipient ignored for case %s", case_id)
+            return {key: item for key, item in value.items() if key != "address_lines"}
+        return value
+
+    @classmethod
+    def _confirmed_customer_name(cls, case: SendungCase, extraction: object) -> str:
+        if not isinstance(extraction, dict):
+            return ""
+        name = str(extraction.get("customer_name") or "").strip()
+        thread_text = str(extraction.get("thread_text") or case.thread_text or case.body or "")
+        return name if name and cls._name_matches_case(name, case, thread_text) else ""
+
+    @classmethod
+    def _address_conflicts_with_customer(cls, address: object, customer_name: str) -> bool:
+        if not customer_name or not isinstance(address, list) or not address:
+            return False
+        recipient = str(address[0] or "").strip()
+        return bool(recipient and not cls._names_match(recipient, customer_name))
 
     def save_manual_fields(
         self,
@@ -1126,7 +1157,7 @@ class OffeneSendungenService:
     ) -> SendungExtraction:
         text = str(thread_text if thread_text is not None else self._full_case_text(case))
         text = text or case.body or case.snippet
-        address = self._extract_address_block(text) or self.create_label_lines(case)
+        address = self._extract_address_block(text)
         products = self._extract_product_lines(text)
         return SendungExtraction(
             summary=self._fallback_summary(case),
@@ -1160,6 +1191,7 @@ class OffeneSendungenService:
         notes: list[str] = []
 
         invoice_summary: InvoiceSummary | None = None
+        invoice_customer_name = ""
         invoice_address: list[str] = []
         wix_address: list[str] = []
         wix_customer_name = ""
@@ -1176,7 +1208,7 @@ class OffeneSendungenService:
         if invoice_summary is not None and self._invoice_client is not None:
             invoice_number = str(invoice_summary.invoice_number or invoice_number).strip()
             order_number = str(invoice_summary.order_reference or order_number).strip()
-            customer_name = str(invoice_summary.contact_name or "").strip()
+            invoice_customer_name = str(invoice_summary.contact_name or "").strip()
             try:
                 invoice = self._invoice_client.fetch_invoice_by_id(invoice_summary.id)
                 positions = self._invoice_client.fetch_invoice_positions(invoice_summary.id)
@@ -1286,12 +1318,17 @@ class OffeneSendungenService:
         )
         if wix_matches:
             address_lines = wix_address
-            if not customer_name:
-                customer_name = wix_customer_name or wix_names[0]
+            customer_name = wix_customer_name or wix_names[0]
         elif invoice_matches:
             address_lines = invoice_address
+            customer_name = invoice_customer_name or invoice_names[0]
         elif wix_address or invoice_address:
             notes.append("Bestell-/Rechnungsadresse nicht übernommen: Name nicht bestätigt.")
+
+        if address_lines and self._outgoing_salutation_conflicts(case, thread_text, address_lines[0]):
+            address_lines = []
+            customer_name = ""
+            notes.append("Lieferanschrift widerspricht der Anrede in der aktuellen Mail.")
 
         return _SendungBusinessContext(
             invoice_number=invoice_number,
@@ -1319,6 +1356,28 @@ class OffeneSendungenService:
             if tokens:
                 variants.append(tokens)
         return variants
+
+    @classmethod
+    def _outgoing_salutation_conflicts(
+        cls, case: SendungCase, thread_text: str, recipient_name: str
+    ) -> bool:
+        if not case.sender.casefold().endswith("@xeisworks.at"):
+            return False
+        current_message = str(thread_text or "").split("\n\n---\n\n", 1)[0]
+        match = re.search(
+            r"(?im)^\s*(?:hallo|liebe[rn]?|sehr geehrte[rn]?)\s+"
+            r"(?:herrn?|frau)\s+([A-Za-zÀ-ÿ-]+)\b",
+            current_message,
+        )
+        if not match:
+            return False
+        addressee = cls._name_parts(match.group(1))
+        recipients = cls._name_parts(recipient_name)
+        return bool(
+            addressee
+            and recipients
+            and addressee[0][-1] not in {token for variant in recipients for token in variant}
+        )
 
     @classmethod
     def _names_match(cls, left: str, right: str) -> bool:
@@ -1498,13 +1557,35 @@ class OffeneSendungenService:
         extraction: SendungExtraction,
         context: _SendungBusinessContext,
     ) -> SendungExtraction:
+        explicit_customer = (
+            extraction.customer_name
+            if extraction.customer_name
+            and self._name_matches_case(extraction.customer_name, case, extraction.thread_text)
+            else ""
+        )
+        context_customer = context.customer_name
+        context_address = list(context.address_lines)
+        conflicting_context = bool(
+            explicit_customer
+            and context_customer
+            and not self._names_match(explicit_customer, context_customer)
+        )
+        if conflicting_context:
+            context_customer = ""
+            context_address = []
         address_lines = list(extraction.address_lines)
         address_from_system = False
         mail_address_is_supported = self._is_usable_address(
             address_lines
         ) and self._address_supported_by_text(address_lines, extraction.thread_text)
+        confirmed_name = explicit_customer or context_customer
+        if confirmed_name and self._name_matches_case(confirmed_name, case, extraction.thread_text):
+            mail_address_is_supported = (
+                mail_address_is_supported
+                and not self._address_conflicts_with_customer(address_lines, confirmed_name)
+            )
         if not mail_address_is_supported:
-            address_lines = list(context.address_lines) if context.address_lines else []
+            address_lines = context_address
             address_from_system = bool(address_lines)
 
         products = list(extraction.products)
@@ -1523,7 +1604,7 @@ class OffeneSendungenService:
             or (case.order_number if case.source_type != _SOURCE_GRAPH else "")
         )
         customer_name = (
-            context.customer_name
+            context_customer
             or extraction.customer_name
             or (address_lines[0] if address_lines else "")
             or case.sender_name
@@ -1535,6 +1616,10 @@ class OffeneSendungenService:
         source = "+".join(dict.fromkeys(source_parts))
         confidence_notes = list(extraction.confidence_notes or [])
         confidence_notes.extend(context.confidence_notes)
+        if conflicting_context:
+            confidence_notes.append(
+                "Systemadresse gehört zu einem anderen Kunden; bitte Lieferanschrift prüfen."
+            )
         if context.invoice_number and not context.products:
             confidence_notes.append(
                 "Rechnung zugeordnet, aber keine versandfaehige Position gefunden."

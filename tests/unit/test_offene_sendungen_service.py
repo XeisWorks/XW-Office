@@ -843,6 +843,108 @@ def test_unsubstantiated_ai_address_is_replaced_by_resolved_order_address() -> N
     assert "address-fallback" in result.source
 
 
+def test_stroeher_case_ignores_cached_and_manual_dilly_address() -> None:
+    repo = _Repo()
+    repo.values["daily_business.offene_sendungen.cases"] = json.dumps([{
+        "id": "stroeher", "received_at": "2026-11-16T09:43:59Z",
+        "sender": "office@xeisworks.at", "subject": "Kontakt hat eine neue Einreichung",
+        "snippet": "Hallo Herr Stroeher, zu Wix-Order-Nr.: 21694",
+        "body": "Hallo Herr Stroeher, zu Wix-Order-Nr.: 21694 bitte versenden.",
+        "thread_id": "", "order_number": "21694",
+    }])
+    repo.values["daily_business.offene_sendungen.extractions"] = json.dumps({
+        "stroeher": {
+            "schema_version": 4,
+            "summary": "Kunde: Thorsten Ströher | Bezug: Wix 21694",
+            "customer_name": "Thorsten Ströher",
+            "address_lines": ["Carsten Dilly", "Groß-Zimmerner Straße 12j", "64807 Dieburg"],
+            "thread_text": "Hallo Herr Stroeher, zu Wix-Order-Nr.: 21694 bitte versenden.",
+        },
+    })
+    repo.values["daily_business.offene_sendungen.manual"] = json.dumps({
+        "stroeher": {"address_lines": ["Carsten Dilly", "Groß-Zimmerner Straße 12j",
+                                       "64807 Dieburg"], "products": [], "manual_text": ""},
+    })
+
+    class _Wix:
+        def resolve_latest_shipping_address(self, **_kwargs: object) -> dict[str, object]:
+            return {"address_lines": ["Thorsten Ströher", "Hugo-Herrmann-Straße 15",
+                                      "72766 Reutlingen", "DE"], "order_number": "21694"}
+
+    service = OffeneSendungenService(repo, _Secrets(), _Wix())  # type: ignore[arg-type]
+    service._secrets.values["OPENAI_API_KEY"] = ""  # noqa: SLF001
+    service._secrets.values["MS_GRAPH_TENANT_ID"] = ""  # noqa: SLF001
+    names = service.load_cached_recipient_names(service.load_open_cases())
+    assert names["stroeher"] == "Thorsten Ströher"
+    assert service._load_saved_extraction("stroeher") is None  # noqa: SLF001
+
+    details = service.extract_case_details("stroeher")
+    assert details.address_lines[0] == "Thorsten Ströher"
+    assert "address_lines" not in service.load_manual_fields("stroeher")
+    assert service.create_label_lines(service.load_open_cases()[0])[0] == "Thorsten Ströher"
+
+
+def test_other_customer_address_in_mail_and_system_is_not_used() -> None:
+    service = OffeneSendungenService(_Repo(), _Secrets())  # type: ignore[arg-type]
+    case = SendungCase(
+        id="stroeher", received_at="", sender="office@xeisworks.at",
+        subject="Versand", snippet="", body="", thread_id="", order_number="21694",
+    )
+    extraction = SendungExtraction(
+        summary="Kunde: Thorsten Ströher", customer_name="Thorsten Ströher",
+        address_lines=["Carsten Dilly", "Groß-Zimmerner Straße 12j", "64807 Dieburg"],
+        products=[], thread_text=(
+            "Hallo Herr Stroeher, bitte senden. Frühere Adresse: Carsten Dilly, "
+            "Groß-Zimmerner Straße 12j, 64807 Dieburg."
+        ),
+    )
+    context = _SendungBusinessContext(
+        customer_name="Carsten Dilly",
+        address_lines=("Carsten Dilly", "Groß-Zimmerner Straße 12j", "64807 Dieburg"),
+    )
+    result = service._apply_business_context(case, extraction, context)  # noqa: SLF001
+    assert result.customer_name == "Thorsten Ströher"
+    assert result.address_lines == []
+    assert any("anderen Kunden" in note for note in result.confidence_notes or [])
+
+
+def test_outgoing_stroeher_salutation_rejects_dilly_wix_address_without_ai() -> None:
+    class _Invoices:
+        def search_invoice_summaries(self, _query: str) -> tuple[list[InvoiceSummary], int]:
+            return ([InvoiceSummary(
+                id="99", invoiceNumber="RE-262363", contact_name="Carsten Dilly",
+                order_reference="21694",
+            )], 20)
+
+        def fetch_invoice_by_id(self, _invoice_id: str) -> dict[str, object]:
+            return {"address": "Carsten Dilly\nAltweg 1\n64807 Dieburg"}
+
+        def fetch_invoice_positions(self, _invoice_id: str) -> list[dict[str, object]]:
+            return []
+
+    class _Wix:
+        def resolve_latest_shipping_address(self, **_kwargs: object) -> dict[str, object]:
+            return {
+                "address_lines": ["Carsten Dilly", "Groß-Zimmerner Straße 12j", "64807 Dieburg"],
+                "order_number": "21694",
+            }
+
+    service = OffeneSendungenService(  # type: ignore[arg-type]
+        _Repo(), _Secrets(), _Wix(), invoice_client=_Invoices()
+    )
+    case = SendungCase(
+        id="stroeher", received_at="", sender="office@xeisworks.at",
+        subject="Kontakt hat eine neue Einreichung", snippet="", body="", thread_id="",
+        order_number="21694",
+    )
+    context = service._resolve_business_context(  # noqa: SLF001
+        case, "Hallo Herr Stroeher, zu Wix-Order-Nr.: 21694 bitte versenden."
+    )
+    assert context.address_lines == ()
+    assert context.customer_name == ""
+    assert any("Anrede" in note for note in context.confidence_notes)
+
+
 def test_reference_extraction_distinguishes_invoice_order_and_postal_code() -> None:
     text = (
         "Bei der letzten Bestellung (RE-262363) fehlten zwei Stimmen.\n"
