@@ -913,6 +913,9 @@ class InvoiceProcessingService:
             result["aborted"] = bool(result["aborted"]) or bool(resume_result["aborted"])
             result["resumed"] = int(cast(int, resume_result["processed"]))
             result["resume_failures"] = int(cast(int, resume_result["failures"]))
+            result["blocked_mail_claim_ids"] = list(
+                cast(list[str], resume_result.get("blocked_mail_claim_ids", []))
+            )
             # Recovery work belongs to its original run. Its products and
             # customers must never appear in the new START snapshot.
             result["resumed_summaries"] = cast(
@@ -2513,6 +2516,7 @@ class InvoiceProcessingService:
 
         self._prefetch_wix_order_context(summaries)
         resumable: list[tuple[InvoiceSummary, str]] = []
+        blocked_mail_claim_ids: list[str] = []
         for summary in summaries:
             delivery_kind = self._start_delivery_kind(summary)
             if delivery_kind == "manual-license":
@@ -2541,6 +2545,26 @@ class InvoiceProcessingService:
                     or self._inventory_booking_retry_pending(flags.last_warning)
                 )
             if needs_work:
+                # An uncertain Graph send cannot be replayed safely. Keep the
+                # journal error visible, but do not count the same blocked mail
+                # as a fresh failure on every later START.
+                if not flags.mail_sent:
+                    claim = self._operation_claims.get(summary.id, "invoice_mail")
+                    other_work = bool(
+                        (flags.payment_applicable and not flags.payment_booked)
+                        or (flags.wix_applicable and not flags.wix_fulfilled)
+                        or (
+                            delivery_kind != "digital"
+                            and (
+                                not flags.invoice_printed
+                                or not flags.label_printed
+                                or self._inventory_booking_retry_pending(flags.last_warning)
+                            )
+                        )
+                    )
+                    if claim is not None and claim.state in {"running", "unknown"} and not other_work:
+                        blocked_mail_claim_ids.append(str(summary.id))
+                        continue
                 resumable.append((summary, delivery_kind))
 
         resumable.sort(
@@ -2652,7 +2676,7 @@ class InvoiceProcessingService:
                     "START resume physical invoice=%s outcome=failed: %s", summary.id, exc
                 )
 
-        def run_post_task(task: _StartPostTask) -> tuple[str, bool | None]:
+        def run_post_task(task: _StartPostTask) -> tuple[str, bool | None | str]:
             summary = task.summary
             flags = task.flags
             label = summary.invoice_number or summary.order_reference or summary.id
@@ -2669,6 +2693,16 @@ class InvoiceProcessingService:
                 if not flags.wix_fulfilled:
                     flags = persist(summary, self._run_product_step_compat(summary, flags))
                 if not flags.mail_sent:
+                    claim = self._operation_claims.get(summary.id, "invoice_mail")
+                    if claim is not None and claim.state in {"running", "unknown"}:
+                        persist(summary, replace(
+                            flags,
+                            last_error=flags.last_error or (
+                                f"Rechnungs-Mail unklar (Claim-Status {claim.state}); "
+                                "Postausgang pruefen und Claim manuell abgleichen."
+                            ),
+                        ))
+                        return str(summary.id), "blocked"
                     flags = persist(
                         summary,
                         self._run_mail_step(
@@ -2698,18 +2732,21 @@ class InvoiceProcessingService:
                 futures = [executor.submit(run_post_task, task) for task in post_tasks]
                 for future in as_completed(futures):
                     _invoice_id, ok = future.result()
-                    if ok:
+                    if ok is True:
                         successful += 1
+                    elif ok == "blocked":
+                        blocked_mail_claim_ids.append(_invoice_id)
                     elif ok is None:
                         pass
                     else:
                         failures += 1
 
         logger.info(
-            "START resume metric processed=%s failures=%s successful=%s aborted=%s",
+            "START resume metric processed=%s failures=%s successful=%s blocked_mail=%s aborted=%s",
             processed,
             failures,
             successful,
+            len(blocked_mail_claim_ids),
             aborted,
         )
         return {
@@ -2717,6 +2754,7 @@ class InvoiceProcessingService:
             "run_summaries": processed_summaries,
             "failures": failures,
             "successful": successful,
+            "blocked_mail_claim_ids": blocked_mail_claim_ids,
             "aborted": aborted,
         }
 

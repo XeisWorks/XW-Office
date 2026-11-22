@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -195,6 +196,11 @@ class _RepoStub:
 
     def set_value_json(self, key: str, value_json: str) -> None:
         self._data[key] = value_json
+
+
+class _ClaimRepoStub(_RepoStub):
+    def mutate_value_json(self, key: str, mutator: object) -> None:
+        self._data[key] = mutator(self._data.get(key))  # type: ignore[operator]
 
 
 class _UnavailableRepoStub(_RepoStub):
@@ -1490,6 +1496,118 @@ def test_start_resume_retries_stock_warning_after_other_steps_completed() -> Non
     assert second["processed"] == 1
     assert stock.calls == 2
     assert service.read_fulfillment_flags(summary.id).last_warning == ""
+
+
+def test_start_resume_reports_uncertain_mail_without_retry_or_refreshing_age() -> None:
+    summary = InvoiceSummary(
+        id="mail-resume-unknown",
+        invoiceNumber="RE-MAIL-RESUME-UNKNOWN",
+        status_code=1000,
+        order_reference="20530",
+    )
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads[summary.id] = {
+        "id": summary.id,
+        "invoiceNumber": summary.invoice_number,
+        "status": 1000,
+        "customerInternalNote": summary.order_reference,
+        "contact": {"emails": [{"value": "max@example.test"}]},
+    }
+    mailer = _MailServiceStub()
+    repo = _ClaimRepoStub({})
+    service = InvoiceProcessingService(
+        AppConfig(), client, repo, _WixOrdersStub(), mailer  # type: ignore[arg-type]
+    )
+    original_stamp = datetime.now(timezone.utc).isoformat()
+    service.write_fulfillment_flags(
+        summary.id,
+        FulfillmentFlags(
+            invoice_printed=True,
+            label_printed=True,
+            payment_applicable=True,
+            payment_booked=True,
+            wix_applicable=True,
+            wix_fulfilled=True,
+            mail_applicable=True,
+            last_run_iso=original_stamp,
+            last_error="Graph API Fehler 502; Mailausgang unklar",
+        ),
+    )
+    claim = service._operation_claims.acquire(summary.id, "invoice_mail")  # noqa: SLF001
+    service._operation_claims.finish(claim, "unknown", error="Graph API Fehler 502")  # noqa: SLF001
+
+    for _ in range(2):
+        result = service._resume_incomplete_fulfillment(  # noqa: SLF001
+            should_abort=None, progress_callback=None, mail_recipient_override=None
+        )
+        assert result["processed"] == 0
+        assert result["failures"] == 0
+        assert result["blocked_mail_claim_ids"] == [summary.id]
+        assert service.read_fulfillment_flags(summary.id).last_run_iso == original_stamp
+        assert mailer.calls == []
+
+    service._operation_claims.reconcile_unknown(  # noqa: SLF001
+        summary.id, "invoice_mail", claim.operation_id, "succeeded",
+        reconciled_by="Test", evidence="Im Postausgang bestätigt",
+    )
+    result = service._resume_incomplete_fulfillment(  # noqa: SLF001
+        should_abort=None, progress_callback=None, mail_recipient_override=None
+    )
+    assert result["processed"] == 1
+    assert result["successful"] == 1
+    assert result["blocked_mail_claim_ids"] == []
+    assert service.read_fulfillment_flags(summary.id).mail_sent is True
+    assert mailer.calls == []
+
+
+def test_start_resume_finishes_other_work_but_keeps_uncertain_mail_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    summary = InvoiceSummary(
+        id="mail-blocked-with-wix", invoiceNumber="RE-MAIL-WIX",
+        status_code=1000, order_reference="20531",
+    )
+    client = _InvoiceClientStub([summary])
+    client.invoice_payloads[summary.id] = {
+        "id": summary.id, "status": 1000,
+        "customerInternalNote": summary.order_reference,
+    }
+    mailer = _MailServiceStub()
+    service = InvoiceProcessingService(
+        AppConfig(), client, _ClaimRepoStub({}), _WixOrdersStub(), mailer  # type: ignore[arg-type]
+    )
+    service.write_fulfillment_flags(
+        summary.id,
+        FulfillmentFlags(
+            invoice_printed=True, label_printed=True,
+            payment_applicable=True, payment_booked=True,
+            wix_applicable=True, wix_fulfilled=False,
+            last_run_iso=datetime.now(timezone.utc).isoformat(),
+            last_error="Graph 502; Mailausgang unklar",
+        ),
+    )
+    claim = service._operation_claims.acquire(summary.id, "invoice_mail")  # noqa: SLF001
+    service._operation_claims.finish(claim, "unknown")  # noqa: SLF001
+    monkeypatch.setattr(
+        service, "_run_product_step_compat", lambda _summary, flags: replace(flags, wix_fulfilled=True)
+    )
+
+    first = service._resume_incomplete_fulfillment(  # noqa: SLF001
+        should_abort=None, progress_callback=None, mail_recipient_override=None
+    )
+    assert first["processed"] == 1
+    assert first["successful"] == 0
+    assert first["failures"] == 0
+    assert first["blocked_mail_claim_ids"] == [summary.id]
+    assert service.read_fulfillment_flags(summary.id).wix_fulfilled is True
+    assert service.read_fulfillment_flags(summary.id).last_error
+    assert mailer.calls == []
+
+    second = service._resume_incomplete_fulfillment(  # noqa: SLF001
+        should_abort=None, progress_callback=None, mail_recipient_override=None
+    )
+    assert second["processed"] == 0
+    assert second["blocked_mail_claim_ids"] == [summary.id]
 
 
 def test_finalize_books_product_hub_inventory_after_successful_sevdesk_release() -> None:

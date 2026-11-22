@@ -203,6 +203,7 @@ class _PrintRunSnapshot:
     mode_label: str = "START"
     processed: int = 0
     failures: int = 0
+    blocked_mail_claims: int = 0
     selected_only: bool = False
 
 
@@ -3717,6 +3718,7 @@ class RechnungenView(QWidget):
         *,
         processed: int = 0,
         failures: int = 0,
+        blocked_mail_claims: int = 0,
         selected_only: bool = False,
         mode_label: str = "START",
         invoice_print_ids: list[str] | None = None,
@@ -3765,6 +3767,7 @@ class RechnungenView(QWidget):
             mode_label=mode_label,
             processed=max(0, int(processed or 0)),
             failures=max(0, int(failures or 0)),
+            blocked_mail_claims=max(0, int(blocked_mail_claims or 0)),
             selected_only=bool(selected_only),
         )
         self._print_run_history.insert(0, snapshot)
@@ -3790,10 +3793,13 @@ class RechnungenView(QWidget):
             return "Aktuell geladene Rechnungsentwürfe mit Status 100"
         snapshot = self._print_run_history[index - 1]
         scope = "SELECTED" if snapshot.selected_only else "ALL DRAFTS"
-        return (
+        tooltip = (
             f"{snapshot.saved_at} · {snapshot.mode_label} · {scope} · "
             f"{snapshot.processed} verarbeitet, {snapshot.failures} Fehler"
         )
+        if snapshot.blocked_mail_claims:
+            tooltip += f", {snapshot.blocked_mail_claims} ungeklärte Mails"
+        return tooltip
 
     def _rebuild_print_product_tabs(self, *, select_history: bool = False) -> None:
         tabs = self._print_products_tabs
@@ -4132,6 +4138,7 @@ class RechnungenView(QWidget):
             "mode_label": snapshot.mode_label,
             "processed": snapshot.processed,
             "failures": snapshot.failures,
+            "blocked_mail_claims": snapshot.blocked_mail_claims,
             "selected_only": snapshot.selected_only,
             "invoice_print_ids": list(snapshot.invoice_print_ids),
             "label_print_ids": list(snapshot.label_print_ids),
@@ -4534,6 +4541,7 @@ class RechnungenView(QWidget):
                 mode_label=str(raw.get("mode_label") or "START"),
                 processed=processed,
                 failures=failures,
+                blocked_mail_claims=max(0, _int_or_default(raw.get("blocked_mail_claims"), 0)),
                 selected_only=bool(raw.get("selected_only")),
             ))
         if not restored:

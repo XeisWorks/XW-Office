@@ -74,7 +74,7 @@ def test_recovery_rows_do_not_enter_new_start_history(monkeypatch) -> None:
     monkeypatch.setattr(service, "filter_start_ready", lambda rows: rows)
     monkeypatch.setattr(service, "_resume_incomplete_fulfillment", lambda **_kw: {
         "processed": 1, "failures": 0, "successful": 1, "aborted": False,
-        "run_summaries": [old],
+        "run_summaries": [old], "blocked_mail_claim_ids": ["uncertain-mail"],
     })
     monkeypatch.setattr(service, "_prefetch_wix_order_context", lambda _rows: None)
     monkeypatch.setattr(service, "_start_delivery_kind", lambda _row: "physical")
@@ -87,6 +87,7 @@ def test_recovery_rows_do_not_enter_new_start_history(monkeypatch) -> None:
     result = service.run_start_fullflow(full_mode=True)
     assert [row.id for row in result["run_summaries"]] == ["new"]
     assert [row.id for row in result["resumed_summaries"]] == ["old"]
+    assert result["blocked_mail_claim_ids"] == ["uncertain-mail"]
 
 
 def test_start_refresh_preserves_embedded_contact_name(monkeypatch) -> None:

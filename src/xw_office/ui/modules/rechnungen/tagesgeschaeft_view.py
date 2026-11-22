@@ -1843,7 +1843,11 @@ class TagesgeschaeftView(QWidget):
 
         processed = _count_or_zero(batch.get("processed"))
         failures = _count_or_zero(batch.get("failures"))
-        successful = _count_or_zero(batch.get("successful")) or max(0, processed - failures)
+        successful = (
+            _count_or_zero(batch.get("successful"))
+            if "successful" in batch else max(0, processed - failures)
+        )
+        blocked_mail_claim_ids = _string_items(batch.get("blocked_mail_claim_ids", []))
         full_mode = bool(batch.get("full_mode"))
         print_products = bool(batch.get("print_products"))
         aborted = bool(batch.get("aborted"))
@@ -1851,14 +1855,20 @@ class TagesgeschaeftView(QWidget):
         mode_label = StartMode.INVOICES_AND_PRINT.value if full_mode else StartMode.INVOICES_ONLY.value
 
         signals: AppSignals = self._container.resolve(AppSignals)
+        blocked_suffix = (
+            f", ungeklärte Mails: {len(blocked_mail_claim_ids)}"
+            if blocked_mail_claim_ids else ""
+        )
         if aborted:
             signals.status_message.emit(
-                f"START gestoppt: {successful}/{processed} Rechnungen verarbeitet, Fehler: {failures}",
+                f"START gestoppt: {successful}/{processed} Rechnungen verarbeitet, "
+                f"Fehler: {failures}{blocked_suffix}",
                 5000,
             )
         else:
             signals.status_message.emit(
-                f"START ausgefuehrt: {processed} Rechnungen ({mode_label}), Fehler: {failures}",
+                f"START ausgefuehrt: {processed} Rechnungen ({mode_label}), "
+                f"Fehler: {failures}{blocked_suffix}",
                 5000,
             )
 
@@ -1869,6 +1879,12 @@ class TagesgeschaeftView(QWidget):
             f"Erfolgreich: {successful}",
             f"Fehler: {failures}",
         ]
+        if blocked_mail_claim_ids:
+            lines.append(
+                "Ungeklärte Rechnungs-Mails: "
+                + ", ".join(blocked_mail_claim_ids)
+                + " (Postausgang prüfen und Claims manuell abgleichen)"
+            )
         if pending_license_ids:
             lines.append(f"Digitale Lieferungen offen: {len(pending_license_ids)}")
         if aborted:
@@ -1910,6 +1926,7 @@ class TagesgeschaeftView(QWidget):
                 self._rechnungen_view.mark_print_products_last_run(
                     processed=len(run_summaries),
                     failures=failures,
+                    blocked_mail_claims=len(blocked_mail_claim_ids),
                     selected_only=self._start_selected_only,
                     mode_label=mode_label,
                     invoice_print_ids=[

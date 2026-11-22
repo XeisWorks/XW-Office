@@ -2605,10 +2605,12 @@ def test_start_history_keeps_five_exact_runs_with_customers(qtbot: object) -> No
             contact_name=f"Kunde {number}",
         )
         view.mark_print_products_last_run(
-            run_overview=overview, run_summaries=[summary], invoice_print_ids=[str(number)]
+            run_overview=overview, run_summaries=[summary], invoice_print_ids=[str(number)],
+            blocked_mail_claims=2 if number == 6 else 0,
         )
 
     assert view._print_products_tabs is not None  # noqa: SLF001
+    assert "2 ungeklärte Mails" in view._print_products_tabs.tabToolTip(1)  # noqa: SLF001
     assert [view._print_products_tabs.tabText(index) for index in range(6)] == [  # noqa: SLF001
         "AKTUELL", "LAST RUN", "RUN −2", "RUN −3", "RUN −4", "RUN −5",
     ]
@@ -2635,6 +2637,7 @@ def test_start_history_keeps_five_exact_runs_with_customers(qtbot: object) -> No
     assert [run.print_products[0].sku for run in restarted._print_run_history] == [  # noqa: SLF001
         f"SKU-{number}" for number in range(6, 1, -1)
     ]
+    assert restarted._print_run_history[0].blocked_mail_claims == 2  # noqa: SLF001
     qtbot.waitUntil(
         lambda: view._print_history_worker is None  # noqa: SLF001
         and restarted._print_history_worker is None  # noqa: SLF001
