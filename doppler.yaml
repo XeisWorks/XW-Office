@@ -1,0 +1,3 @@
+setup:
+  - project: xw-office-desktop
+    config: prd

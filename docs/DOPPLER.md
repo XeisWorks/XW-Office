@@ -10,9 +10,14 @@ keine `.env` erforderlich.
 1. Doppler CLI installieren: `winget install --id Doppler.doppler --exact --source winget`.
 2. Ein neues Terminal oeffnen und `doppler login` ausfuehren. Die Anmeldung
    erfolgt im Browser. Zugang auf `xw-office-desktop/prd` muss freigeschaltet sein.
-3. Die virtuelle Python-Umgebung und Startmenue-Verknuepfungen wie im
+3. Im Repository-Stamm `doppler setup` ausfuehren. Die versionierte
+   `doppler.yaml` waehlt `xw-office-desktop/prd` vor; die lokale Zuordnung
+   speichert Doppler ausserhalb des Repositorys. Danach funktionieren auch
+   `doppler run --no-fallback -- ...` und `doppler secrets get NAME`
+   ohne Projekt- und Config-Flags aus dem Repository heraus.
+4. Die virtuelle Python-Umgebung und Startmenue-Verknuepfungen wie im
    [Multi-PC-Leitfaden](multi_pc_betriebsleitfaden.md) einrichten.
-4. `doppler run --no-fallback --project xw-office-desktop --config prd --
+5. `doppler run --no-fallback --project xw-office-desktop --config prd --
    .\.venv\Scripts\python.exe scripts\verify_doppler_import.py`
    prueft nur das Vorhandensein der Startwerte und gibt sie nicht aus.
 

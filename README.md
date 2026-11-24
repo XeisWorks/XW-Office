@@ -125,9 +125,10 @@ pip install -e ".[dev]"
 # Set up Doppler for the Windows desktop app (see docs/DOPPLER.md)
 winget install --id Doppler.doppler --exact --source winget
 doppler login
+doppler setup
 
 # Run (visible console, for development/diagnosis)
-python -m xw_office
+doppler run --no-fallback -- .venv\Scripts\python.exe -m xw_office
 ```
 
 ### Verbindliche Python-Umgebung
