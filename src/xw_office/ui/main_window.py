@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Callable
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QCoreApplication, QTimer
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -502,3 +502,5 @@ class MainWindow(QMainWindow):
         self._shutdown_finished = True
         logger.info("All background work stopped; closing application window")
         self.close()
+        # The window was already hidden, so Qt does not emit lastWindowClosed.
+        QCoreApplication.quit()

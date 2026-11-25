@@ -29,6 +29,10 @@
     Ueberspringt die Pruefung auf einen laufenden XW-Office-Prozess. Nur fuer den Fall,
     dass die Prozesserkennung auf einem PC nicht zuverlaessig funktioniert.
 
+.PARAMETER CheckRunningOnly
+    Prueft vor dem automatischen Update-Angebot nur die laufenden Instanzen.
+    Exit-Code 0: frei, 2: XW-Office laeuft, 1: Pruefung fehlgeschlagen.
+
 .PARAMETER ExcludeProcessId
     Schliesst Prozess-IDs von der Laeuft-bereits-Pruefung aus. Wird vom fensterlosen
     GUI-Bootstrap (scripts\xw_office_gui.pyw) gesetzt, wenn dieser den automatischen
@@ -43,6 +47,7 @@
 param(
     [switch]$StartAfterUpdate,
     [switch]$SkipRunningCheck,
+    [switch]$CheckRunningOnly,
     [string]$ExcludeProcessId = '0'
 )
 
@@ -50,7 +55,6 @@ $ErrorActionPreference = 'Stop'
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $LogDir = Join-Path $RepoRoot 'logs'
-New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $LogFile = Join-Path $LogDir 'xw_office_update.log'
 
 function Write-UpdateLog {
@@ -76,7 +80,10 @@ function Stop-UpdateWithError {
     exit 1
 }
 
-Write-UpdateLog "Update gestartet. Repo: $RepoRoot"
+if (-not $CheckRunningOnly) {
+    New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+    Write-UpdateLog "Update gestartet. Repo: $RepoRoot"
+}
 
 $ExcludedProcessIds = @(
     $ExcludeProcessId -split ',' |
@@ -85,7 +92,7 @@ $ExcludedProcessIds = @(
 )
 
 # 2) Sicherstellen, dass XW-Office nicht laeuft.
-if (-not $SkipRunningCheck) {
+if ($CheckRunningOnly -or -not $SkipRunningCheck) {
     $running = $null
     try {
         $running = Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
@@ -99,14 +106,20 @@ if (-not $SkipRunningCheck) {
             }
     }
     catch {
-        Write-UpdateLog "WARNUNG: Laufende-Prozess-Pruefung nicht moeglich ($($_.Exception.Message)). Fahre fort."
+        if ($CheckRunningOnly) { exit 1 }
+        Stop-UpdateWithError "Pruefung auf laufende XW-Office-Prozesse fehlgeschlagen ($($_.Exception.Message))."
     }
 
     if ($running) {
-        $pids = ($running | Select-Object -ExpandProperty ProcessId) -join ', '
-        Stop-UpdateWithError "XW-Office scheint noch zu laufen (PID $pids). Bitte App schliessen und Update erneut starten. Mit -SkipRunningCheck kann diese Pruefung uebersprungen werden."
+        if (-not $CheckRunningOnly) {
+            $pids = ($running | Select-Object -ExpandProperty ProcessId) -join ', '
+            Write-UpdateLog "Update verschoben: XW-Office laeuft noch (PID $pids). Bitte App schliessen und Update erneut starten."
+        }
+        exit 2
     }
 }
+
+if ($CheckRunningOnly) { exit 0 }
 
 # 3) Sauberer Arbeitsbaum.
 $status = Invoke-GitCapture -GitArgs @('status', '--porcelain')

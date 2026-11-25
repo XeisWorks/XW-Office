@@ -249,8 +249,9 @@ Empfehlung Rollenmodell:
 ## 5) Update-Routine
 
 - Normalfall: beim Start ueber "XeisWorks Office" prueft die App selbst lautlos, ob ein Update
-  vorliegt, und fragt per Dialog nach ("Jetzt aktualisieren?" / "Nein"). Kein separater Schritt
-  noetig.
+  vorliegt. Sobald keine andere Office-Instanz mehr laeuft, fragt sie per Dialog nach
+  ("Jetzt aktualisieren?" / "Nein"). Beim Schliessen kann laufende Hintergrundarbeit noch
+  beendet werden, bevor der Prozess endet.
 - Vor Schichtbeginn zusaetzlich sinnvoll:
   - DB-Status in Einstellungen kurz pruefen.
   - Druckerampel pruefen (Druck-PC).

@@ -18,12 +18,15 @@ from pathlib import Path
 APP_USER_MODEL_ID = "at.xeisworks.xwoffice"
 MB_ICONERROR = 0x10
 MB_ICONQUESTION = 0x20
+MB_ICONINFORMATION = 0x40
 MB_YESNO = 0x04
 IDYES = 6
 
 GIT_TIMEOUT_LOCAL = 5
 GIT_TIMEOUT_FETCH = 8
+RUNNING_CHECK_TIMEOUT = 5
 UPDATE_SCRIPT_TIMEOUT = 180
+UPDATE_OFFICE_RUNNING = 2
 
 
 def _repo_root() -> Path:
@@ -48,13 +51,17 @@ def _log_bootstrap_error(log_path: Path, exc: BaseException) -> None:
         pass
 
 
-def _show_error(title: str, message: str) -> None:
+def _show_message(title: str, message: str, icon: int) -> None:
     if sys.platform != "win32":
         return
     try:
-        ctypes.windll.user32.MessageBoxW(0, message, title, MB_ICONERROR)
+        ctypes.windll.user32.MessageBoxW(0, message, title, icon)
     except (AttributeError, OSError):
         pass
+
+
+def _show_error(title: str, message: str) -> None:
+    _show_message(title, message, MB_ICONERROR)
 
 
 def _set_app_user_model_id() -> None:
@@ -104,7 +111,7 @@ def _update_available(repo_root: Path) -> bool:
         return False  # offline or unreachable: skip silently, never block the start
 
     diff = _git(repo_root, ["diff", "--quiet", "HEAD", "origin/main"], GIT_TIMEOUT_LOCAL)
-    return diff is not None and diff.returncode != 0
+    return diff is not None and diff.returncode == 1
 
 
 def _ask_update_now() -> bool:
@@ -124,52 +131,61 @@ def _ask_update_now() -> bool:
     return choice == IDYES
 
 
-def _run_update(repo_root: Path) -> bool:
+def _run_updater(repo_root: Path, *, check_running_only: bool = False) -> int | None:
     update_script = repo_root / "scripts" / "update_xw_office.ps1"
     if not update_script.exists():
-        return False
+        return None
+    command = [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(update_script),
+        "-ExcludeProcessId",
+        # Windows venvs may run both a redirector and its actual interpreter.
+        f"{os.getpid()},{os.getppid()}",
+    ]
+    if check_running_only:
+        command.append("-CheckRunningOnly")
     try:
         result = subprocess.run(
-            [
-                "powershell.exe",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                str(update_script),
-                "-ExcludeProcessId",
-                # A venv's pythonw.exe can be a Windows redirector which starts the
-                # actual interpreter as its child.  Excluding only this interpreter
-                # would make the updater mistake the redirector for an already
-                # running Office instance.
-                f"{os.getpid()},{os.getppid()}",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=UPDATE_SCRIPT_TIMEOUT,
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=RUNNING_CHECK_TIMEOUT if check_running_only else UPDATE_SCRIPT_TIMEOUT,
             creationflags=_creationflags(),
         )
-        return result.returncode == 0
+        return result.returncode
     except (OSError, subprocess.SubprocessError):
-        return False
+        return None
 
 
 def _maybe_offer_update(repo_root: Path) -> None:
-    """Silent, fail-open update check. Never delays or blocks the normal start beyond
-    the short git timeouts above, and never touches a dirty or non-standard checkout."""
+    """Offer an update only after checking Git status and running Office processes."""
     if os.getenv("XW_OFFICE_SKIP_UPDATE_CHECK"):
         return
     try:
         if not _update_available(repo_root):
             return
+        if _run_updater(repo_root, check_running_only=True) != 0:
+            return
         if not _ask_update_now():
             return
-        if not _run_update(repo_root):
+        result = _run_updater(repo_root)
+        if result == UPDATE_OFFICE_RUNNING:
+            _show_message(
+                "XeisWorks Office: Update verschoben",
+                "Eine andere Office-Instanz ist noch aktiv oder wird gerade beendet.\n\n"
+                "Das Update wird beim naechsten Start erneut angeboten, sobald alle Instanzen beendet sind.",
+                MB_ICONINFORMATION,
+            )
+        elif result != 0:
             _show_error(
                 "XeisWorks Office: Update fehlgeschlagen",
                 "Das automatische Update ist fehlgeschlagen. Details: "
                 f"{repo_root / 'logs' / 'xw_office_update.log'}\n\n"
-                "XeisWorks Office startet mit der bisherigen Version weiter.",
+                "XeisWorks Office setzt den Start fort.",
             )
     except Exception:
         pass  # the update check must never crash or block the normal start
