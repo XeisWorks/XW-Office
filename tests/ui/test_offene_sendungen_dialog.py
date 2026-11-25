@@ -121,6 +121,26 @@ def _wait_dialog_loaded(qtbot: object, dialog: OffeneSendungenDialog) -> None:
     qtbot.waitUntil(lambda: "Max Muster" in dialog._address.toPlainText(), timeout=3000)  # noqa: SLF001
 
 
+def test_refresh_keeps_selection_changed_while_loading(qtbot: object) -> None:
+    service = _FakeSendungenService()
+    service._cases.append(replace(service._cases[0], id="m2", subject="Zweiter Fall"))
+    dialog = OffeneSendungenDialog(_FakeContainer(service))  # type: ignore[arg-type]
+    qtbot.addWidget(dialog)
+    _wait_dialog_loaded(qtbot, dialog)
+    dialog._silent_refresh_timer.stop()  # noqa: SLF001
+    dialog._list.setCurrentRow(1)  # noqa: SLF001
+    qtbot.waitUntil(lambda: dialog._detail_worker is None, timeout=3000)  # noqa: SLF001
+
+    # The refresh started with m1 selected, but m2 is selected when it completes.
+    dialog._on_cases_loaded(  # noqa: SLF001
+        dialog._load_seq, (service, list(service._cases), {}, {}),  # noqa: SLF001
+        preserve=True, selected_id="m1",
+    )
+
+    assert dialog._current_case().id == "m2"  # noqa: SLF001
+    assert dialog._list.currentRow() == 1  # noqa: SLF001
+
+
 def test_dialog_constructor_does_not_refresh_graph_synchronously(qtbot: object) -> None:
     service = _FakeSendungenService()
     dialog = OffeneSendungenDialog(_FakeContainer(service))  # type: ignore[arg-type]

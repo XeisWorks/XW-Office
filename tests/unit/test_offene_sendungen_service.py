@@ -863,7 +863,8 @@ def test_stroeher_case_ignores_cached_and_manual_dilly_address() -> None:
     })
     repo.values["daily_business.offene_sendungen.manual"] = json.dumps({
         "stroeher": {"address_lines": ["Carsten Dilly", "Groß-Zimmerner Straße 12j",
-                                       "64807 Dieburg"], "products": [], "manual_text": ""},
+                                       "64807 Dieburg"],
+                     "products": [{"name": "Fremdes Produkt"}], "manual_text": "Fremde Notiz"},
     })
 
     class _Wix:
@@ -880,7 +881,7 @@ def test_stroeher_case_ignores_cached_and_manual_dilly_address() -> None:
 
     details = service.extract_case_details("stroeher")
     assert details.address_lines[0] == "Thorsten Ströher"
-    assert "address_lines" not in service.load_manual_fields("stroeher")
+    assert service.load_manual_fields("stroeher") == {}
     assert service.create_label_lines(service.load_open_cases()[0])[0] == "Thorsten Ströher"
 
 

@@ -464,6 +464,11 @@ class OffeneSendungenDialog(QDialog):
             return
         if seq != self._load_seq:
             return
+        # The user may have selected another case while the refresh was running.
+        # Preserve the selection at completion, together with its displayed details.
+        if preserve:
+            current = self._current_case()
+            selected_id = current.id if current is not None else ""
         if isinstance(result, tuple) and len(result) == 4:
             service, cases, names, summaries = result
             self._cached_summaries = dict(summaries)
@@ -496,6 +501,7 @@ class OffeneSendungenDialog(QDialog):
         if self._cases:
             self._list.setCurrentRow(selected_row)
         else:
+            self._invalidate_detail_load()
             self._clear_detail("Keine offenen Sendungen.")
         self._list.blockSignals(False)
         selection_preserved = bool(

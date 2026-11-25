@@ -558,8 +558,8 @@ class OffeneSendungenService:
         extraction = self._load_json_map(_EXTRACTIONS_KEY).get(str(case_id or "").strip())
         expected_name = self._confirmed_customer_name(case, extraction) if case else ""
         if self._address_conflicts_with_customer(value.get("address_lines"), expected_name):
-            logger.warning("Mismatched saved shipping recipient ignored for case %s", case_id)
-            return {key: item for key, item in value.items() if key != "address_lines"}
+            logger.warning("Mismatched saved shipping fields ignored for case %s", case_id)
+            return {}
         return value
 
     @classmethod
