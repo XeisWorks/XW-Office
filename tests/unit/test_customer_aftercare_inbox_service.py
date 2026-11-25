@@ -115,6 +115,35 @@ def test_poll_inbox_ignores_non_candidate_mails(
     assert repo.count_pending_review() == 0
 
 
+@pytest.mark.parametrize("dedicated", [False, True])
+def test_refund_mail_never_creates_delivery_case(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch, dedicated: bool,
+) -> None:
+    class _GraphClient:
+        def __init__(self, **kwargs: Any) -> None:
+            self.mailbox = kwargs.get("mailbox_user", "")
+
+        def has_silent_token(self) -> bool:
+            return True
+
+        def list_inbox_messages(self, *, days: int, top: int) -> list[dict[str, Any]]:
+            if dedicated != (self.mailbox == "nachlieferung@xeisworks.at"):
+                return []
+            return [_message(
+                "refund-mail", "Rückerstattung zu Bestellung 21863",
+                "Nachlieferung wird nicht benötigt; der Artikel wurde erstattet.",
+            )]
+
+    monkeypatch.setattr(
+        "xw_office.services.customer_aftercare.inbox_service.GraphMailClient", _GraphClient
+    )
+    repo = CustomerAftercareRepository(session_factory)
+    result = CustomerAftercareInboxService(repo, _Secrets()).poll_inbox(allow_interactive_auth=False)
+
+    assert result.new_cases == 0
+    assert repo.count_pending_review() == 0
+
+
 def test_poll_inbox_is_idempotent_across_repeated_polls(
     session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:

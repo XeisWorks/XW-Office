@@ -35,6 +35,7 @@ _DEFAULT_AFTERCARE_MAILBOX = "nachlieferung@xeisworks.at"
 
 _EXCLUDED_WIX_SENDER = "no-reply@mystore.wix.com"
 _EXCLUDED_OWN_SENDERS = {"office@xeisworks.at", "shop@xeisworks.at"}
+_REFUND_TERMS = ("refund", "rückerstatt", "rueckerstatt", "erstattung", "gutschrift", "storno")
 
 #: Cheap subject/body pre-filter so every shop@ mail doesn't turn into an AI
 #: call + PENDING_REVIEW case — only candidates get classified (spec §3).
@@ -121,6 +122,8 @@ class CustomerAftercareInboxService:
                     continue
                 if message_id:
                     seen_ids.add(message_id)
+                if self._is_refund_message(msg):
+                    continue
                 if (is_dedicated and self._is_unresolved(msg)) or (
                     not is_dedicated and self._is_candidate(msg)
                 ):
@@ -507,6 +510,16 @@ class CustomerAftercareInboxService:
         body = str(body_obj.get("content") or "").strip().lower()
         haystack = f"{subject}\n{preview}\n{body}"
         return any(keyword in haystack for keyword in _CANDIDATE_KEYWORDS)
+
+    @classmethod
+    def _is_refund_message(cls, msg: dict[str, Any]) -> bool:
+        """Keep payment/refund correspondence out of the delivery case queue."""
+        if cls._sender_address(msg).casefold() == _EXCLUDED_WIX_SENDER:
+            return True
+        subject = str(msg.get("subject") or "")
+        body = cls._body_text(msg)
+        text = f"{subject}\n{body}".casefold()
+        return any(term in text for term in _REFUND_TERMS)
 
     @staticmethod
     def _is_unresolved(msg: dict[str, Any]) -> bool:
