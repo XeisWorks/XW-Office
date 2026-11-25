@@ -71,6 +71,7 @@ class _FakeSendungenService:
         address_lines: list[str],
         products: list[SendungProductLine],
         manual_text: str = "",
+        baseline: SendungExtraction | None = None,
     ) -> None:
         self.saved_manual.append(
             {
@@ -78,6 +79,7 @@ class _FakeSendungenService:
                 "address_lines": address_lines,
                 "products": products,
                 "manual_text": manual_text,
+                "baseline": baseline,
             }
         )
 

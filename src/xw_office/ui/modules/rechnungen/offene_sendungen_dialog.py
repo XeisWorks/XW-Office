@@ -177,6 +177,7 @@ class OffeneSendungenDialog(QDialog):
         self._closing = False
         self._load_seq = 0
         self._detail_seq = 0
+        self._loaded_detail: tuple[str, SendungExtraction] | None = None
         self._recipient_names: dict[str, str] = {}
         self._silent_refresh_scheduled = False
         self._silent_refresh_pending = False
@@ -630,6 +631,7 @@ class OffeneSendungenDialog(QDialog):
     def _invalidate_detail_load(self) -> None:
         """Ignore obsolete detail results and stop publishing redundant work."""
         self._detail_seq += 1
+        self._loaded_detail = None
         worker = self._detail_worker
         if worker is not None and worker.isRunning():
             worker.cancel()
@@ -665,7 +667,7 @@ class OffeneSendungenDialog(QDialog):
             if isinstance(manual_address, list) and manual_address:
                 address = [str(line).strip() for line in manual_address if str(line).strip()]
             manual_products = manual.get("products")
-            if isinstance(manual_products, list) and manual_products:
+            if isinstance(manual_products, list) and (manual_products or manual.get("edits_only")):
                 products = [
                     SendungProductLine(
                         quantity=str(item.get("quantity") or "1").strip(),
@@ -691,17 +693,23 @@ class OffeneSendungenDialog(QDialog):
                 item.setText(self._case_list_text(case, recipient_name=recipient_name))
         self._set_products(products)
         previous_summary = str(manual.get("_previous_summary") or "") if isinstance(manual, dict) else ""
-        legacy_summary = manual_text == extraction.summary or manual_text == previous_summary or (
+        legacy_summary = manual_text == extraction.summary or (
+            bool(previous_summary) and manual_text == previous_summary
+        ) or (
             "Produkte:" in manual_text and "Lieferanschrift:" in manual_text
         ) or (
             manual_text.startswith("Betreff:") and "Inhalt (Kurzfassung):" in manual_text
         )
+        explicit_note = (
+            isinstance(manual, dict) and manual.get("edits_only") and "manual_text" in manual
+        )
         self._manual_text.setPlainText(
-            extraction.short_note if not manual_text or legacy_summary else manual_text
+            manual_text if (manual_text or explicit_note) and not legacy_summary else extraction.short_note
         )
         notes = ", ".join(extraction.confidence_notes or [])
         suffix = f" | {notes}" if notes else ""
         self._detail_status.setText(f"Quelle: {extraction.source}{suffix}")
+        self._loaded_detail = (case_id, extraction)
         self._set_actions_enabled(True)
         self._schedule_silent_refresh()
 
@@ -744,7 +752,7 @@ class OffeneSendungenDialog(QDialog):
         if seq != self._detail_seq:
             return
         self._detail_status.setText("Quelle: Laden fehlgeschlagen")
-        self._set_actions_enabled(True)
+        self._btn_extract.setEnabled(True)
         self._schedule_silent_refresh()
         QMessageBox.warning(self, "OFFENE SENDUNGEN", f"Details konnten nicht geladen werden:\n\n{exc}")
 
@@ -840,15 +848,20 @@ class OffeneSendungenDialog(QDialog):
         value = index.data(Qt.ItemDataRole.DisplayRole) if index.isValid() else ""
         return str(value or "").strip()
 
-    def _print_label(self) -> None:
+    def _current_detail(self) -> tuple[str, SendungExtraction] | None:
         case = self._current_case()
-        if case is None:
+        detail = self._loaded_detail
+        return detail if case is not None and detail is not None and detail[0] == case.id else None
+
+    def _print_label(self) -> None:
+        detail = self._current_detail()
+        if detail is None:
             return
         lines = self._address_lines()
         if not lines:
             QMessageBox.information(self, "Label", "Keine Adresszeilen vorhanden.")
             return
-        case_id = case.id
+        case_id, baseline = detail
         products = self._products_from_table()
         manual_text = self._manual_text.toPlainText()
 
@@ -858,6 +871,7 @@ class OffeneSendungenDialog(QDialog):
                 address_lines=lines,
                 products=products,
                 manual_text=manual_text,
+                baseline=baseline,
             )
             printer = LabelPrinter(
                 self._container.config.printing,
@@ -880,7 +894,7 @@ class OffeneSendungenDialog(QDialog):
         request = self._delivery_note_request()
         if request is None:
             return
-        case_id, address, products, short_note = request
+        case_id, address, products, short_note, baseline = request
 
         def job() -> Path:
             return self._require_service().generate_delivery_note_pdf(
@@ -888,6 +902,7 @@ class OffeneSendungenDialog(QDialog):
                 address_lines=address,
                 products=products,
                 short_note=short_note,
+                baseline=baseline,
             )
 
         self._start_action(
@@ -905,7 +920,7 @@ class OffeneSendungenDialog(QDialog):
         request = self._delivery_note_request()
         if request is None:
             return
-        case_id, address, products, short_note = request
+        case_id, address, products, short_note, baseline = request
 
         def job() -> Path:
             service = self._require_service()
@@ -914,6 +929,7 @@ class OffeneSendungenDialog(QDialog):
                 address_lines=address,
                 products=products,
                 short_note=short_note,
+                baseline=baseline,
             )
             service.print_delivery_note(
                 path,
@@ -936,10 +952,11 @@ class OffeneSendungenDialog(QDialog):
 
     def _delivery_note_request(
         self,
-    ) -> tuple[str, list[str], list[SendungProductLine], str] | None:
-        case = self._current_case()
-        if case is None:
+    ) -> tuple[str, list[str], list[SendungProductLine], str, SendungExtraction] | None:
+        detail = self._current_detail()
+        if detail is None:
             return None
+        case_id, baseline = detail
         products = self._validated_products()
         if products is None:
             return None
@@ -949,17 +966,18 @@ class OffeneSendungenDialog(QDialog):
             self._address.setFocus()
             return None
         return (
-            case.id,
+            case_id,
             address,
             products,
             self._manual_text.toPlainText(),
+            baseline,
         )
 
     def _mark_done(self) -> None:
-        case = self._current_case()
-        if case is None:
+        detail = self._current_detail()
+        if detail is None:
             return
-        case_id = case.id
+        case_id, baseline = detail
         address = self._address_lines()
         products = self._products_from_table()
         manual_text = self._manual_text.toPlainText()
@@ -970,6 +988,7 @@ class OffeneSendungenDialog(QDialog):
                 address_lines=address,
                 products=products,
                 manual_text=manual_text,
+                baseline=baseline,
             )
             service = self._require_service()
             service.mark_done(case_id, done=True)
@@ -1037,5 +1056,5 @@ class OffeneSendungenDialog(QDialog):
             self._action_worker = None
         if self._closing or not isValid(self) or not isValid(button):
             return
-        button.setEnabled(True)
+        button.setEnabled(self._current_detail() is not None)
         button.setText(idle_text)

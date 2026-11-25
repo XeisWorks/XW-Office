@@ -550,17 +550,56 @@ class OffeneSendungenService:
             self._sync_shipping_email_snapshot(self.load_open_cases())
 
     def load_manual_fields(self, case_id: str) -> dict[str, Any]:
+        cid = str(case_id or "").strip()
         data = self._load_json_map(_MANUAL_KEY)
-        value = data.get(str(case_id or "").strip())
+        value = data.get(cid)
         if not isinstance(value, dict):
             return {}
-        case = self._find_case(case_id)
-        extraction = self._load_json_map(_EXTRACTIONS_KEY).get(str(case_id or "").strip())
+        case = self._find_case(cid)
+        extraction = self._load_json_map(_EXTRACTIONS_KEY).get(cid)
         expected_name = self._confirmed_customer_name(case, extraction) if case else ""
         if self._address_conflicts_with_customer(value.get("address_lines"), expected_name):
-            logger.warning("Mismatched saved shipping fields ignored for case %s", case_id)
+            logger.warning("Mismatched saved shipping fields ignored for case %s", cid)
             return {}
+        if (
+            case is not None
+            and case.source_type == _SOURCE_GRAPH
+            and not value.get("edits_only")
+            and isinstance(extraction, dict)
+            and self._legacy_products_belong_to_another_case(cid, value, extraction, data)
+        ):
+            logger.warning("Copied legacy products and delivery note ignored for case %s", cid)
+            return {key: item for key, item in value.items() if key not in {"products", "manual_text"}}
         return value
+
+    def _legacy_products_belong_to_another_case(
+        self,
+        case_id: str,
+        saved: dict[str, Any],
+        extraction: dict[str, Any],
+        saved_cases: dict[str, Any],
+    ) -> bool:
+        """Recognize legacy snapshots containing another case's products and note."""
+        def identities(products: list[SendungProductLine]) -> set[tuple[str, str]]:
+            return {
+                (field, value.casefold())
+                for product in products
+                for field, value in (("name", product.name), ("sku", product.sku))
+                if value
+            }
+
+        saved_products = saved.get("products")
+        saved_ids = identities(self._normalize_products(saved_products))
+        extracted_ids = identities(self._normalize_products(extraction.get("products")))
+        if not saved_ids or not extracted_ids or saved_ids & extracted_ids:
+            return False
+        return any(
+            other_id != case_id
+            and isinstance(other, dict)
+            and other.get("products") == saved_products
+            and other.get("manual_text") == saved.get("manual_text")
+            for other_id, other in saved_cases.items()
+        )
 
     @classmethod
     def _confirmed_customer_name(cls, case: SendungCase, extraction: object) -> str:
@@ -584,21 +623,42 @@ class OffeneSendungenService:
         address_lines: list[str],
         products: list[SendungProductLine],
         manual_text: str = "",
+        baseline: SendungExtraction | None = None,
     ) -> None:
         cid = str(case_id or "").strip()
         if not cid:
             return
-        data = self._load_json_map(_MANUAL_KEY)
-        data[cid] = {
+        fields: dict[str, Any] = {
             "address_lines": [str(line).strip() for line in address_lines if str(line).strip()],
             "products": [self._product_to_dict(product) for product in products],
             "manual_text": str(manual_text or "").strip(),
-            "updated_at": self._utc_now_iso(),
         }
-        self._save_json_map(_MANUAL_KEY, data)
+        if baseline is not None:
+            defaults = {
+                "address_lines": baseline.address_lines,
+                "products": [self._product_to_dict(product) for product in baseline.products],
+                "manual_text": baseline.short_note.strip(),
+            }
+            fields = {key: value for key, value in fields.items() if value != defaults[key]}
+
+        if self._repo is not None:
+            with self._cache_lock:
+                self._repo.mutate_value_json(
+                    _MANUAL_KEY,
+                    lambda raw: self._replace_manual_fields(raw, cid, fields),
+                )
+                self._recipient_names_cache = None
         case = self._find_case(cid)
         if case is not None and case.source_type == _SOURCE_GRAPH:
             self._sync_shipping_email_snapshot(self.load_open_cases())
+
+    def _replace_manual_fields(self, raw: str | None, cid: str, fields: dict[str, Any]) -> str:
+        data = self._parse_json_map(raw)
+        if fields:
+            data[cid] = {**fields, "edits_only": True, "updated_at": self._utc_now_iso()}
+        else:
+            data.pop(cid, None)
+        return json.dumps(data, ensure_ascii=False)
 
     def extract_case_details(
         self,
@@ -714,6 +774,7 @@ class OffeneSendungenService:
         manual_text: str = "",
         summary: str = "",  # Kept for callers; internal AI summary is never printed.
         short_note: str = "",
+        baseline: SendungExtraction | None = None,
     ) -> Path:
         case = self._find_case(case_id)
         if case is None:
@@ -732,6 +793,7 @@ class OffeneSendungenService:
             address_lines=address,
             products=shipping_products,
             manual_text=note,
+            baseline=baseline,
         )
         return self._render_delivery_note_pdf(
             case,
@@ -2020,7 +2082,7 @@ class OffeneSendungenService:
             color=(0.25, 0.25, 0.25),
         )
 
-        y = 190
+        y = 190.0
         page.insert_text(
             (margin, y), "Lieferadresse", fontsize=13, fontname="helv", color=(0.84, 0.09, 0.09)
         )
@@ -2323,6 +2385,10 @@ class OffeneSendungenService:
 
     def _load_json_map(self, key: str) -> dict[str, Any]:
         raw = self._repo.get_value_json(key) if self._repo is not None else None
+        return self._parse_json_map(raw)
+
+    @staticmethod
+    def _parse_json_map(raw: str | None) -> dict[str, Any]:
         if not raw:
             return {}
         try:

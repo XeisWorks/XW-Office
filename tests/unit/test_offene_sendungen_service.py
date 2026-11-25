@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,11 @@ class _Repo:
 
     def set_value_json(self, key: str, value: str) -> None:
         self.values[key] = value
+
+    def mutate_value_json(self, key: str, mutator: Callable[[str | None], str]) -> str:
+        value = mutator(self.get_value_json(key))
+        self.set_value_json(key, value)
+        return value
 
 
 class _Secrets:
@@ -883,6 +890,77 @@ def test_stroeher_case_ignores_cached_and_manual_dilly_address() -> None:
     assert details.address_lines[0] == "Thorsten Ströher"
     assert service.load_manual_fields("stroeher") == {}
     assert service.create_label_lines(service.load_open_cases()[0])[0] == "Thorsten Ströher"
+
+
+def test_copied_shipment_fields_do_not_override_correct_analysis_or_pdf(
+    tmp_path, monkeypatch
+) -> None:
+    import fitz
+
+    repo = _Repo()
+    prefix = "daily_business.offene_sendungen."
+    repo.values[prefix + "cases"] = json.dumps([
+        {"id": "replacement", "subject": "Bestellung 21694", "body": "Bitte Die Waldhütte senden."},
+    ])
+    service = OffeneSendungenService(repo, _Secrets())  # type: ignore[arg-type]
+    monkeypatch.setattr(service, "_repo_root", lambda: tmp_path)
+    correct = SendungExtraction(
+        summary="Die Waldhütte statt Glück auf senden.",
+        products=[SendungProductLine(name="Die Waldhütte")],
+        address_lines=["Max Muster", "Hauptstraße 1", "1010 Wien"],
+        short_note="Die richtigen Noten werden kostenlos nachgesendet.",
+        order_number="21694",
+    )
+    service._save_extraction("replacement", correct)  # noqa: SLF001
+    copied = {
+        "address_lines": correct.address_lines,
+        "products": [{"name": 'CD "Well Done"', "sku": "XW-810", "quantity": "1"}],
+        "manual_text": 'Die korrekte CD "Well Done" wird als Ersatz versendet.',
+    }
+    repo.values[prefix + "manual"] = json.dumps({
+        "replacement": copied,
+        "other-case": {**copied, "address_lines": ["Andere Person", "Nebenweg 1", "1010 Wien"]},
+    })
+
+    details = service.extract_case_details("replacement")
+    manual = service.load_manual_fields("replacement")
+    assert manual["address_lines"] == correct.address_lines
+    assert "products" not in manual
+    assert "manual_text" not in manual
+    mirrored = service._flow_shipping_details(service.load_open_cases()[0])  # noqa: SLF001
+    assert mirrored is not None
+    assert mirrored["products"][0]["name"] == "Die Waldhütte"
+
+    path = service.generate_delivery_note_pdf(
+        "replacement",
+        address_lines=manual["address_lines"],
+        products=details.products,
+        short_note=details.short_note,
+        baseline=details,
+    )
+    with fitz.open(path) as doc:
+        pdf_text = doc[0].get_text()
+    assert "Die Waldhütte" in pdf_text
+    assert correct.short_note in pdf_text
+    assert "Well Done" not in pdf_text
+    assert service.load_manual_fields("replacement") == {}
+    assert service.load_manual_fields("other-case")["products"] == copied["products"]
+
+    # Explicit edits stay in place when the generated fields are refreshed.
+    service.save_manual_fields(
+        "replacement",
+        address_lines=details.address_lines,
+        products=details.products,
+        manual_text="",
+        baseline=details,
+    )
+    service._save_extraction(  # noqa: SLF001
+        "replacement", replace(details, products=[SendungProductLine(name="Die Waldhütte (Noten)")])
+    )
+    manual = service.load_manual_fields("replacement")
+    assert manual["manual_text"] == ""
+    assert "products" not in manual
+    assert service.extract_case_details("replacement").products[0].name == "Die Waldhütte (Noten)"
 
 
 def test_other_customer_address_in_mail_and_system_is_not_used() -> None:
