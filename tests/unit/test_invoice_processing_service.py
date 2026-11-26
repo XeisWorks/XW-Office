@@ -349,6 +349,7 @@ class _MailServiceStub:
         html_body: str = "",
         attachments: list[object] | None = None,
         shared_sender_mailbox: str | None = None,
+        cc_email: str = "",
     ) -> None:
         self.calls.append(
             {

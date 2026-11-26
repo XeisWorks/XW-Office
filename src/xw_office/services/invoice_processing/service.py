@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Callable, cast
 from xw_office.repositories.settings_kv import SettingKvRepository
 from xw_office.core.app_paths import state_dir
 from xw_office.core.config import AppConfig
+from xw_office.services.crm.edu_client import EduClient, EduInvoiceRoute
 from xw_office.services.draft_invoice.service import DraftInvoiceService
 from xw_office.services.invoice_processing.buyer_notes import (
     BuyerNoteCase,
@@ -303,6 +304,7 @@ class InvoiceProcessingService:
         search_index: InvoiceSearchIndexService | None = None,
         print_decision: Any | None = None,
         invoice_inventory: InvoiceInventoryBookingService | None = None,
+        edu_client: EduClient | None = None,
     ) -> None:
         self._invoices = invoice_client
         self._search_index = search_index
@@ -333,6 +335,7 @@ class InvoiceProcessingService:
         self._batch_cache_lock = Lock()
         self._batch_cache_generation = 0
         self._mail_service = mail_service
+        self._edu_client = edu_client
         self._drafts = draft_invoice_service
         self._inventory = inventory_service
         self._start_stock_booking_enabled = config.inventory.start_stock_booking_enabled
@@ -2017,10 +2020,15 @@ class InvoiceProcessingService:
             summary.id,
             expected_source_updated_at=summary.source_updated_at,
         )
-        mail_kind = self._invoice_mail_kind(summary, flags)
-        subject, text_body = self._build_mail_content(summary, invoice, kind=mail_kind)
-        to_email = str(recipient_override or "").strip() or self._resolve_customer_email(
-            summary, invoice
+        route = self._edu_invoice_route(summary, invoice)
+        if route and str(invoice.get("invoiceType") or "").upper() == "MA":
+            number = self._invoice_number(summary, invoice)
+            subject, text_body = f"Mahnung {number}", "Guten Tag,\n\nanbei erhalten Sie Ihre Mahnung."
+        else:
+            mail_kind = self._invoice_mail_kind(summary, flags)
+            subject, text_body = self._build_mail_content(summary, invoice, kind=mail_kind)
+        to_email = route.to if route else (
+            str(recipient_override or "").strip() or self._resolve_customer_email(summary, invoice)
         )
         if flags.mail_sent or self._sevdesk_mail_sent(invoice):
             next_flags = self._next_flags(flags, mail_sent=True)
@@ -2055,6 +2063,7 @@ class InvoiceProcessingService:
         try:
             self._mail_service.send_mail(
                 to_email=to_email,
+                cc_email=route.cc if route else "",
                 subject=subject,
                 text_body=rendered_text,
                 html_body=html_body,
@@ -4059,6 +4068,32 @@ class InvoiceProcessingService:
         send_type_norm = str(send_type or "").strip().lower()
         return bool(send_type_norm and send_type_norm not in {"vm", "mail", "email", "e-mail"})
 
+    def _edu_invoice_route(
+        self, summary: InvoiceSummary, invoice: dict[str, Any]
+    ) -> EduInvoiceRoute | None:
+        current = invoice
+        invoice_id = str(summary.id)
+        seen = {invoice_id}
+        while str(current.get("invoiceType") or "").upper() == "MA":
+            origin = _dict_or_empty(current.get("origin"))
+            original_id = str(origin.get("id") or "")
+            if origin.get("objectName") != "Invoice" or not original_id.isdigit() or original_id in seen:
+                raise RuntimeError("Die Ausgangsrechnung der Mahnung konnte nicht eindeutig ermittelt werden.")
+            seen.add(original_id)
+            invoice_id = original_id
+            current = self._fetch_invoice_detail(original_id, force=True)
+        note = str(current.get("customerInternalNote") or current.get("customerInternalNoteText") or "")
+        if invoice_id == str(summary.id) and not note.startswith("EDU:"):
+            note = str(summary.sevdesk_reference or "")
+        if not note.startswith("EDU:"):
+            return None
+        if self._edu_client is None:
+            raise RuntimeError("Der bestätigte EDU-Rechnungsempfänger ist nicht eingerichtet.")
+        route = self._edu_client.invoice_route(invoice_id)
+        if invoice_id != str(summary.id) and route.target != "school":
+            raise RuntimeError("Für diesen privaten EDU-Beleg steht kein Mahnversand zur Verfügung.")
+        return route
+
     def _resolve_customer_email(self, summary: InvoiceSummary, invoice: dict[str, Any]) -> str:
         if summary.order_reference.strip():
             wix_summary = self._get_wix_order_summary_cached(summary.order_reference)
@@ -4081,6 +4116,11 @@ class InvoiceProcessingService:
             logger.warning("Produktabgleich fuer Entwurf %s fehlgeschlagen: %s", summary.id, exc)
 
     def _resolve_customer_name(self, summary: InvoiceSummary, invoice: dict[str, Any]) -> str:
+        note = str(invoice.get("customerInternalNote") or summary.sevdesk_reference or "")
+        if note.startswith("EDU:"):
+            address_name = str(invoice.get("addressName") or "").strip()
+            first_line = str(invoice.get("address") or "").partition("\n")[0].strip()
+            return address_name or first_line or summary.contact_name or "Kunde"
         if summary.order_reference.strip():
             wix_summary = self._get_wix_order_summary_cached(summary.order_reference)
             wix_name = str(wix_summary.get("wix_customer_name") or "").strip()

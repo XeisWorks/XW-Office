@@ -95,6 +95,7 @@ from xw_office.services.product_hub.invoice_inventory import InvoiceInventoryBoo
 from xw_office.services.products.field_bulk_service import ProductFieldBulkService
 from xw_office.services.products.print_decision import PrintDecisionEngine
 from xw_office.services.qr_codes.service import QrCodeService
+from xw_office.services.crm.edu_client import EduClient
 from xw_office.services.secrets.service import SecretService
 from xw_office.services.sendungen.delivery_note import DeliveryNoteService
 from xw_office.services.sendungen.service import OffeneSendungenService
@@ -256,6 +257,7 @@ def register_default_services(container: Container) -> None:
         DeliveryNoteService,
         lambda c: DeliveryNoteService(),
     )
+    container.register(EduClient, lambda c: EduClient(c.resolve(SecretService)))
     container.register(
         InvoiceProcessingService,
         lambda c: InvoiceProcessingService(
@@ -280,6 +282,7 @@ def register_default_services(container: Container) -> None:
                 else None
             ),
             print_decision=c.resolve(PrintDecisionEngine),
+            edu_client=c.resolve(EduClient),
             invoice_inventory=(
                 c.resolve(InvoiceInventoryBookingService)
                 if (c.config.database_url or "").strip()

@@ -103,6 +103,7 @@ class MailDeliveryService:
         sender_mailbox: str | None = None,
         require_exact_sender: bool = False,
         shared_sender_mailbox: str | None = None,
+        cc_email: str = "",
     ) -> None:
         config = self.load_graph_config(
             required_mailbox=sender_mailbox if require_exact_sender else None,
@@ -117,6 +118,7 @@ class MailDeliveryService:
             body_text=str(text_body or "").strip(),
             body_html=str(html_body or "").strip(),
             attachments=list(attachments or []),
+            **({"cc_email": cc_email} if cc_email else {}),
         )
 
     @staticmethod

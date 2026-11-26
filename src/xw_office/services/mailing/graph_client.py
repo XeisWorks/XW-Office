@@ -375,6 +375,7 @@ class GraphMailClient:
         body_text: str,
         body_html: str = "",
         attachments: list[Any] | None = None,
+        cc_email: str = "",
     ) -> None:
         to_email = str(to_email or "").strip()
         subject = str(subject or "").strip()
@@ -395,6 +396,8 @@ class GraphMailClient:
             },
             "toRecipients": [{"emailAddress": {"address": to_email}}],
         }
+        if cc_email:
+            message["ccRecipients"] = [{"emailAddress": {"address": cc_email.strip()}}]
         if self.mailbox_user:
             message["from"] = {"emailAddress": {"address": self.mailbox_user}}
         attachment_items = self._build_attachment_payloads(attachments or [])

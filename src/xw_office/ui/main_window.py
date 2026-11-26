@@ -379,9 +379,16 @@ class MainWindow(QMainWindow):
         return ProductsView(self._container)
 
     def _build_crm_page(self) -> QWidget:
+        from PySide6.QtWidgets import QTabWidget
+
+        from xw_office.services.crm.edu_client import EduClient
+        from xw_office.ui.modules.crm.edu_view import EduView
         from xw_office.ui.modules.crm.view import CrmView
 
-        return CrmView(self._container)
+        tabs = QTabWidget()
+        tabs.addTab(CrmView(self._container), "Kontakte")
+        tabs.addTab(EduView(self._container.resolve(EduClient)), "EDU")
+        return tabs
 
     def _build_taxes_page(self) -> QWidget:
         from xw_office.ui.modules.taxes.view import TaxesView
